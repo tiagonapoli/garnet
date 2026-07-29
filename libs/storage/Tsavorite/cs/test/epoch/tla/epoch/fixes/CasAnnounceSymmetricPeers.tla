@@ -35,6 +35,7 @@
 EXTENDS Naturals, Sequences
 
 CONSTANT Model
+CONSTANT AcquireOrder   \* "cas" (the fix) | "production" (CAS threadId, plain announce)
 
 P1 == "P1"
 P2 == "P2"
@@ -78,12 +79,20 @@ ReadEpoch(p) ==
     /\ pc' = [pc EXCEPT ![p] = "Claim"]
     /\ UNCHANGED <<memory, storeBuffer, inCriticalSection, owns, triggerEpoch, retired>>
 
-\* CAS(slot.localCurrentEpoch, 0 -> epoch): claim and announce in one locked RMW.
+\* Which word the claim CAS operates on, and therefore which one is left to a
+\* plain buffered store:
+\*   "cas"        the fix -- CAS(slot.localCurrentEpoch, 0 -> epoch) claims and
+\*                announces together, and threadId follows as a plain store.
+\*   "production" today's ordering -- CAS(slot.threadId, 0 -> myThreadId) claims,
+\*                and the announce is a separate plain store that can linger in
+\*                the store buffer past the scan. Expected to be VIOLATED.
 Claim(p) ==
     /\ pc[p] = "Claim"
-    /\ LET m == SB!Fenced(p)
-       IN IF m[EpochFieldOf[p]] = 0
-          THEN /\ memory' = [m EXCEPT ![EpochFieldOf[p]] = announcedEpoch[p]]
+    /\ LET field == IF AcquireOrder = "cas" THEN EpochFieldOf[p] ELSE TidFieldOf[p]
+           value == IF AcquireOrder = "cas" THEN announcedEpoch[p] ELSE ThreadIdOf[p]
+           m     == SB!Fenced(p)
+       IN IF m[field] = 0
+          THEN /\ memory' = [m EXCEPT ![field] = value]
                /\ owns' = [owns EXCEPT ![p] = TRUE]
                /\ pc' = [pc EXCEPT ![p] = "PublishThreadId"]
           ELSE /\ memory' = m
@@ -92,9 +101,13 @@ Claim(p) ==
     /\ storeBuffer' = SB!Drained(p)
     /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, retired>>
 
+\* The half of the claim that the CAS did not cover, published with a plain
+\* buffered store.
 PublishThreadId(p) ==
     /\ pc[p] = "PublishThreadId"
-    /\ storeBuffer' = SB!Buffer(p, TidFieldOf[p], ThreadIdOf[p])
+    /\ storeBuffer' = IF AcquireOrder = "cas"
+                      THEN SB!Buffer(p, TidFieldOf[p], ThreadIdOf[p])
+                      ELSE SB!Buffer(p, EpochFieldOf[p], announcedEpoch[p])
     /\ pc' = [pc EXCEPT ![p] = "ProtectAndDrain"]
     /\ UNCHANGED <<memory, inCriticalSection, owns, announcedEpoch, triggerEpoch, retired>>
 

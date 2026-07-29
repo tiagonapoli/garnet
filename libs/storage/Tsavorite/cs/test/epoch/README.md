@@ -99,10 +99,16 @@ which is what you want to open one in the TLA+ Toolbox.
 
 ## What the models establish
 
-| Property | Specs |
+| Property | Rows |
 | --- | --- |
 | Claiming the slot with `CAS(localCurrentEpoch, 0 -> epoch)` closes the store-buffering window against `ComputeNewSafeToReclaimEpoch` | `CasAnnounceOneReader`, `CasAnnounceTwoReaders`, `CasAnnounceSymmetricPeers` |
-| A plain store in `Release()` is not enough once StoreStore is relaxed — the unpublish can wipe the next owner's announce | `CasAnnounceTwoReadersPlainRelease` |
-| `Entry.threadId` no longer participates in slot ownership once the CAS carries the announce | `CasAnnounceNoThreadId*` |
+| A plain store in `Release()` is not enough once StoreStore is relaxed — the unpublish can wipe the next owner's announce | `CasAnnounceTwoReaders_plainrelease_*` |
+| `Entry.threadId` no longer participates in slot ownership once the CAS carries the announce | `CasAnnounceNoThreadId`, `CasAnnounceTwoReaders_nothreadid_*` |
 | The refresh announce in `ProtectAndDrain` is a load-side message-passing hazard; an acquire load of `CurrentEpoch` is necessary and sufficient, and a release store is not enough | `CasAnnounceResumeRefreshWeak` (the `armlb` rows) |
-| The acquire announce and the refresh announce fail in different shapes, so the CAS cannot be weakened to a release store | `CasAnnounceResumeRefreshWeak_acqplain`, `_acqrelease` |
+| The acquire announce and the refresh announce fail in different shapes, so the CAS cannot be weakened to a release store | `CasAnnounceResumeRefreshWeak_acqplain_armlb`, `_acqrelease_armlb` |
+
+Each spec is parameterised by constants, so one module covers both the fixed
+algorithm and its controls: `AcquireOrder` selects how the claim is published,
+`ReleaseOrder` how the slot is unpublished, and `UseThreadId` / `StaleIndex`
+switch the two ownership controls. `run.sh` lists every row with its expected
+verdict.

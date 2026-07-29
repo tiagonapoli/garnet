@@ -41,13 +41,15 @@
 (*                    is exactly `slot.threadId == Metadata.threadId`, so a *)
 (*                    wipe makes a protected thread report itself           *)
 (*                    unprotected. It is what justifies the release store   *)
-(*                    in Release(); see                                     *)
-(*                    CasAnnounceTwoReadersPlainRelease.tla, which is the   *)
-(*                    identical spec with that one store weakened.          *)
+(*                    in Release(); see ReleaseOrder = "plain", which is    *)
+(*                    this spec with that one store weakened.               *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences
 
 CONSTANT Model
+CONSTANT AcquireOrder   \* "cas" (the fix) | "plain" (control: no locked RMW)
+CONSTANT ReleaseOrder   \* "release" (the fix) | "plain" (control: buffered unpublish)
+CONSTANT UseThreadId    \* TRUE | FALSE — is Entry.threadId modelled at all?
 
 R1 == "R1"
 R2 == "R2"
@@ -93,21 +95,38 @@ ReadEpoch(r) ==
     /\ readerPc' = [readerPc EXCEPT ![r] = "Claim"]
     /\ UNCHANGED <<memory, storeBuffer, inCriticalSection, owns, triggerEpoch, reclaimerPc>>
 
-\* Interlocked.CompareExchange(ref slot.localCurrentEpoch, e, 0).
-\* A locked RMW: it drains this core's store buffer and operates on the
+\* AcquireOrder = "cas": Interlocked.CompareExchange(ref slot.localCurrentEpoch,
+\* e, 0). A locked RMW: it drains this core's store buffer and operates on the
 \* globally visible value. On failure the thread retries, which is the
 \* contended path this module exists to exercise.
+\*
+\* AcquireOrder = "plain" is the NEGATIVE CONTROL for the CAS itself: a plain
+\* test-then-set with no locked RMW. The store is buffered and the buffer is not
+\* drained, so the announce can sit invisible to the reclaimer's scan while this
+\* reader proceeds into its critical section. Expected: VIOLATED. If the model
+\* still reported "no error" with the CAS removed it would be proving nothing
+\* about the CAS being what closes the window.
 Claim(r) ==
     /\ readerPc[r] = "Claim"
-    /\ LET m == SB!Fenced(r)
-       IN IF m.slotEpoch = 0
-          THEN /\ memory' = [m EXCEPT !.slotEpoch = announcedEpoch[r]]
-               /\ owns' = [owns EXCEPT ![r] = TRUE]
-               /\ readerPc' = [readerPc EXCEPT ![r] = "PublishThreadId"]
-          ELSE /\ memory' = m
-               /\ owns' = owns
-               /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
-    /\ storeBuffer' = SB!Drained(r)
+    /\ LET claimed == IF UseThreadId THEN "PublishThreadId" ELSE "ReadObject"
+       IN \/ /\ AcquireOrder = "cas"
+             /\ LET m == SB!Fenced(r)
+                IN IF m.slotEpoch = 0
+                   THEN /\ memory' = [m EXCEPT !.slotEpoch = announcedEpoch[r]]
+                        /\ owns' = [owns EXCEPT ![r] = TRUE]
+                        /\ readerPc' = [readerPc EXCEPT ![r] = claimed]
+                   ELSE /\ memory' = m
+                        /\ owns' = owns
+                        /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
+             /\ storeBuffer' = SB!Drained(r)
+          \/ /\ AcquireOrder = "plain"
+             /\ IF Load(r, "slotEpoch") = 0
+                THEN /\ storeBuffer' = SB!Buffer(r, "slotEpoch", announcedEpoch[r])
+                     /\ owns' = [owns EXCEPT ![r] = TRUE]
+                     /\ readerPc' = [readerPc EXCEPT ![r] = claimed]
+                ELSE /\ UNCHANGED <<storeBuffer, owns>>
+                     /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
+             /\ UNCHANGED memory
     /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, reclaimerPc>>
 
 \* Plain store. threadId no longer owns the slot, but it is NOT decorative:
@@ -128,7 +147,7 @@ ReadObject(r) ==
 Dereference(r) ==
     /\ readerPc[r] = "Dereference"
     /\ inCriticalSection' = [inCriticalSection EXCEPT ![r] = FALSE]
-    /\ readerPc' = [readerPc EXCEPT ![r] = "ClearThreadId"]
+    /\ readerPc' = [readerPc EXCEPT ![r] = IF UseThreadId THEN "ClearThreadId" ELSE "ReleaseSlot"]
     /\ UNCHANGED <<memory, storeBuffer, owns, announcedEpoch, triggerEpoch, reclaimerPc>>
 
 \* Plain store, cleared BEFORE the slot is published as free.
@@ -138,13 +157,23 @@ ClearThreadId(r) ==
     /\ readerPc' = [readerPc EXCEPT ![r] = "ReleaseSlot"]
     /\ UNCHANGED <<memory, inCriticalSection, owns, announcedEpoch, triggerEpoch, reclaimerPc>>
 
-\* Volatile.Write(ref slot.localCurrentEpoch, 0) — a RELEASE store: every
-\* earlier store by this thread is visible before it. That is what stops the
-\* ClearThreadId above from landing after the next owner has claimed.
+\* ReleaseOrder = "release": Volatile.Write(ref slot.localCurrentEpoch, 0) — a
+\* RELEASE store, so every earlier store by this thread is visible before it.
+\* That is what stops the ClearThreadId above from landing after the next owner
+\* has claimed.
+\*
+\* ReleaseOrder = "plain" weakens exactly that one store to a buffered write,
+\* which is the control that justifies the release: under a model that relaxes
+\* StoreStore the unpublish can overtake the threadId clear and wipe the NEXT
+\* owner's threadId.
 ReleaseSlot(r) ==
     /\ readerPc[r] = "ReleaseSlot"
-    /\ memory' = SB!FencedStore(r, "slotEpoch", 0)
-    /\ storeBuffer' = SB!Drained(r)
+    /\ \/ /\ ReleaseOrder = "release"
+          /\ memory' = SB!FencedStore(r, "slotEpoch", 0)
+          /\ storeBuffer' = SB!Drained(r)
+       \/ /\ ReleaseOrder = "plain"
+          /\ storeBuffer' = SB!Buffer(r, "slotEpoch", 0)
+          /\ UNCHANGED memory
     /\ owns' = [owns EXCEPT ![r] = FALSE]
     /\ readerPc' = [readerPc EXCEPT ![r] = "Done"]
     /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, reclaimerPc>>
@@ -204,7 +233,9 @@ SlotExclusive == ~ (owns[R1] /\ owns[R2])
 \* has actually become globally visible.
 Published(r) == readerPc[r] \in {"ReadObject", "Dereference"}
 
+\* Vacuous when threadId is not modelled at all.
 ThreadIdIntact ==
-    \A r \in Readers :
-        (owns[r] /\ Published(r) /\ storeBuffer[r] = <<>>) => memory.slotThreadId = ThreadIdOf[r]
+    UseThreadId =>
+        \A r \in Readers :
+            (owns[r] /\ Published(r) /\ storeBuffer[r] = <<>>) => memory.slotThreadId = ThreadIdOf[r]
 =============================================================================

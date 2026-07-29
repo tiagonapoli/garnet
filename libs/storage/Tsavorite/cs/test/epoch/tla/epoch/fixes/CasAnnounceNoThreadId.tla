@@ -23,18 +23,21 @@
 (* sufficient: no reader ever writes to a slot it does not own, and no      *)
 (* reader's announce is ever invisible to a concurrent scan.                *)
 (*                                                                         *)
-(* Live control: CasAnnounceNoThreadIdStaleIndex.tla is this spec with ONE  *)
-(* action added -- a departing reader that issues a second Release through  *)
-(* a thread-private token it failed to invalidate. That control VIOLATES,   *)
-(* so a HOLDS here is not an artifact of a model that cannot see the        *)
-(* hazard. See also CasAnnounceTwoReadersNoCas.tla, the control for the     *)
-(* announce itself.                                                        *)
+(* Live control: StaleIndex = TRUE is this spec with ONE action added -- a  *)
+(* departing reader that issues a second Release through a thread-private   *)
+(* token it failed to invalidate. That control VIOLATES, so a HOLDS here is  *)
+(* not an artifact of a model that cannot see the hazard. See also           *)
+(* AcquireOrder = "plain", the control for the announce itself.             *)
 (*                                                                         *)
-(* Expected: HOLDS under both "tso" and "arm".                              *)
+(* Expected: HOLDS with AcquireOrder = "cas", ReleaseOrder = "release" and   *)
+(* StaleIndex = FALSE, under both "tso" and "arm".                          *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences
 
 CONSTANT Model
+CONSTANT AcquireOrder   \* "cas" (the fix) | "plain" (control: no locked RMW)
+CONSTANT ReleaseOrder   \* "release" (the fix) | "plain" (control: buffered unpublish)
+CONSTANT StaleIndex     \* TRUE = control: a second Release() through a stale entry index
 
 R1 == "R1"
 R2 == "R2"
@@ -74,21 +77,35 @@ ReadEpoch(r) ==
     /\ readerPc' = [readerPc EXCEPT ![r] = "Claim"]
     /\ UNCHANGED <<memory, storeBuffer, inCriticalSection, owns, triggerEpoch, reclaimerPc>>
 
-\* Interlocked.CompareExchange(ref slot.localCurrentEpoch, e, 0). The success
-\* of this locked RMW is now the ENTIRE ownership decision: there is no
-\* threadId to CAS and none to publish afterwards. `owns` is set here, which
-\* models Acquire() writing the reserved index into Metadata.Entries.
+\* AcquireOrder = "cas": Interlocked.CompareExchange(ref slot.localCurrentEpoch,
+\* e, 0). The success of this locked RMW is now the ENTIRE ownership decision:
+\* there is no threadId to CAS and none to publish afterwards. `owns` is set
+\* here, which models Acquire() writing the reserved index into
+\* Metadata.Entries.
+\*
+\* AcquireOrder = "plain" is the control on the ANNOUNCE axis: with the locked
+\* RMW gone, the claim is a buffered test-then-set and the original unfenced
+\* announce bug must reappear even though threadId has been deleted.
 Claim(r) ==
     /\ readerPc[r] = "Claim"
-    /\ LET m == SB!Fenced(r)
-       IN IF m.slotEpoch = 0
-          THEN /\ memory' = [m EXCEPT !.slotEpoch = announcedEpoch[r]]
-               /\ owns' = [owns EXCEPT ![r] = TRUE]
-               /\ readerPc' = [readerPc EXCEPT ![r] = "ReadObject"]
-          ELSE /\ memory' = m
-               /\ owns' = owns
-               /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
-    /\ storeBuffer' = SB!Drained(r)
+    /\ \/ /\ AcquireOrder = "cas"
+          /\ LET m == SB!Fenced(r)
+             IN IF m.slotEpoch = 0
+                THEN /\ memory' = [m EXCEPT !.slotEpoch = announcedEpoch[r]]
+                     /\ owns' = [owns EXCEPT ![r] = TRUE]
+                     /\ readerPc' = [readerPc EXCEPT ![r] = "ReadObject"]
+                ELSE /\ memory' = m
+                     /\ owns' = owns
+                     /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
+          /\ storeBuffer' = SB!Drained(r)
+       \/ /\ AcquireOrder = "plain"
+          /\ IF Load(r, "slotEpoch") = 0
+             THEN /\ storeBuffer' = SB!Buffer(r, "slotEpoch", announcedEpoch[r])
+                  /\ owns' = [owns EXCEPT ![r] = TRUE]
+                  /\ readerPc' = [readerPc EXCEPT ![r] = "ReadObject"]
+             ELSE /\ UNCHANGED <<storeBuffer, owns>>
+                  /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
+          /\ UNCHANGED memory
     /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, reclaimerPc>>
 
 ReadObject(r) ==
@@ -109,13 +126,31 @@ Dereference(r) ==
 \* way to name the slot, so it cannot write to it even though its threadId is
 \* no longer there to disqualify it. The reader then loops and may re-acquire,
 \* possibly the very slot its peer now holds.
+\*
+\* ReleaseOrder = "plain" weakens the unpublish to a buffered store that may
+\* linger, which gives the store-order relaxation something to act on.
 ReleaseSlot(r) ==
     /\ readerPc[r] = "ReleaseSlot"
+    /\ \/ /\ ReleaseOrder = "release"
+          /\ memory' = SB!FencedStore(r, "slotEpoch", 0)
+          /\ storeBuffer' = SB!Drained(r)
+       \/ /\ ReleaseOrder = "plain"
+          /\ storeBuffer' = SB!Buffer(r, "slotEpoch", 0)
+          /\ UNCHANGED memory
+    /\ owns' = [owns EXCEPT ![r] = FALSE]
+    /\ readerPc' = [readerPc EXCEPT ![r] = IF StaleIndex THEN "StaleRelease" ELSE "ReadEpoch"]
+    /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, reclaimerPc>>
+
+\* Control on the OWNERSHIP axis: a Release() reached through a STALE
+\* thread-private entry index, i.e. the thread names a slot it no longer owns.
+\* threadId was the only thing that could have disqualified this write, so with
+\* the field deleted it must now be observable. Expected: VIOLATED.
+StaleRelease(r) ==
+    /\ readerPc[r] = "StaleRelease"
     /\ memory' = SB!FencedStore(r, "slotEpoch", 0)
     /\ storeBuffer' = SB!Drained(r)
-    /\ owns' = [owns EXCEPT ![r] = FALSE]
     /\ readerPc' = [readerPc EXCEPT ![r] = "ReadEpoch"]
-    /\ UNCHANGED <<inCriticalSection, announcedEpoch, triggerEpoch, reclaimerPc>>
+    /\ UNCHANGED <<inCriticalSection, owns, announcedEpoch, triggerEpoch, reclaimerPc>>
 
 (***************************************************************************)
 (* Reclaimer — unchanged from production                                   *)
@@ -153,7 +188,7 @@ ComputeNewSafeToReclaimEpoch ==
 Next ==
     \/ \E r \in Readers :
          \/ ReadEpoch(r) \/ Claim(r) \/ ReadObject(r)
-         \/ Dereference(r) \/ ReleaseSlot(r)
+         \/ Dereference(r) \/ ReleaseSlot(r) \/ StaleRelease(r)
     \/ Unlink \/ BumpCurrentEpoch \/ ComputeNewSafeToReclaimEpoch
     \/ (\E p \in Threads : FlushOne(p))
 
