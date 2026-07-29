@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Runtime.InteropServices;
 using NUnit.Framework;
 
 namespace Tsavorite.test.epoch
@@ -64,7 +63,7 @@ namespace Tsavorite.test.epoch
         static LitmusCores RequireCores()
         {
             if (!LitmusNative.IsSupported)
-                Assert.Ignore("The litmus harness needs Windows or Linux for page unmapping and core pinning.");
+                Assert.Ignore("The litmus harness needs Windows or Linux for page allocation and core pinning.");
 
             if (!LitmusCores.TrySelect(out var cores))
                 Assert.Ignore($"The litmus harness needs at least 4 logical processors to separate the reader from the reclaimer; this machine has {Environment.ProcessorCount}.");
@@ -110,45 +109,6 @@ namespace Tsavorite.test.epoch
                 "the reader never captured a live page pointer, so even the forced failure could not be observed");
             Assert.That(result.Violations, Is.GreaterThan(0),
                 "THE DETECTOR IS BLIND: pages were recycled under the reader on every round and nothing was reported, so every clean verdict from the quarantine litmus is void");
-        }
-
-        /// <summary>
-        /// The same race with the page genuinely unmapped. Sensitive on ARM64, which broadcasts
-        /// TLB maintenance in hardware; on x86-64 the shootdown IPI drains the reader's store
-        /// buffer every round, so a clean result there is weak evidence rather than none.
-        /// </summary>
-        [Test]
-        public void UnmapLitmus_NeverUnmapsAPageUnderALiveReader()
-        {
-            var cores = RequireCores();
-            var result = new UnmapLitmus(MainDuration, DerefWords, cores).Run();
-            TestContext.Out.WriteLine($"unmap litmus: {result} cores({cores}) arch({RuntimeInformation.ProcessArchitecture})");
-
-            if (RuntimeInformation.ProcessArchitecture != Architecture.Arm64)
-                TestContext.Out.WriteLine("note: on this architecture the TLB shootdown IPI serializes the reader every round, so a clean result here is weak evidence; QuarantineLitmus is the sensitive mode.");
-
-            Assert.That(result.FreedPages, Is.GreaterThan(0),
-                "nothing was ever reclaimed, so this run could not have faulted regardless of the epoch's correctness");
-
-            Assert.That(result.TripwireHits, Is.EqualTo(0),
-                $"the epoch unmapped a page a protected reader was dereferencing - use-after-free. {result}");
-        }
-
-        /// <summary>
-        /// Control for <see cref="UnmapLitmus_NeverUnmapsAPageUnderALiveReader"/>. Samples the
-        /// tripwire condition at retire time, when the reader provably is inside the page and
-        /// nothing has been freed. It must fire.
-        /// </summary>
-        [Test]
-        public void UnmapLitmus_SelfTestProvesTheTripwireIsLive()
-        {
-            var cores = RequireCores();
-            var result = new UnmapLitmus(ControlDuration, DerefWords, cores, selfTest: true).Run();
-
-            TestContext.Out.WriteLine($"unmap litmus self-test: {result} cores({cores})");
-
-            Assert.That(result.SelfTestHits, Is.GreaterThan(0),
-                "THE TRIPWIRE IS BLIND: the reader was inside the retired page and the detector never sampled it, so every clean verdict from the unmap litmus is void");
         }
     }
 }

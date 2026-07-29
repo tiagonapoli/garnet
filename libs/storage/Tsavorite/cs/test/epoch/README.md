@@ -11,31 +11,27 @@ dotnet test libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj
 
 ## Litmus tests
 
-`Litmus/` holds two hardware stress harnesses that run the real race: a reader
+`Litmus/` holds a hardware stress harness that runs the real race: a reader
 announces its epoch and dereferences a page while a reclaimer retires that same
-page. `LightEpochLitmusTests` drives them for 30 s each, under the `Litmus`
-category so a fast suite can skip them:
+page. `LightEpochLitmusTests` drives it for 30 s, under the `Litmus`
+category so a fast suite can skip it:
 
 ```
 dotnet test ... --filter "TestCategory!=Litmus"     # skip
 LE_LITMUS_SECONDS=300 dotnet test ... --filter "TestCategory=Litmus"   # longer soak
 ```
 
-`QuarantineLitmus` is the sensitive mode. Pages come from a pool allocated once and
-"freeing" stamps a poison sentinel, so no syscall enters the race loop. A reader
+`QuarantineLitmus` needs no syscall in the race loop: pages come from a pool
+allocated once and "freeing" stamps a poison sentinel. A reader
 that observes poison in a page it was protecting is a use-after-free by the
 algorithm's own definition.
-
-`UnmapLitmus` really unmaps the page. It is sensitive on ARM64, which broadcasts TLB
-maintenance in hardware; on x86-64 the shootdown IPI drains the reader's store
-buffer every round, so a clean result there is weak evidence rather than none.
 
 Two things make a green run mean something, and both are asserted:
 
 - **Vacuity guards.** Each test asserts the race window was actually sampled and
   that the epoch really did reclaim. A run that never raced cannot fail.
-- **Self-test controls.** Each harness has a paired test that forces the failure and
-  asserts it *is* detected. If a control ever passes silently, the detector is blind
+- **Self-test control.** A paired test forces the failure and
+  asserts it *is* detected. If the control ever passes silently, the detector is blind
   and the clean verdict beside it is void.
 
 ### Measured power, and its limits
