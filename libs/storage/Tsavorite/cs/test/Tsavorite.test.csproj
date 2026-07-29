@@ -14,6 +14,10 @@
     <Compile Include="..\..\..\..\..\test\standalone\Garnet.test\TestBase.cs" Link="TestBase.cs" />
     <Compile Remove="test.*/**" />
     <Compile Remove="stress/**" />
+    <Compile Remove="epoch/**" />
+    <None Remove="epoch/**" />
+    <Content Remove="epoch/**" />
+    <EmbeddedResource Remove="epoch/**" />
   </ItemGroup>
 
   <ItemGroup>

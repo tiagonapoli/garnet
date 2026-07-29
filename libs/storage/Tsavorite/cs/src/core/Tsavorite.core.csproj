@@ -32,6 +32,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../epoch/Garnet.LightEpoch.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ContentWithTargetPath Include="Device/runtimes/win-x64/native/native_device.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>runtimes/win-x64/native/native_device.dll</TargetPath>
