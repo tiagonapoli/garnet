@@ -86,6 +86,17 @@ To run outside Docker you need Java and `tla2tools.jar`:
 TLA_TOOLS=/path/to/tla2tools.jar bash libs/storage/Tsavorite/cs/test/epoch/tla/run.sh
 ```
 
+Both forms take an optional substring that selects which rows to run:
+
+```
+docker run --rm garnet-lightepoch-tla CasAnnounceResumeRefreshWeak_acqload_armlb
+```
+
+TLC accepts exactly one `-config` per run, so `run.sh` holds the matrix — spec,
+constants, invariants and expected result — as a table and expands each row into
+a throwaway `.cfg` as it goes. Set `LE_KEEP_CFG=1` to leave those files on disk,
+which is what you want to open one in the TLA+ Toolbox.
+
 ## What the models establish
 
 | Property | Specs |
@@ -93,5 +104,5 @@ TLA_TOOLS=/path/to/tla2tools.jar bash libs/storage/Tsavorite/cs/test/epoch/tla/r
 | Claiming the slot with `CAS(localCurrentEpoch, 0 -> epoch)` closes the store-buffering window against `ComputeNewSafeToReclaimEpoch` | `CasAnnounceOneReader`, `CasAnnounceTwoReaders`, `CasAnnounceSymmetricPeers` |
 | A plain store in `Release()` is not enough once StoreStore is relaxed — the unpublish can wipe the next owner's announce | `CasAnnounceTwoReadersPlainRelease` |
 | `Entry.threadId` no longer participates in slot ownership once the CAS carries the announce | `CasAnnounceNoThreadId*` |
-| The refresh announce in `ProtectAndDrain` is a load-side message-passing hazard; an acquire load of `CurrentEpoch` is necessary and sufficient, and a release store is not enough | `CasAnnounceResumeRefreshWeak` (`*_armlb.cfg`) |
+| The refresh announce in `ProtectAndDrain` is a load-side message-passing hazard; an acquire load of `CurrentEpoch` is necessary and sufficient, and a release store is not enough | `CasAnnounceResumeRefreshWeak` (the `armlb` rows) |
 | The acquire announce and the refresh announce fail in different shapes, so the CAS cannot be weakened to a release store | `CasAnnounceResumeRefreshWeak_acqplain`, `_acqrelease` |
