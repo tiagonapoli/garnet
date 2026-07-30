@@ -1,0 +1,15 @@
+AArch64 arm64-release-loadstore-fixed
+(* Reduced from jit/reduced/arm64-fixed.reduced.asm -- critical section vs Release.
+   Same scenario as arm64-release-loadstore-main, but Release() unpublishes the
+   slot with the STLR that Volatile.Write emits. A release store is ordered
+   after every preceding load, so the dereference must be satisfied before the
+   slot can be observed as free. *)
+{ 0:X0=data; 0:X1=lce; 1:X0=lce; 1:X1=data;
+  lce=1; data=0; }
+ P0            | P1              ;
+ LDR X2,[X0]   | LDR X2,[X0]     ;
+ STLR XZR,[X1] | CBNZ X2,LSKIP   ;
+               | MOV X3,#99      ;
+               | STR X3,[X1]     ;
+               | LSKIP:          ;
+exists (0:X2=99)

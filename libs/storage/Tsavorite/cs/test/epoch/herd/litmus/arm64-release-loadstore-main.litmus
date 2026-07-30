@@ -1,0 +1,18 @@
+AArch64 arm64-release-loadstore-main
+(* Reduced from jit/reduced/arm64-main.reduced.asm -- critical section vs Release.
+   The reader is already announced and inside its critical section. It performs
+   its dereference and then Release() clears the slot with a PLAIN store.
+   AArch64 permits Load->Store reordering, so the slot clear can become visible
+   before the dereference has been satisfied. The reclaimer then scans the slot,
+   sees 0, concludes nobody is protected and frees the object (modelled as
+   poisoning `data`; the CBNZ is the `if it is safe to reclaim` branch).
+   Bad outcome: the reader's dereference returns the poison. *)
+{ 0:X0=data; 0:X1=lce; 1:X0=lce; 1:X1=data;
+  lce=1; data=0; }
+ P0           | P1              ;
+ LDR X2,[X0]  | LDR X2,[X0]     ;
+ STR XZR,[X1] | CBNZ X2,LSKIP   ;
+              | MOV X3,#99      ;
+              | STR X3,[X1]     ;
+              | LSKIP:          ;
+exists (0:X2=99)

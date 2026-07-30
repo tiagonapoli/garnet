@@ -1,0 +1,20 @@
+X86 x86-composed-fixed
+(* The fixed reader sequence against the same reclaimer, on x86-64.
+   Reduced from jit/reduced/x86-fixed.reduced.asm. The XCHG now targets lce and
+   carries the announce; Volatile.Read and Volatile.Write are plain MOVs on
+   x86, so the refresh load and the slot clear are ordinary accesses here. *)
+{ lce=0; tid=0; cur=1; unlinked=0; data=0; }
+ P0                | P1              ;
+ MOV EAX,[cur]     | MOV [unlinked],$1;
+ XCHG [lce],EAX    | XCHG [cur],EDX  ;
+ MOV [tid],$1      | MOV EBX,[lce]   ;
+ MOV EDX,[cur]     | CMP EBX,$0      ;
+ MOV [lce],EDX     | JNE LSKIP       ;
+ MOV EBX,[unlinked]| MOV [data],$99  ;
+ CMP EBX,$0        | LSKIP:          ;
+ JNE PSKIP         |                 ;
+ MOV ESI,[data]    |                 ;
+ PSKIP:            |                 ;
+ MOV [tid],$0      |                 ;
+ MOV [lce],$0      |                 ;
+exists (0:ESI=99)

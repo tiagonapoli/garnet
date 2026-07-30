@@ -76,6 +76,20 @@ costs nothing on x86.
 `Release()` emits its two plain stores in source order in both variants. See
 the correction note at the end of this file.
 
+Neither store-store nor Load→Store is reorderable under x86-TSO, so both the
+slot-handover question (A3) and the premature-unpublish question (A4) below are
+closed on x86 without any barrier. `litmus/x86-release-loadstore-main.litmus`
+records the second of those as `Never`.
+
+### X4 — The composed sequence
+
+**Test:** `litmus/x86-composed-main.litmus` → `Sometimes` (violated),
+`litmus/x86-composed-fixed.litmus` → `Never`.
+
+Running the whole reader against the whole reclaimer, rather than one hazard
+shape at a time, reproduces X1 and nothing else on x86, and the fixed sequence
+admits no use-after-free at all. See "The whole sequence, composed" below.
+
 ---
 
 ## AArch64
@@ -157,6 +171,87 @@ load-bearing rather than defensive. Note this is also why the store order is
 *inverted* relative to `main`: on `main`, `threadId` is the ownership word, so
 clearing `localCurrentEpoch` first is the correct order there.
 
+### A4 — The dereference can be reordered past the slot clear (BUG, ARM-only, fixed)
+
+**Status:** present on `origin/main`; closed by the fix. **Cannot occur on
+x86.**
+**Test:** `litmus/arm64-release-loadstore-main.litmus` → `Sometimes`
+(violated), `litmus/arm64-release-loadstore-fixed.litmus` → `Never`,
+`litmus/x86-release-loadstore-main.litmus` → `Never`.
+
+This one was missed on the first pass, because all three earlier hazards are
+about what *other* threads see of the reader's publication. This one is about
+the reader outliving its own announcement.
+
+The reader dereferences the object and then unpublishes its slot:
+
+```asm
+ldr     x2, [data]               ; the dereference, inside the critical section
+str     xzr, [LCE]               ; Release: PLAIN store on main
+```
+
+AArch64 permits Load→Store reordering, and nothing here forbids it. The slot
+clear can become visible to other cores before the dereference has been
+satisfied. A reclaimer scanning in that window reads `0`, concludes nothing is
+protected, frees the object — and only then does the reader's load return, from
+memory that is no longer live.
+
+The fix's `Volatile.Write` emits `STLR`, which is ordered after every preceding
+access including the dereference, so the object cannot be observed as
+unprotected until the reader is genuinely done with it.
+
+Note what this means for A3. The release store was introduced because making
+`localCurrentEpoch` the ownership word created a handover requirement. It turns
+out to be doing a **second, independent job**: closing a use-after-free that
+exists in `main` today and has nothing to do with the handover. Weakening it
+back to a plain store would reopen A4 even if A3 were somehow addressed another
+way.
+
+x86-TSO preserves Load→Store, so the shape cannot arise there — the x86 row
+records that, with the AArch64 row as the live control proving the encoding can
+detect the hazard when the architecture permits it.
+
+---
+
+## The whole sequence, composed
+
+**Tests:** `litmus/{x86,arm64}-composed-main.litmus` → `Sometimes` (violated),
+`litmus/{x86,arm64}-composed-fixed.litmus` → `Never`.
+
+Each finding above is a two- or three-instruction shape studied in isolation.
+That is how they are understood, but it is not on its own an argument that the
+*program* is correct: a decomposition can miss an interaction between shapes.
+
+The composed tests run the entire reader — `Acquire` → `ProtectAndDrain` →
+critical section → `Release` — against the entire reclaimer — unlink → bump →
+scan → free — with every memory access of the reduced listing present, in
+program order, and state the bad outcome directly as the reader's dereference
+returning a value the reclaimer wrote after freeing.
+
+Both `main` rows are violated; **both `fixed` rows are `Never`**. No execution
+of the whole fixed sequence, under either architecture's own model, frees an
+object under a reader that is still using it. That is the strongest statement
+this folder makes, and it is the one that says the four-way decomposition above
+did not miss anything.
+
+### A false positive worth recording
+
+The first composed encoding reported the *fixed* code as violated on AArch64.
+It was wrong, and the way it was wrong is instructive.
+
+That version had the reader dereference the object unconditionally. herd7 duly
+found an execution in which the reclaimer unlinks, bumps, scans an empty table,
+legitimately frees — and only *then* does the reader arrive, claim a slot, and
+dereference. Real code cannot do that: a reader reaches an object by walking the
+structure, and the object was removed from the structure before any of this
+began, so no reader arriving afterwards ever holds a pointer to it.
+
+Adding the guard the protocol actually has — test `unlinked`, dereference only
+if the object still looks live — makes `fixed` `Never` while leaving both `main`
+rows violated. The guard is documented in `REDUCTION.md` §4.1 as an addition,
+because it is one: it is not in the dump, and the tests would be unsound
+without it.
+
 ---
 
 ## Correction to an earlier claim in this investigation
@@ -185,7 +280,12 @@ reorder the two stores, not the compiler.
 |---|---|---|---|---|
 | X1 / A1 | announce vs reclaim scan (store buffering) | **violated on main** | **violated on main** | CAS on `localCurrentEpoch` |
 | X2 / A2 | refresh vs bump (message passing) | safe on main | **violated on main** | `Volatile.Read` → `LDAPR` |
-| X3 / A3 | release vs next claimer | safe (TSO orders store-store) | requires a release store | `Volatile.Write` → `STLR` |
+| X3 / A3 | release vs next claimer (store-store) | safe (TSO orders store-store) | requires a release store | `Volatile.Write` → `STLR` |
+| X3 / A4 | dereference vs slot clear (Load→Store) | safe (TSO orders load-store) | **violated on main** | `Volatile.Write` → `STLR` |
+| X4 | the whole sequence, composed | **violated on main** | **violated on main** | all of the above together |
 
-No issue was found in the fixed variant on either architecture. All ten litmus
-results match their expectations.
+Three distinct use-after-free defects are present on `main`: one on both
+architectures, two reachable only on AArch64. All are closed by the fix, which
+adds no barrier on x86 and two ordered accesses on AArch64. No issue was found
+in the fixed variant on either architecture, either shape-by-shape or composed.
+All seventeen litmus results match their expectations.

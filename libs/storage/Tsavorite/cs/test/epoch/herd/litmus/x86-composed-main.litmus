@@ -1,0 +1,21 @@
+X86 x86-composed-main
+(* The whole reader sequence against the whole reclaimer, on x86-64.
+   Reduced from jit/reduced/x86-main.reduced.asm; XCHG stands in for the locked
+   CMPXCHG and XADD, as explained in REDUCTION.md.
+   Structure is identical to arm64-composed-main. *)
+{ lce=0; tid=0; cur=1; unlinked=0; data=0; }
+ P0                | P1              ;
+ MOV EAX,[cur]     | MOV [unlinked],$1;
+ MOV ECX,$1        | XCHG [cur],EDX  ;
+ XCHG [tid],ECX    | MOV EBX,[lce]   ;
+ MOV [lce],EAX     | CMP EBX,$0      ;
+ MOV EDX,[cur]     | JNE LSKIP       ;
+ MOV [lce],EDX     | MOV [data],$99  ;
+ MOV EBX,[unlinked]| LSKIP:          ;
+ CMP EBX,$0        |                 ;
+ JNE PSKIP         |                 ;
+ MOV ESI,[data]    |                 ;
+ PSKIP:            |                 ;
+ MOV [lce],$0      |                 ;
+ MOV [tid],$0      |                 ;
+exists (0:ESI=99)

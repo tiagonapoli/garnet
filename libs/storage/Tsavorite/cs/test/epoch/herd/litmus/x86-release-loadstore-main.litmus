@@ -1,0 +1,14 @@
+X86 x86-release-loadstore-main
+(* Reduced from jit/reduced/x86-main.reduced.asm -- critical section vs Release.
+   The x86 counterpart of arm64-release-loadstore-main, using the same plain
+   store. x86-TSO does not reorder Load->Store, so the dereference is already
+   ordered before the slot clear and no barrier is needed. The AArch64 row is
+   the live control that shows this encoding can detect the hazard. *)
+{ lce=1; data=0; }
+ P0            | P1             ;
+ MOV EAX,[data]| MOV EBX,[lce]  ;
+ MOV [lce],$0  | CMP EBX,$0     ;
+               | JNE LSKIP      ;
+               | MOV [data],$99 ;
+               | LSKIP:         ;
+exists (0:EAX=99)

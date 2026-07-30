@@ -1,0 +1,27 @@
+AArch64 arm64-composed-fixed
+(* The fixed reader sequence against the same reclaimer. Reduced from
+   jit/reduced/arm64-fixed.reduced.asm.
+
+   P0 = Acquire (read CurrentEpoch, then CASAL on localCurrentEpoch which
+        claims the slot AND publishes the announce; PLAIN threadId publish)
+        -> ProtectAndDrain (LDAPR re-read of CurrentEpoch, PLAIN re-announce)
+        -> critical section -> Release (PLAIN threadId clear, then STLR).
+   P1 is byte for byte the same reclaimer as arm64-composed-main. *)
+{ 0:X0=cur; 0:X6=tid; 0:X7=lce; 0:X9=data; 0:X10=unlinked;
+  1:X0=unlinked; 1:X6=cur; 1:X7=lce; 1:X9=data;
+  lce=0; tid=0; cur=1; unlinked=0; data=0; }
+ P0                | P1               ;
+ LDR X1,[X0]       | MOV X1,#1        ;
+ MOV X2,#0         | STR X1,[X0]      ;
+ CASAL X2,X1,[X7]  | MOV X2,#1        ;
+ MOV W3,#1         | LDADDAL X2,X3,[X6];
+ STR W3,[X6]       | LDR X4,[X7]      ;
+ LDAPR X4,[X0]     | CBNZ X4,LSKIP    ;
+ STR X4,[X7]       | MOV X5,#99       ;
+ LDR X8,[X10]      | STR X5,[X9]      ;
+ CBNZ X8,PSKIP     | LSKIP:           ;
+ LDR X5,[X9]       |                  ;
+ PSKIP:            |                  ;
+ STR WZR,[X6]      |                  ;
+ STLR XZR,[X7]     |                  ;
+exists (0:X5=99)

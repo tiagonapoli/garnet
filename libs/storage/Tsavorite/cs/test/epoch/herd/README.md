@@ -42,13 +42,29 @@ bash libs/storage/Tsavorite/cs/test/epoch/herd/run.sh
 | `arm64-refresh-mp-fixed` | Never | closed by `LDAPR` |
 | `arm64-release-plainstore` | Sometimes | counterfactual: `STR` in place of the `STLR` |
 | `arm64-release-fixed` | Never | `STLR` orders the handover |
+| `arm64-release-loadstore-main` | Sometimes | **ARM-only bug**: the slot clear can precede the dereference |
+| `arm64-release-loadstore-fixed` | Never | `STLR` is ordered after the dereference |
+| `x86-release-loadstore-main` | Never | TSO preserves Load→Store |
+| `x86-composed-main` | Sometimes | the whole sequence, unfixed |
+| `x86-composed-fixed` | Never | the whole sequence, fixed |
+| `arm64-composed-main` | Sometimes | the whole sequence, unfixed |
+| `arm64-composed-fixed` | Never | the whole sequence, fixed |
 
 Each `Never` row is paired with a row that must be violated, for the same
 reason the TLA+ suite pairs its rows: a suite that cannot detect the bug it
 reports absent has established nothing.
 
-`memory-ordering-bugs-found.md` explains each finding, including the one that
-only exists on AArch64 and the one earlier claim this pass retracted.
+The last four rows are the ones that matter most. Everything above them is a
+single hazard shape studied in isolation, which is how the shapes are
+*understood* but not on its own an argument that the program is correct. The
+composed rows run `Acquire` → `ProtectAndDrain` → critical section → `Release`
+against a full reclaimer, with every memory access of the reduced listing
+present, and say that no execution of the fixed sequence frees an object under
+a live reader.
+
+`memory-ordering-bugs-found.md` explains each finding, including the two that
+only exist on AArch64, the earlier claim this pass retracts, and a false
+positive the first composed encoding produced.
 
 ## Layout
 

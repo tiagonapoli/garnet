@@ -139,6 +139,82 @@ before the handover. The `plainstore` row is a **counterfactual** — it is not
 code any variant emits — included to show the `STLR` is load-bearing rather
 than decorative.
 
+## Hazard 4 — the critical section vs unpublishing the slot (Load→Store)
+
+`litmus/arm64-release-loadstore-{main,fixed}.litmus`,
+`litmus/x86-release-loadstore-main.litmus`
+
+Hazard 3 asks what the *next* owner of the slot sees. This one asks what the
+departing reader itself is still doing. The reader dereferences the object and
+then, in `Release()`, clears its slot:
+
+```
+LDR X2,[data]      ; the dereference, inside the critical section
+STR XZR,[lce]      ; Release: the slot is now free  -- PLAIN on main
+```
+
+Nothing in that pair is a barrier, and AArch64 permits Load→Store reordering.
+The slot clear can therefore become visible to other cores before the
+dereference has been satisfied. A reclaimer that scans in that window sees `0`,
+concludes nobody is protected, and frees the object — and only then does the
+reader's load get its value.
+
+```
+exists (the dereference returns the poison)
+```
+
+x86-TSO preserves Load→Store, so the shape cannot arise there; the x86 row is
+included to record that dissociation, with the AArch64 row as its live control.
+
+On `main` the slot clear is a plain `STR`, so this is open. The fix's
+`Volatile.Write` emits `STLR`, which is ordered after *every* preceding access
+including the dereference, so it closes this as well as hazard 3. That is worth
+stating explicitly: the release store was introduced to make the slot handover
+safe, and it turns out to be doing a second, independent job.
+
+## The whole sequence, composed
+
+`litmus/{x86,arm64}-composed-{main,fixed}.litmus`
+
+The four hazards above are each a two- or three-instruction shape studied in
+isolation. That is how they are understood, but it is not by itself an argument
+that the *program* is correct: a decomposition can miss an interaction between
+the shapes, and it can also be unfaithful in a way that happens not to show up
+one shape at a time.
+
+The composed tests run the entire reader against the entire reclaimer:
+
+```
+P0:  Acquire            read cur; claim; announce
+     ProtectAndDrain    re-read cur; re-announce
+     critical section   test unlinked; dereference only if it still looks live
+     Release            clear tid; clear the slot
+
+P1:  unlink; bump (LDADDAL); scan the slot; free if it is clear
+```
+
+with every memory access of the reduced listing present, in program order. The
+bad outcome is stated directly as the thing we actually care about — the
+reader's dereference returning a value the reclaimer wrote *after* freeing:
+
+```
+exists (0:X5=99)
+```
+
+Both `main` rows are `Sometimes` and both `fixed` rows are `Never`. The `fixed`
+rows are the substantive ones: they say that no execution of the whole
+sequence, on either architecture's real model, frees an object under a reader
+that is still using it.
+
+One detail in these tests is load-bearing and easy to get wrong. The reader's
+dereference is **guarded** by its test of `unlinked`. A reader only ever reaches
+an object through the structure, so a reader that observes the object already
+unlinked never held a pointer to it and cannot be a victim. Drop that guard and
+the test reports a violation for the *fixed* code — an execution in which the
+reclaimer legitimately frees while nothing is protected, and a later reader
+dereferences an object it was never given. That is a bug in the encoding, not in
+`LightEpoch`, and it is exactly the kind of thing composed tests are prone to.
+
 ## Relationship to the other evidence in this folder
 
 | Layer | What it establishes | Where |

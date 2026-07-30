@@ -147,13 +147,34 @@ choice, and each is in the safe direction.
 
 ## 4. Additions — locations that are not LightEpoch fields
 
-The two flags `unlinked` and `freed` do not exist in `LightEpoch`. They stand
-for the caller's object lifetime: `unlinked` is set by the reclaimer before it
-bumps the epoch, and the reader tests it to decide whether it is safe to
-dereference. They are modelled exactly as `tla/epoch/fixes/*.tla` models them,
-so the herd7 tests and the TLA+ specs are checking the same protocol at two
-different levels of abstraction. Without them there is nothing to state a
+The flags `unlinked`, `data` and `freed` do not exist in `LightEpoch`. They
+stand for the caller's object lifetime: `unlinked` is set by the reclaimer
+before it bumps the epoch, and the reader tests it to decide whether it is safe
+to dereference. They are modelled exactly as `tla/epoch/fixes/*.tla` models
+them, so the herd7 tests and the TLA+ specs are checking the same protocol at
+two different levels of abstraction. Without them there is nothing to state a
 use-after-free *about*: the epoch words alone are just integers.
+
+### 4.1 Branches, and how "free" is modelled
+
+The composed tests and the Load→Store tests need to express *conditional*
+behaviour that the earlier one-shape tests could fold into their `exists`
+clause, so they add two branches that have no counterpart in the dump:
+
+| Added | Stands for | Why it is faithful |
+|---|---|---|
+| `CBNZ`/`JNE` on the reclaimer's scan result, guarding a store of `99` to `data` | `ComputeNewSafeToReclaimEpoch` finding no slot that blocks reclamation, and the object then being freed | The real reclaimer likewise only frees on a condition computed from the slot it just read. Poisoning a word is how `../Litmus/QuarantineLitmus.cs` detects the same thing on hardware. |
+| `CBNZ`/`JNE` on the reader's load of `unlinked`, guarding the dereference | a reader only dereferences an object it reached through the structure | Without it the test counts a reader that dereferences an object it never had a pointer to, which the protocol makes impossible — and it does then report a violation for the *fixed* code. This guard is not a convenience; omitting it produces a false positive. |
+
+Both branches strengthen ordering slightly (a conditional branch on a load
+creates a control dependency, which AArch64 respects to a subsequent *store*).
+That cuts in the safe direction for the rows expected to be `Never`, and the
+paired `main` rows are `Sometimes` with the same branches present, so the
+branches are not what produces the verdicts.
+
+The reclaimer's guard replaces the `freed` flag used by the earlier tests: a
+poisoned `data` word observed by the reader *is* the use-after-free, so the
+`exists` clause can name a register rather than a pair of memory locations.
 
 ## 5. What was deliberately *not* removed
 
@@ -165,3 +186,6 @@ use-after-free *about*: the epoch words alone are just integers.
 - The plain `ldr`/`mov` that loads `CurrentEpoch` as the CAS operand in
   `Acquire`. It is genuinely unordered, and keeping it lets herd7 confirm that
   the following CASAL is what makes it safe.
+- In the composed tests, every memory access of the reduced listing, in program
+  order, with nothing elided. That is what makes them a check on the
+  decomposition rather than a fourth instance of it.

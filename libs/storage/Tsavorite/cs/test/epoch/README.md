@@ -123,7 +123,11 @@ docker run --rm garnet-lightepoch-herd
 
 This is what covers AArch64, which neither the TLA+ specs (they model memory
 ordering by hand and say nothing about codegen) nor the litmus soak (it runs on
-whatever machine you have) can speak to. It found one ordering hole that cannot
+whatever machine you have) can speak to. It found two ordering holes that cannot
 occur on x86 at all: on `main` the refresh path's read of `CurrentEpoch` is
 merged into a plain `LDP`, leaving the following data load free to be satisfied
-first. See `herd/memory-ordering-bugs-found.md`.
+first; and the plain slot clear in `Release()` can be observed before the
+reader's own dereference has been satisfied. It also runs the whole
+`Acquire` → `ProtectAndDrain` → critical section → `Release` sequence against a
+full reclaimer, not just the individual hazard shapes. See
+`herd/memory-ordering-bugs-found.md`.
