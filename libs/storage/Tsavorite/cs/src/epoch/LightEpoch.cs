@@ -367,6 +367,37 @@ namespace Tsavorite.core
         internal int ThreadIdAt(int entry) => ReadThreadIdRelaxed(entry);
 
         /// <summary>
+        /// Smallest epoch announced by any slot, or <see cref="CurrentEpoch"/> if none is protected.
+        /// <see cref="SafeToReclaimEpoch"/> must always stay strictly below this.
+        /// </summary>
+        internal long MinAnnouncedEpoch()
+        {
+            var min = ReadCurrentEpochAcquire();
+            for (var index = 1; index <= kTableSize; index++)
+            {
+                var announced = ReadAnnouncedEpochRelaxed(index);
+                if (announced != 0 && announced < min)
+                    min = announced;
+            }
+            return min;
+        }
+
+        /// <summary>
+        /// Number of threads parked waiting for a table slot.
+        /// </summary>
+        internal int WaiterCount => waiterCount & ~kDisposedFlag;
+
+        /// <summary>
+        /// Capacity of the drain list.
+        /// </summary>
+        internal static int DrainListCapacity => kDrainListSize;
+
+        /// <summary>
+        /// Maximum number of concurrent <see cref="LightEpoch"/> instances.
+        /// </summary>
+        internal static int MaxInstanceCount => InstanceIndexBuffer.MaxInstances;
+
+        /// <summary>
         /// Try to suspend the epoch, if it is currently held
         /// </summary>
         /// <returns></returns>
