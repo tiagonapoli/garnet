@@ -1,0 +1,19 @@
+X86 x86-announce-sb-fixed
+(* Reduced from jit/reduced/x86-fixed.reduced.asm. Same protocol and same
+   condition as x86-announce-sb-main; the only change is that the announce is
+   carried by the claim RMW instead of a following plain store.
+
+   That makes P0 fenced between publishing the announce and loading `unlinked`,
+   which is the missing half of the store-buffering cycle.
+
+   The ProtectAndDrain re-announce that follows is still a plain store, and is
+   deliberately left that way: it only ever moves the slot forward, so a scan
+   that misses it reads the CAS value (non-zero) rather than 0. *)
+{ lce=0; tid=0; cur=1; unlinked=0; }
+ P0                | P1                ;
+ MOV EDX,$1        | MOV [unlinked],$1 ;
+ XCHG [lce],EDX    | MOV EDX,$2        ;
+ MOV [tid],$1      | XCHG [cur],EDX    ;
+ MOV [lce],$2      | MOV EBX,[lce]     ;
+ MOV ECX,[unlinked]|                   ;
+exists (0:ECX=0 /\ 1:EBX=0)

@@ -1,0 +1,12 @@
+AArch64 arm64-release-fixed
+(* Reduced from jit/reduced/arm64-fixed.reduced.asm -- Release vs Acquire.
+   Same scenario as arm64-release-plainstore, but with the STLR the fix
+   actually emits. *)
+{ 0:X0=tid; 0:X1=lce; 1:X0=lce; 1:X1=tid; }
+ P0            | P1              ;
+ STR WZR,[X0]  | MOV X2,#0       ;
+ STLR XZR,[X1] | MOV X3,#1       ;
+               | CASAL X2,X3,[X0];
+               | MOV W4,#2       ;
+               | STR W4,[X1]     ;
+exists (lce=1 /\ tid=0)

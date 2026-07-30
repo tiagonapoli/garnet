@@ -1,0 +1,26 @@
+X86 x86-announce-sb-main
+(* Reduced from jit/reduced/x86-main.reduced.asm.
+   Protocol is the one pinned down by tla/epoch/fixes/CasAnnounceOneReader.tla.
+
+   P0 reader    : claim the slot (locked RMW on tid), PLAIN-store the announce
+                  into lce, re-announce in ProtectAndDrain, then test whether
+                  the object is still linked before dereferencing it.
+   P1 reclaimer : unlink the object, bump CurrentEpoch (locked RMW -- this
+                  drains P1's store buffer), then scan the epoch table.
+
+   Store buffering: P1 is already fenced between its unlink store and its scan
+   load, because the epoch bump sits between them. P0 is NOT: its announce is a
+   plain store and nothing separates it from the load of `unlinked`. So the
+   announce may still be buffered when P1 scans.
+
+   Violated when P1 misses the announce (reads lce=0, so it computes a
+   SafeToReclaimEpoch that covers the trigger and frees) while P0 sees the
+   object as still linked and dereferences it. *)
+{ lce=0; tid=0; cur=1; unlinked=0; }
+ P0                | P1                ;
+ MOV EDX,$1        | MOV [unlinked],$1 ;
+ XCHG [tid],EDX    | MOV EDX,$2        ;
+ MOV [lce],$1      | XCHG [cur],EDX    ;
+ MOV [lce],$2      | MOV EBX,[lce]     ;
+ MOV ECX,[unlinked]|                   ;
+exists (0:ECX=0 /\ 1:EBX=0)

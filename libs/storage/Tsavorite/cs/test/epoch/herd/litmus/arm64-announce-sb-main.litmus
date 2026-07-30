@@ -1,0 +1,16 @@
+AArch64 arm64-announce-sb-main
+(* Reduced from jit/reduced/arm64-main.reduced.asm. Same protocol as
+   x86-announce-sb-main; see that file for the argument.
+   CASAL claims tid, then a PLAIN STR publishes the announce. *)
+{ 0:X0=tid; 0:X1=lce; 0:X2=unlinked; 1:X0=unlinked; 1:X1=cur; 1:X2=lce;
+  lce=0; tid=0; cur=1; unlinked=0; }
+ P0               | P1                 ;
+ MOV W3,#1        | MOV X3,#1          ;
+ MOV W4,#0        | STR X3,[X0]        ;
+ CASAL W4,W3,[X0] | MOV X4,#1          ;
+ MOV X5,#1        | LDADDAL X4,X5,[X1] ;
+ STR X5,[X1]      | LDR X6,[X2]        ;
+ MOV X7,#2        |                    ;
+ STR X7,[X1]      |                    ;
+ LDR X8,[X2]      |                    ;
+exists (0:X8=0 /\ 1:X6=0)

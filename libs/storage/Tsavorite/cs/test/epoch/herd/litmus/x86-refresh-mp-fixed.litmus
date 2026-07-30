@@ -1,0 +1,11 @@
+X86 x86-refresh-mp-fixed
+(* Reduced from jit/reduced/x86-fixed.reduced.asm -- Refresh vs Bump.
+   Volatile.Read compiles to a plain MOV on x86, so this file is deliberately
+   byte-identical to x86-refresh-mp-main. It is kept so the matrix shows that
+   the fix costs nothing on x86 and changes nothing there. *)
+{ cur=0; data=0; }
+ P0              | P1             ;
+ MOV EAX,[cur]   | MOV [data],$1  ;
+ MOV EBX,[data]  | MOV EDX,$1     ;
+                 | XCHG [cur],EDX ;
+exists (0:EAX=1 /\ 0:EBX=0)

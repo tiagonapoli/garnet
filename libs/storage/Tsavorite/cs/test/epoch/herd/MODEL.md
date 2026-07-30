@@ -1,0 +1,159 @@
+# What the herd7 tests actually say
+
+This file explains the logic of the reduced assembly: which shared words exist,
+what each thread does to them, and what outcome would constitute a bug. Read it
+before `litmus/`; read `REDUCTION.md` for how the reduced code was derived from
+the raw JIT dumps.
+
+## The shared state
+
+`LightEpoch` keeps a cache-line-aligned table of 64-byte `Entry` structs. Only
+the first two fields matter here:
+
+| Symbol | Field | Type | Offset |
+|---|---|---|---|
+| `lce` | `tableAligned[entry].localCurrentEpoch` | `long` | Entry + 0x00 |
+| `tid` | `tableAligned[entry].threadId` | `int` | Entry + 0x08 |
+| `cur` | `LightEpoch.CurrentEpoch` | `long` | this + 0x30 |
+
+Two further locations model the caller's object lifetime, exactly as the TLA+
+specs in `../tla/epoch/fixes/` do:
+
+| Symbol | Meaning |
+|---|---|
+| `unlinked` | the reclaimer has removed the object from the structure; a reader that still sees `0` believes the object is live and will dereference it |
+| `freed` | the reclaimer has concluded it is safe to reclaim and has released the memory |
+
+## The protocol
+
+A reader runs `Resume()` = `Acquire()` + `ProtectAndDrain()`, does its work,
+then `Suspend()` = `Release()`.
+
+```
+Reader                                  Reclaimer
+------                                  ---------
+Acquire:                                unlink the object        -> W unlinked
+  read cur                              bump the epoch           -> RMW cur
+  claim a slot                          scan the table           -> R lce
+  announce the epoch      -> W lce      if no slot blocks it,
+  publish threadId        -> W tid         free the object       -> W freed
+ProtectAndDrain:
+  read cur                -> R cur
+  re-announce             -> W lce
+critical section:
+  test unlinked           -> R unlinked
+  dereference
+Release:
+  clear threadId          -> W tid
+  clear the slot          -> W lce
+```
+
+The safety property is the one the TLA+ specs call `NoUseAfterFree`: the
+reclaimer must never set `freed` while the reader is inside the critical
+section.
+
+Note where the reclaimer's fence already is. `BumpCurrentEpoch` is
+`Interlocked.Increment`, which compiles to `lock xadd` on x86 and `LDADDAL` on
+AArch64. It sits *between* the unlink store and the scan load, so **the
+reclaimer's half of the ordering is already correct in every variant**. Every
+question below is about the reader's half.
+
+## Hazard 1 — the announce vs the scan (store buffering)
+
+`litmus/{x86,arm64}-announce-sb-{main,fixed}.litmus`
+
+The reader publishes `lce` and then loads `unlinked`. The reclaimer publishes
+`unlinked` (then fences) and then loads `lce`. That is the store-buffering
+shape: each thread stores to one location and loads the other.
+
+The bad outcome is that **both** loads miss:
+
+```
+exists (reader sees unlinked=0  /\  reclaimer sees lce=0)
+```
+
+The reader concludes the object is live and dereferences it; the reclaimer
+concludes no thread is protected, computes a `SafeToReclaimEpoch` that covers
+the trigger epoch, and frees it. Use-after-free.
+
+Store buffering is *not* closed by release/acquire — it needs a full barrier on
+each side. The reclaimer has one. On `main` the reader does not: its claim is a
+locked RMW on `tid`, but the announce is a **separate plain store to `lce`
+after it**, with nothing between that store and the load of `unlinked`.
+
+The fix makes the claim CAS write `lce` itself, so the announce *is* the locked
+RMW and the reader's store-to-load pair is fenced. No barrier is added — the
+CAS was already there; only the word it targets changed.
+
+This hazard is architecture-independent, and both x86-TSO and AArch64 permit
+it. That matches the runtime evidence: `../Litmus/QuarantineLitmus.cs`
+reproduces it on ordinary x86 hardware.
+
+## Hazard 2 — the refresh vs the bump (message passing)
+
+`litmus/{x86,arm64}-refresh-mp-{main,fixed}.litmus`
+
+The reclaimer publishes state and then bumps the epoch. A refreshing reader
+reads the epoch and then reads that state. The bad outcome is the classic
+message-passing violation:
+
+```
+exists (reader sees the new epoch  /\  reader sees the stale state)
+```
+
+This is a load-load question, so the answer is architecture-dependent:
+
+- **x86-TSO never reorders load-load**, so `main` is already safe here, and
+  `Volatile.Read` compiles to a plain `mov`. The x86 pair of tests is
+  deliberately byte-identical for that reason: it documents that the fix
+  neither helps nor costs anything on x86.
+- **AArch64 does permit it.** On `main` the JIT merges the `CurrentEpoch` read
+  into an `LDP` with the table pointer — an ordinary unordered pair load — and
+  nothing stops the later data load from being satisfied first. `Volatile.Read`
+  changes it to `LDAPR`, which orders every subsequent load after it.
+
+Note that the announce store in `ProtectAndDrain` stays plain in both variants.
+That is deliberate and safe: at refresh time the slot is already non-zero, and
+the refresh only ever moves it *forward*. A scan that misses a delayed refresh
+reads the older, smaller epoch, which yields a smaller `SafeToReclaimEpoch` —
+the conservative direction. Only the `0 -> epoch` transition is
+ordering-sensitive, and that one is carried by the claim CAS.
+
+## Hazard 3 — unpublishing the slot vs the next claimer
+
+`litmus/arm64-release-{plainstore,fixed}.litmus`
+
+This hazard **exists only because of the fix**. Once `lce` is the word the claim
+CAS targets, `lce` — not `tid` — is the slot-ownership word, so `Release()` must
+clear `tid` first and hand the slot over by clearing `lce` last. If the `lce`
+clear were an ordinary store, the two could be observed out of order: another
+thread could win the claim CAS on `lce` and write its own `tid`, only for the
+departing thread's `tid` clear to land afterwards and erase it.
+
+```
+exists (lce = claimed  /\  tid = 0)
+```
+
+`Volatile.Write` emits `STLR` on AArch64, which keeps the `tid` clear ordered
+before the handover. The `plainstore` row is a **counterfactual** — it is not
+code any variant emits — included to show the `STLR` is load-bearing rather
+than decorative.
+
+## Relationship to the other evidence in this folder
+
+| Layer | What it establishes | Where |
+|---|---|---|
+| TLA+ | the *algorithm* is correct under an abstract store-buffer / weak-memory model, exhaustively over all interleavings | `../tla/` |
+| herd7 | the *instructions the JIT actually emits* are correct under the vendors' own architecture models, for x86-64 and AArch64 | here |
+| Litmus stress test | the bug is observable on real x86 hardware, and the fix suppresses it | `../Litmus/` |
+
+herd7 fills the gap the other two leave: the TLA+ specs model memory ordering
+by hand and say nothing about codegen, and the stress test only runs on the
+hardware you happen to have. herd7 checks real emitted AArch64 instructions
+against Arm's own model without needing an Arm machine to run on.
+
+The converse limitation is worth stating plainly: herd7 validates the emitted
+code against the *architecture's* memory model. The .NET memory model is a
+separate, stronger contract, and a future JIT is free to emit different
+instructions. These tests are evidence about the code that ships today, which
+is why the raw dumps are committed alongside them.

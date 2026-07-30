@@ -1,0 +1,12 @@
+X86 x86-refresh-mp-main
+(* Reduced from jit/reduced/x86-main.reduced.asm -- Refresh vs Bump.
+   P1 bumper   : publish page metadata, then Interlocked.Increment CurrentEpoch.
+   P0 refresher: read CurrentEpoch, then read the metadata it now believes is
+                 covered by that epoch.
+   Violated when the refresher sees the new epoch but stale metadata. *)
+{ cur=0; data=0; }
+ P0              | P1             ;
+ MOV EAX,[cur]   | MOV [data],$1  ;
+ MOV EBX,[data]  | MOV EDX,$1     ;
+                 | XCHG [cur],EDX ;
+exists (0:EAX=1 /\ 0:EBX=0)

@@ -1,7 +1,8 @@
 # Garnet.LightEpoch tests
 
-Unit tests for `LightEpoch`, hardware litmus soak tests, and the TLA+ models that
-justify its memory ordering.
+Unit tests for `LightEpoch`, hardware litmus soak tests, the TLA+ models that
+justify its memory ordering, and herd7 checks of the machine code the JIT emits
+for it.
 
 ## Unit tests
 
@@ -108,3 +109,21 @@ algorithm and its controls: `AcquireOrder` selects how the claim is published,
 `ReleaseOrder` how the slot is unpublished, and `UseThreadId` / `StaleIndex`
 switch the two ownership controls. `run.sh` lists every row with its expected
 verdict.
+
+## herd7 checks of the emitted code
+
+`herd/` takes the actual RyuJIT output for `LightEpoch` on x86-64 and AArch64,
+reduces it to the instructions that carry the ordering, and checks those against
+x86-TSO and `aarch64.cat`:
+
+```
+docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/herd
+docker run --rm garnet-lightepoch-herd
+```
+
+This is what covers AArch64, which neither the TLA+ specs (they model memory
+ordering by hand and say nothing about codegen) nor the litmus soak (it runs on
+whatever machine you have) can speak to. It found one ordering hole that cannot
+occur on x86 at all: on `main` the refresh path's read of `CurrentEpoch` is
+merged into a plain `LDP`, leaving the following data load free to be satisfied
+first. See `herd/memory-ordering-bugs-found.md`.
