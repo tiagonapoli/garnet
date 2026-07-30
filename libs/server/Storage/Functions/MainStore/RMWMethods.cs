@@ -387,34 +387,10 @@ namespace Garnet.server
         /// <inheritdoc />
         public readonly bool InPlaceUpdater(ref LogRecord logRecord, ref StringInput input, ref StringOutput output, ref RMWInfo rmwInfo)
         {
-            if (logRecord.DataHeader.ValueIsObject)
+            if (logRecord.DataHeader.ValueIsObject | (logRecord.RecordType != 0))
             {
-                rmwInfo.Action = RMWAction.WrongType;
-                return false;
-            }
-
-            // RangeIndex type safety – normal string records have RecordType 0; skip all checks in that common case.
-            if (logRecord.RecordType == RangeIndexManager.RangeIndexRecordType)
-            {
-                // Reject non-RI commands on RI keys
-                if (!input.header.cmd.IsLegalOnRangeIndex())
-                {
-                    rmwInfo.Action = RMWAction.WrongType;
+                if (!HandleSpecialTypeIPU(ref logRecord, ref input, ref rmwInfo))
                     return false;
-                }
-            }
-            else if (input.header.cmd.IsRangeIndexCommand())
-            {
-                // Reject RI-specific commands on non-RI keys
-                rmwInfo.Action = RMWAction.WrongType;
-                return false;
-            }
-
-            // WRONGTYPE all updates on Vector Sets from non-Vector Set commands
-            if (logRecord.RecordType == VectorManager.RecordType && !input.header.cmd.IsLegalOnVectorSet())
-            {
-                rmwInfo.Action = RMWAction.WrongType;
-                return false;
             }
 
             var ipuResult = InPlaceUpdaterWorker(ref logRecord, ref input, ref output, ref rmwInfo);
@@ -432,6 +408,38 @@ namespace Garnet.server
                 default:
                     return true;
             }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool HandleSpecialTypeIPU(ref LogRecord logRecord, ref StringInput input, ref RMWInfo rmwInfo)
+        {
+            if (logRecord.DataHeader.ValueIsObject)
+            {
+                rmwInfo.Action = RMWAction.WrongType;
+                return false;
+            }
+
+            if (logRecord.RecordType == RangeIndexManager.RangeIndexRecordType)
+            {
+                if (!input.header.cmd.IsLegalOnRangeIndex())
+                {
+                    rmwInfo.Action = RMWAction.WrongType;
+                    return false;
+                }
+            }
+            else if (input.header.cmd.IsRangeIndexCommand())
+            {
+                rmwInfo.Action = RMWAction.WrongType;
+                return false;
+            }
+
+            if (logRecord.RecordType == VectorManager.RecordType && !input.header.cmd.IsLegalOnVectorSet())
+            {
+                rmwInfo.Action = RMWAction.WrongType;
+                return false;
+            }
+
+            return true;
         }
 
         private readonly IPUResult InPlaceUpdaterWorker(ref LogRecord logRecord, ref StringInput input, ref StringOutput output, ref RMWInfo rmwInfo)

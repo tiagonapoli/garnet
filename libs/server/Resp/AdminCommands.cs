@@ -123,6 +123,9 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool CheckACLPermissions(RespCommand cmd)
         {
+            if (_skipACLCheck)
+                return true;
+
             Debug.Assert(!_authenticator.IsAuthenticated || (_userHandle != null));
 
             // Custom (extension) commands need per-name allow/deny on top of the bitmap check.

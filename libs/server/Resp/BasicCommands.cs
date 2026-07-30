@@ -489,7 +489,7 @@ namespace Garnet.server
                 return AbortWithErrorMessage(CmdStrings.RESP_ERR_GENERIC_INVALIDEXP_IN_SET);
             }
 
-            var valMetadata = DateTimeOffset.UtcNow.Ticks +
+            var valMetadata = batchTimestampTicks +
                               (highPrecision
                                   ? TimeSpan.FromMilliseconds(expiry).Ticks
                                   : TimeSpan.FromSeconds(expiry).Ticks);
@@ -547,6 +547,21 @@ namespace Garnet.server
         {
             var key = parseState.GetArgSliceByRef(0);
             var val = parseState.GetArgSliceByRef(1);
+
+            // Fast path for the common case: SET key val NX or SET key val XX (single 2-byte option)
+            if (parseState.Count == 3)
+            {
+                var optSlice = parseState.GetArgSliceByRef(2).ReadOnlySpan;
+                if (optSlice.Length == 2)
+                {
+                    var b0 = optSlice[0];
+                    var b1 = optSlice[1];
+                    if ((b0 == 'N' || b0 == 'n') && (b1 == 'X' || b1 == 'x'))
+                        return NetworkSET_Conditional(RespCommand.SETEXNX, 0, key, getValue: false, highPrecision: false, ref storageApi);
+                    if ((b0 == 'X' || b0 == 'x') && (b1 == 'X' || b1 == 'x'))
+                        return NetworkSET_Conditional(RespCommand.SETEXXX, 0, key, getValue: false, highPrecision: false, ref storageApi);
+                }
+            }
 
             var expiry = 0;
             ReadOnlySpan<byte> errorMessage = default;
@@ -685,7 +700,7 @@ namespace Garnet.server
             Debug.Assert(cmd == RespCommand.SET);
 
             var highPrecision = expOption == ExpirationOption.PX;
-            var valMetadata = DateTimeOffset.UtcNow.Ticks +
+            var valMetadata = batchTimestampTicks +
                               (highPrecision
                                   ? TimeSpan.FromMilliseconds(expiry).Ticks
                                   : TimeSpan.FromSeconds(expiry).Ticks);
@@ -704,7 +719,7 @@ namespace Garnet.server
         {
             var inputArg = expiry == 0
                 ? 0
-                : DateTimeOffset.UtcNow.Ticks +
+                : batchTimestampTicks +
                   (highPrecision
                       ? TimeSpan.FromMilliseconds(expiry).Ticks
                       : TimeSpan.FromSeconds(expiry).Ticks);
@@ -797,29 +812,59 @@ namespace Garnet.server
                 return AbortWithErrorMessage(CmdStrings.RESP_ERR_GENERIC_VALUE_IS_NOT_INTEGER);
             }
 
-            Span<byte> outputBuffer = stackalloc byte[NumUtils.MaximumFormatInt64Length + 1];
-            var output = PinnedSpanByte.FromPinnedSpan(outputBuffer);
-            StringOutput stringOutput = new(new SpanByteAndMemory(output));
-
             var input = new StringInput(cmd, 0, incrByValue);
-            var res = storageApi.Increment(key, ref input, ref stringOutput);
 
-            if (res == GarnetStatus.WRONGTYPE)
-            {
-                WriteError(CmdStrings.RESP_ERR_WRONG_TYPE);
-            }
-            else
-            {
-                output.Length = stringOutput.SpanByteAndMemory.Length;
+            // ':' + sign + 19 digits + '\r\n'
+            const int maxRespIntLen = 1 + NumUtils.MaximumFormatInt64Length + 2;
 
-                if (!stringOutput.HasError)
+            if ((int)(dend - dcurr) >= maxRespIntLen)
+            {
+                // Fast path: point output directly at dcurr+1 so the RMW callback writes
+                // digits straight into the response buffer, skipping the stackalloc intermediate.
+                var stringOutput = StringOutput.FromPinnedPointer(dcurr + 1, NumUtils.MaximumFormatInt64Length);
+                var res = storageApi.Increment(key, ref input, ref stringOutput);
+
+                if (res == GarnetStatus.WRONGTYPE)
                 {
-                    while (!RespWriteUtils.TryWriteIntegerFromBytes(outputBuffer.Slice(0, output.Length), ref dcurr, dend))
-                        SendAndReset();
+                    WriteError(CmdStrings.RESP_ERR_WRONG_TYPE);
+                }
+                else if (!stringOutput.HasError)
+                {
+                    var len = stringOutput.SpanByteAndMemory.SpanByte.Length;
+                    *dcurr = (byte)':';
+                    *(dcurr + 1 + len) = (byte)'\r';
+                    *(dcurr + 2 + len) = (byte)'\n';
+                    dcurr += 3 + len;
                 }
                 else
                 {
                     WriteError(CmdStrings.RESP_ERR_GENERIC_VALUE_IS_NOT_INTEGER);
+                }
+            }
+            else
+            {
+                Span<byte> outputBuffer = stackalloc byte[NumUtils.MaximumFormatInt64Length + 1];
+                var output = PinnedSpanByte.FromPinnedSpan(outputBuffer);
+                StringOutput stringOutput = new(new SpanByteAndMemory(output));
+                var res = storageApi.Increment(key, ref input, ref stringOutput);
+
+                if (res == GarnetStatus.WRONGTYPE)
+                {
+                    WriteError(CmdStrings.RESP_ERR_WRONG_TYPE);
+                }
+                else
+                {
+                    output.Length = stringOutput.SpanByteAndMemory.Length;
+
+                    if (!stringOutput.HasError)
+                    {
+                        while (!RespWriteUtils.TryWriteIntegerFromBytes(outputBuffer.Slice(0, output.Length), ref dcurr, dend))
+                            SendAndReset();
+                    }
+                    else
+                    {
+                        WriteError(CmdStrings.RESP_ERR_GENERIC_VALUE_IS_NOT_INTEGER);
+                    }
                 }
             }
 

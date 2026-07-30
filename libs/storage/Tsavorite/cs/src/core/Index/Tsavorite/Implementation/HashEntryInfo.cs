@@ -35,10 +35,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal HashEntryInfo(long hash)
         {
-            firstBucket = default;
-            bucket = default;
-            slot = default;
-            entry = default;
+            Unsafe.SkipInit(out this);
             this.hash = hash;
             tag = HashBucketEntry.GetTag(hash);
         }
