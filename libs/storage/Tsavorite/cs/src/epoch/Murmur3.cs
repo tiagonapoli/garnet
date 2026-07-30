@@ -8,6 +8,10 @@ namespace Tsavorite.core
     /// <summary>
     /// A 32-bit murmur3 implementation.
     /// </summary>
+    /// <remarks>
+    /// Deliberately duplicates <c>Utility.Murmur3</c>: Tsavorite.core references this project, so
+    /// reaching the other way would be a cycle.
+    /// </remarks>
     public static class Murmur3
     {
         /// <summary>
