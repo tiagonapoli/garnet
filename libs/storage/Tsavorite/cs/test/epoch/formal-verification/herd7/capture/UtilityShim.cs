@@ -1,3 +1,6 @@
+// Only reached by refs from before LightEpoch became its own project, where it
+// still called Utility.Murmur3.
+
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core

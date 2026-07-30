@@ -10,6 +10,10 @@
 #
 # Output: /out/<arch>-<label>.asm, matching the names already in ../jit/.
 #
+# LightEpoch is a standalone project, so each ref's epoch sources are lifted out
+# whole rather than cherry-picked; refs from before that split fall back to the
+# old in-Tsavorite.core layout.
+#
 # Method selection is by bare name, space separated; the Class:Method form
 # silently matches nothing. The Op* wrappers in Program.cs are NoInlining so each
 # epoch operation gets a standalone listing while its body still inlines the way
@@ -19,12 +23,15 @@ set -uo pipefail
 
 REPO=${REPO:-/repo}
 OUT=${OUT:-/out}
-EPOCH_PATH=${EPOCH_PATH:-libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs}
 
-# Sources LightEpoch.cs needs to compile standalone. Taken from the same ref as
-# LightEpoch.cs itself so they cannot drift from it; anything else the epoch
-# depends on is stubbed in UtilityShim.cs.
-SUPPORT_PATHS=${SUPPORT_PATHS:-libs/storage/Tsavorite/cs/src/core/Epochs/IEpochAccessor.cs}
+# LightEpoch lives in its own project, so the whole directory can be lifted out
+# of a git ref and compiled as-is -- no guessing at what it depends on.
+EPOCH_PROJECT_DIR=${EPOCH_PROJECT_DIR:-libs/storage/Tsavorite/cs/src/epoch}
+
+# Refs from before the project split keep LightEpoch inside Tsavorite.core, where
+# it reaches for Utility.Murmur3; UtilityShim.cs covers that so `main` can still
+# be captured for comparison.
+LEGACY_PATHS=${LEGACY_PATHS:-libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs libs/storage/Tsavorite/cs/src/core/Epochs/IEpochAccessor.cs}
 
 METHODS=${METHODS:-OpResume OpProtectAndDrain OpSuspend OpBumpCurrentEpoch BumpCurrentEpoch ComputeNewSafeToReclaimEpoch}
 
@@ -44,24 +51,33 @@ for pair in "${pairs[@]}"; do
     ref=${pair#*=}
 
     echo "=============================================================="
-    echo "== $label  <-  $ref:$EPOCH_PATH"
+    echo "== $label  <-  $ref"
     echo "=============================================================="
 
-    if ! git -C "$REPO" cat-file -e "$ref:$EPOCH_PATH" 2>/dev/null; then
-        echo "ERROR: $ref:$EPOCH_PATH does not exist in the mounted repository." >&2
-        failures=$((failures + 1))
-        continue
-    fi
-    git -C "$REPO" show "$ref:$EPOCH_PATH" > /work/LightEpoch.cs
+    rm -rf /work/epoch
+    mkdir -p /work/epoch
+    source_desc=""
 
-    extracted=(/work/LightEpoch.cs)
-    for support in $SUPPORT_PATHS; do
-        dest="/work/$(basename "$support")"
-        if git -C "$REPO" cat-file -e "$ref:$support" 2>/dev/null; then
-            git -C "$REPO" show "$ref:$support" > "$dest"
-            extracted+=("$dest")
+    if git -C "$REPO" cat-file -e "$ref:$EPOCH_PROJECT_DIR" 2>/dev/null; then
+        git -C "$REPO" archive "$ref" "$EPOCH_PROJECT_DIR" \
+            | tar -x -C /work --strip-components=5 --wildcards '*.cs'
+        source_desc="$EPOCH_PROJECT_DIR (standalone project)"
+    else
+        missing=0
+        for path in $LEGACY_PATHS; do
+            if ! git -C "$REPO" cat-file -e "$ref:$path" 2>/dev/null; then
+                missing=1
+                break
+            fi
+            git -C "$REPO" show "$ref:$path" > "/work/epoch/$(basename "$path")"
+        done
+        if [ "$missing" -ne 0 ]; then
+            echo "ERROR: $ref has neither $EPOCH_PROJECT_DIR nor the pre-split epoch sources." >&2
+            failures=$((failures + 1))
+            continue
         fi
-    done
+        source_desc="$LEGACY_PATHS (pre-split layout)"
+    fi
 
     for entry in $RIDS; do
         rid=${entry%%:*}
@@ -107,7 +123,7 @@ for pair in "${pairs[@]}"; do
             echo "; LightEpoch RyuJIT disassembly"
             echo ";   label      : $label"
             echo ";   git ref    : $ref ($(git -C "$REPO" rev-parse --short "$ref"))"
-            echo ";   source     : $EPOCH_PATH"
+            echo ";   source     : $source_desc"
             echo ";   target     : $rid"
             echo ";   compiler   : NativeAOT ILC (hosts RyuJIT), $(dotnet --version) SDK"
             echo ";   methods    : $METHODS"
@@ -127,7 +143,7 @@ for pair in "${pairs[@]}"; do
         rm -f "$raw"
     done
 
-    rm -f "${extracted[@]}"
+    rm -rf /work/epoch
 done
 
 echo
