@@ -85,7 +85,7 @@ positive the first composed encoding produced.
 | `jit/reduced/*.reduced.asm` | the same code cut down to what herd7 can parse |
 | `REDUCTION.md` | every removal and substitution, and why none of them can change the result |
 | `MODEL.md` | the protocol the tests encode and what each `exists` clause means operationally |
-| `memory-ordering-bugs-found.md` | the findings, split by architecture |
+| `memory-ordering-bugs-found.md` | the findings, one section per hazard with each architecture itemised |
 | `litmus/` | the herd7 tests |
 | `capture/` | the harness that produced the dumps |
 | `run.sh`, `Dockerfile` | the matrix runner |

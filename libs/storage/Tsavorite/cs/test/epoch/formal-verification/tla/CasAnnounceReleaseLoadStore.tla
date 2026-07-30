@@ -168,7 +168,7 @@ ProtectAndDrain ==
 \* object already unlinked it never held a pointer to it and does not
 \* dereference. Dropping this guard makes the spec report violations that the
 \* protocol makes unreachable -- the same false positive the herd7 composed
-\* tests hit (see ../../../herd7/memory-ordering-bugs-found.md).
+\* tests hit (see ../herd7/memory-ordering-bugs-found.md).
 ReadObject ==
     /\ readerPc = "ReadObject"
     /\ sawObjectLive' = ~ Load(Reader, "objectUnlinked")

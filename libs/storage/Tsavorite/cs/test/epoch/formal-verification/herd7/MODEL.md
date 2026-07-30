@@ -13,19 +13,23 @@ to emit, and once against the one we emit now. Only the pair is an argument.
 and "the test is mis-encoded and forbids everything", so the control — which
 must come back `Sometimes` — is what makes the fix's `Never` mean anything.
 
-| Pair | Control | Fix | The whole difference |
-|---|---|---|---|
-| `x86-announce-sb` | `-main` | `-fixed` | `XCHG` targets `tid`, plain `MOV` publishes the announce → `XCHG` targets `lce` and carries it |
-| `arm64-announce-sb` | `-main` | `-fixed` | `CASAL` targets `tid`, plain `STR` publishes the announce → `CASAL` targets `lce` and carries it |
-| `x86-refresh-mp` | `-main` | `-fixed` | *none* — `Volatile.Read` is a plain `MOV` on x86, so the two streams are identical |
-| `arm64-refresh-mp` | `-main` | `-fixed` | `LDR` of `CurrentEpoch` → `LDAPR` |
-| `arm64-release` | `-plainstore` | `-fixed` | `STR XZR` → `STLR XZR`; the control is a counterfactual, not code that ever shipped |
-| `arm64-release-loadstore` | `-main` | `-fixed` | `STR XZR` → `STLR XZR` |
-| `x86-composed` | `-main` | `-fixed` | the whole sequence; on x86 only the announce change is visible, the other two are no-ops |
-| `arm64-composed` | `-main` | `-fixed` | the whole sequence: announce onto the claim `CASAL`, `LDAPR` refresh, and `STLR` unpublish, all at once |
+| Pair | Control | Fix | The whole difference | Explained in |
+|---|---|---|---|---|
+| `x86-announce-sb` | `-main` | `-fixed` | `XCHG` targets `tid`, plain `MOV` publishes the announce → `XCHG` targets `lce` and carries it | [X1](memory-ordering-bugs-found.md#x1--x86-64) |
+| `arm64-announce-sb` | `-main` | `-fixed` | `CASAL` targets `tid`, plain `STR` publishes the announce → `CASAL` targets `lce` and carries it | [A1](memory-ordering-bugs-found.md#a1--aarch64) |
+| `x86-refresh-mp` | `-main` | `-fixed` | *none* — `Volatile.Read` is a plain `MOV` on x86, so the two streams are identical | [X2](memory-ordering-bugs-found.md#x2--x86-64) |
+| `arm64-refresh-mp` | `-main` | `-fixed` | `LDR` of `CurrentEpoch` → `LDAPR` | [A2](memory-ordering-bugs-found.md#a2--aarch64) |
+| `arm64-release` | `-plainstore` | `-fixed` | `STR XZR` → `STLR XZR`; the control is a counterfactual, not code that ever shipped | [A3](memory-ordering-bugs-found.md#a3--aarch64) |
+| `arm64-release-loadstore` | `-main` | `-fixed` | `STR XZR` → `STLR XZR` | [A4](memory-ordering-bugs-found.md#a4--aarch64) |
+| `x86-composed` | `-main` | `-fixed` | the whole sequence; on x86 only the announce change is visible, the other two are no-ops | [X4](memory-ordering-bugs-found.md#x4--x86-64) |
+| `arm64-composed` | `-main` | `-fixed` | the whole sequence: announce onto the claim `CASAL`, `LDAPR` refresh, and `STLR` unpublish, all at once | [composed](memory-ordering-bugs-found.md#the-whole-sequence-composed) |
 
 `x86-release-loadstore-main` is deliberately unpaired: x86-TSO preserves
-Load→Store, so the hazard cannot arise and there is nothing to fix.
+Load→Store, so the hazard cannot arise and there is nothing to fix — see
+[X3](memory-ordering-bugs-found.md#x3--x86-64).
+
+Each linked section gives the status of the finding, the `main` instruction
+sequence, the fixed one, and why the difference decides the outcome.
 
 `./run.sh --pairs` prints this table, and `./run.sh --pair <name>` diffs the two
 files and runs both halves, which is the fastest way to see that the delta is

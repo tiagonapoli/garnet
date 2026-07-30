@@ -14,11 +14,32 @@ Both dumps were taken with .NET 10.0.100, `DOTNET_TieredCompilation=0`
 
 Reproduce with `docker run --rm garnet-lightepoch-herd`.
 
+This file is organised by **hazard**, with each architecture itemised
+underneath, so a hazard and its two litmus pairs can be read in one place. The
+`X`/`A` labels are stable and are what the rest of the folder cites.
+
+| Hazard | x86-64 | AArch64 |
+| --- | --- | --- |
+| 1 — announce vs the reclaimer's scan | [X1](#x1--x86-64) | [A1](#a1--aarch64) |
+| 2 — refresh vs the bump | [X2](#x2--x86-64) | [A2](#a2--aarch64) |
+| 3 — unpublishing vs the next claimer | [X3](#x3--x86-64) | [A3](#a3--aarch64) |
+| 4 — critical section vs unpublishing | [see X3](#x86-64--cannot-arise) | [A4](#a4--aarch64) |
+| composed | [X4](#x4--x86-64) | [AArch64](#aarch64) |
+
 ---
 
-## x86-64
+## Hazard 1 — the announce vs the reclaimer's scan (store buffering)
 
-### X1 — The announce store can be buffered past the reclaimer's scan (BUG, fixed)
+The reader publishes its announce and then loads the object it intends to
+protect; the reclaimer stores the unlink and then loads the reader's slot. That
+is the classic store-buffering (`SB`) shape, and it is the one hazard that is
+**present on both architectures** — store buffering is exactly what x86-TSO
+still permits.
+
+Release/acquire does not close it. `SB` needs a full barrier, or an RMW, on
+*both* sides; the reclaimer already has one, the reader did not.
+
+### X1 — x86-64
 
 **Status:** present on `origin/main`; closed by the fix.
 **Test:** `litmus/x86-announce-sb-main.litmus` → `Sometimes` (violated),
@@ -54,47 +75,11 @@ mov      dword ptr [TID], ecx          ; plain; the slot is already ours
 The locked RMW count is unchanged; only the word being CASed differs. herd7
 confirms the cycle is then forbidden under `x86tso.cat`.
 
-This is the same defect that `../Litmus/QuarantineLitmus.cs` reproduces on real
-x86 hardware, now confirmed against Intel's architectural model rather than
-only observed empirically.
+This is the same defect that `../../Litmus/QuarantineLitmus.cs` reproduces on
+real x86 hardware, now confirmed against Intel's architectural model rather
+than only observed empirically.
 
-### X2 — The refresh path is *not* a bug on x86 (no action)
-
-**Test:** `litmus/x86-refresh-mp-main.litmus` → `Never`.
-
-`ProtectAndDrain` reads `CurrentEpoch` and then reads state the bumper
-published before bumping. That is message passing, which is a load-load
-question, and x86-TSO does not reorder loads. `main` is already safe here.
-
-`Volatile.Read` compiles to a plain `mov` on x86, so the fixed and unfixed
-`ProtectAndDrain` are **byte-identical** — 152 bytes of code each, instruction
-for instruction. This is the codegen-level confirmation that the acquire load
-costs nothing on x86.
-
-### X3 — No issue found in `Release()` on x86
-
-`Release()` emits its two plain stores in source order in both variants. See
-the correction note at the end of this file.
-
-Neither store-store nor Load→Store is reorderable under x86-TSO, so both the
-slot-handover question (A3) and the premature-unpublish question (A4) below are
-closed on x86 without any barrier. `litmus/x86-release-loadstore-main.litmus`
-records the second of those as `Never`.
-
-### X4 — The composed sequence
-
-**Test:** `litmus/x86-composed-main.litmus` → `Sometimes` (violated),
-`litmus/x86-composed-fixed.litmus` → `Never`.
-
-Running the whole reader against the whole reclaimer, rather than one hazard
-shape at a time, reproduces X1 and nothing else on x86, and the fixed sequence
-admits no use-after-free at all. See "The whole sequence, composed" below.
-
----
-
-## AArch64
-
-### A1 — The same announce store-buffering bug (BUG, fixed)
+### A1 — AArch64
 
 **Status:** present on `origin/main`; closed by the fix.
 **Test:** `litmus/arm64-announce-sb-main.litmus` → `Sometimes` (violated),
@@ -109,7 +94,29 @@ explicit, because the claim CAS changes width as well as target:
 | announce | `str x0, [LCE]` — plain | *(carried by the CAS)* |
 | threadId publish | *(carried by the CAS)* | `str w1, [TID]` — plain |
 
-### A2 — `CurrentEpoch` is read by an unordered `LDP` on the refresh path (BUG, ARM-only, fixed)
+---
+
+## Hazard 2 — the refresh vs the bump (message passing)
+
+`ProtectAndDrain` re-reads `CurrentEpoch` and then reads state the bumper
+published *before* bumping. The bumper's side is already ordered
+(`Interlocked.Increment` is a full RMW), so this is pure message passing: a
+load-load question on the reader's side, and therefore **architecture-dependent
+in a way hazard 1 is not**.
+
+### X2 — x86-64
+
+**Status:** not a bug. No action.
+**Test:** `litmus/x86-refresh-mp-main.litmus` → `Never`.
+
+x86-TSO does not reorder loads, so `main` is already safe here.
+
+`Volatile.Read` compiles to a plain `mov` on x86, so the fixed and unfixed
+`ProtectAndDrain` are **byte-identical** — 152 bytes of code each, instruction
+for instruction. This is the codegen-level confirmation that the acquire load
+costs nothing on x86.
+
+### A2 — AArch64
 
 **Status:** present on `origin/main`; closed by the fix. **Cannot occur on
 x86.**
@@ -145,20 +152,28 @@ str     x3, [LCE]                ; re-announce, still plain (see MODEL.md)
 to ordering against a prior `STLR`. For message passing it is sufficient, and
 herd7 confirms the violation is forbidden under `aarch64.cat`.
 
-### A3 — `Release()` must use a release store once the fix is in (constraint, satisfied)
+---
+
+## Hazard 3 — unpublishing the slot vs the next claimer (store-store)
+
+Making the claim CAS target `localCurrentEpoch` also makes it the
+slot-*ownership* word. That creates a requirement `main` never had: `Release()`
+must clear `threadId` first and hand the slot over last, and the handover must
+carry release ordering.
+
+This hazard therefore has no `main` variant to violate — it is a constraint the
+fix introduces, tested against a counterfactual.
+
+### A3 — AArch64
 
 **Status:** not a bug in any shipped variant; a requirement the fix introduces
 and meets.
 **Test:** `litmus/arm64-release-plainstore.litmus` → `Sometimes`
 (counterfactual), `litmus/arm64-release-fixed.litmus` → `Never`.
 
-Making the claim CAS target `localCurrentEpoch` also makes it the
-slot-*ownership* word. `Release()` therefore has to clear `threadId` first and
-hand the slot over last — and the handover must carry release ordering, or the
-two clears can be observed out of order and the departing thread can erase the
-`threadId` of the thread that just claimed the slot.
-
-`Volatile.Write` emits exactly that:
+If the two clears can be observed out of order, the departing thread can erase
+the `threadId` of the thread that just claimed the slot. `Volatile.Write` emits
+exactly what is needed:
 
 ```asm
 str     wzr, [TID]               ; clear threadId FIRST, plain
@@ -167,21 +182,43 @@ stlr    xzr, [LCE]               ; hand the slot over, STLR
 
 The counterfactual row shows the same code with a plain `STR` in place of the
 `STLR` and is violated, which is what makes the `STLR` demonstrably
-load-bearing rather than defensive. Note this is also why the store order is
-*inverted* relative to `main`: on `main`, `threadId` is the ownership word, so
-clearing `localCurrentEpoch` first is the correct order there.
+load-bearing rather than defensive.
 
-### A4 — The dereference can be reordered past the slot clear (BUG, ARM-only, fixed)
+Note this is also why the store order is *inverted* relative to `main`: on
+`main`, `threadId` is the ownership word, so clearing `localCurrentEpoch` first
+is the correct order there.
+
+Note also where the release must sit. Putting it on the `threadId` clear
+instead would not work: a release store orders accesses *before* it, and does
+nothing to stop a later plain store floating above it.
+
+### X3 — x86-64
+
+**Status:** cannot arise. No action.
+
+`Release()` emits its two plain stores in source order in both variants — see
+the [correction note](#correction-to-an-earlier-claim-in-this-investigation)
+below. x86-TSO orders store-store, so the handover is safe without any barrier.
+
+The same subsection covers hazard 4 on x86, since TSO closes both shapes for
+the same reason; `litmus/x86-release-loadstore-main.litmus` records that one as
+`Never`.
+
+---
+
+## Hazard 4 — the critical section vs unpublishing the slot (Load→Store)
+
+The three hazards above are all about what *other* threads see of the reader's
+publication. This one is about the reader outliving its own announcement, and
+it was missed on the first pass for exactly that reason.
+
+### A4 — AArch64
 
 **Status:** present on `origin/main`; closed by the fix. **Cannot occur on
 x86.**
 **Test:** `litmus/arm64-release-loadstore-main.litmus` → `Sometimes`
 (violated), `litmus/arm64-release-loadstore-fixed.litmus` → `Never`,
 `litmus/x86-release-loadstore-main.litmus` → `Never`.
-
-This one was missed on the first pass, because all three earlier hazards are
-about what *other* threads see of the reader's publication. This one is about
-the reader outliving its own announcement.
 
 The reader dereferences the object and then unpublishes its slot:
 
@@ -207,10 +244,6 @@ exists in `main` today and has nothing to do with the handover. Weakening it
 back to a plain store would reopen A4 even if A3 were somehow addressed another
 way.
 
-x86-TSO preserves Load→Store, so the shape cannot arise there — the x86 row
-records that, with the AArch64 row as the live control proving the encoding can
-detect the hazard when the architecture permits it.
-
 A4 was invisible to the TLA+ suite for two structural reasons: neither
 `StoreBuffer.tla` nor `WeakMemory.tla` can express a load that has been issued
 and not yet bound, and the critical section in those specs is not a memory
@@ -220,12 +253,16 @@ Both are now addressed by
 which splits the dereference into issue and bind and reproduces the three rows
 above: `tso`+plain HOLDS, `arm`+plain VIOLATED, `arm`+release HOLDS.
 
+### x86-64 — cannot arise
+
+x86-TSO preserves Load→Store, so the shape cannot arise there.
+`litmus/x86-release-loadstore-main.litmus` records that as `Never`, with the
+AArch64 row as the live control proving the encoding can detect the hazard when
+the architecture permits it. See [X3](#x3--x86-64).
+
 ---
 
 ## The whole sequence, composed
-
-**Tests:** `litmus/{x86,arm64}-composed-main.litmus` → `Sometimes` (violated),
-`litmus/{x86,arm64}-composed-fixed.litmus` → `Never`.
 
 Each finding above is a two- or three-instruction shape studied in isolation.
 That is how they are understood, but it is not on its own an argument that the
@@ -242,6 +279,24 @@ of the whole fixed sequence, under either architecture's own model, frees an
 object under a reader that is still using it. That is the strongest statement
 this folder makes, and it is the one that says the four-way decomposition above
 did not miss anything.
+
+### X4 — x86-64
+
+**Test:** `litmus/x86-composed-main.litmus` → `Sometimes` (violated),
+`litmus/x86-composed-fixed.litmus` → `Never`.
+
+Running the whole reader against the whole reclaimer reproduces X1 and nothing
+else on x86 — the other two changes are no-ops there — and the fixed sequence
+admits no use-after-free at all.
+
+### AArch64
+
+**Test:** `litmus/arm64-composed-main.litmus` → `Sometimes` (violated),
+`litmus/arm64-composed-fixed.litmus` → `Never`.
+
+The AArch64 pair carries all three changes at once: the announce onto the claim
+`CASAL`, the `LDAPR` refresh, and the `STLR` unpublish. Both A1 and A4 are open
+in the `main` row.
 
 ### A false positive worth recording
 

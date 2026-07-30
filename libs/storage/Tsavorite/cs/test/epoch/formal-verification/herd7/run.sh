@@ -24,14 +24,14 @@ SELECTED=""
 # Kept here rather than in prose in the .litmus headers so there is one place
 # that says what the suite is actually comparing.
 PAIRS=(
-  "x86-announce-sb            | x86-announce-sb-main            | x86-announce-sb-fixed            | XCHG targets tid and a plain MOV publishes the announce  ->  XCHG targets lce and carries it"
-  "arm64-announce-sb          | arm64-announce-sb-main          | arm64-announce-sb-fixed          | CASAL targets tid and a plain STR publishes the announce ->  CASAL targets lce and carries it"
-  "x86-refresh-mp             | x86-refresh-mp-main             | x86-refresh-mp-fixed             | none: Volatile.Read is a plain MOV on x86, so the two instruction streams are identical"
-  "arm64-refresh-mp           | arm64-refresh-mp-main           | arm64-refresh-mp-fixed           | LDR of CurrentEpoch  ->  LDAPR"
-  "arm64-release              | arm64-release-plainstore        | arm64-release-fixed              | STR XZR clears the slot  ->  STLR XZR (control is a counterfactual, not code we ever emitted)"
-  "arm64-release-loadstore    | arm64-release-loadstore-main    | arm64-release-loadstore-fixed    | STR XZR clears the slot  ->  STLR XZR"
-  "x86-composed               | x86-composed-main               | x86-composed-fixed               | the whole sequence; on x86 only the announce change is visible, the other two are no-ops"
-  "arm64-composed             | arm64-composed-main             | arm64-composed-fixed             | the whole sequence: announce onto the claim CASAL, LDAPR refresh, STLR unpublish, all at once"
+  "x86-announce-sb            | x86-announce-sb-main            | x86-announce-sb-fixed            | XCHG targets tid and a plain MOV publishes the announce  ->  XCHG targets lce and carries it | x1--x86-64"
+  "arm64-announce-sb          | arm64-announce-sb-main          | arm64-announce-sb-fixed          | CASAL targets tid and a plain STR publishes the announce ->  CASAL targets lce and carries it | a1--aarch64"
+  "x86-refresh-mp             | x86-refresh-mp-main             | x86-refresh-mp-fixed             | none: Volatile.Read is a plain MOV on x86, so the two instruction streams are identical | x2--x86-64"
+  "arm64-refresh-mp           | arm64-refresh-mp-main           | arm64-refresh-mp-fixed           | LDR of CurrentEpoch  ->  LDAPR | a2--aarch64"
+  "arm64-release              | arm64-release-plainstore        | arm64-release-fixed              | STR XZR clears the slot  ->  STLR XZR (control is a counterfactual, not code we ever emitted) | a3--aarch64"
+  "arm64-release-loadstore    | arm64-release-loadstore-main    | arm64-release-loadstore-fixed    | STR XZR clears the slot  ->  STLR XZR | a4--aarch64"
+  "x86-composed               | x86-composed-main               | x86-composed-fixed               | the whole sequence; on x86 only the announce change is visible, the other two are no-ops | x4--x86-64"
+  "arm64-composed             | arm64-composed-main             | arm64-composed-fixed             | the whole sequence: announce onto the claim CASAL, LDAPR refresh, STLR unpublish, all at once | the-whole-sequence-composed"
 )
 # x86-release-loadstore-main is deliberately unpaired: x86-TSO preserves
 # Load->Store, so the hazard cannot arise there and there is nothing to fix.
@@ -46,10 +46,13 @@ list_pairs() {
   done
   echo ""
   echo "  x86-release-loadstore      (unpaired: x86-TSO preserves Load->Store, nothing to fix)"
+  echo ""
+  echo "Each pair is written up in memory-ordering-bugs-found.md; ./run.sh --pair <name>"
+  echo "prints the exact section."
 }
 
 show_pair() {
-  local want="$1" entry name control fix delta found=0
+  local want="$1" entry name control fix delta doc found=0
   for entry in "${PAIRS[@]}"; do
     name="$(field "$entry" 1)"
     [[ "$name" == "$want" ]] || continue
@@ -57,12 +60,14 @@ show_pair() {
     control="$(field "$entry" 2)"
     fix="$(field "$entry" 3)"
     delta="$(field "$entry" 4)"
+    doc="$(field "$entry" 5)"
 
     echo "############################################################"
     echo "# $name"
     echo "# control : $control"
     echo "# fix     : $fix"
     echo "# delta   : $delta"
+    echo "# why     : memory-ordering-bugs-found.md#$doc"
     echo "############################################################"
     echo ""
     diff -u "$LITMUS/$control.litmus" "$LITMUS/$fix.litmus"
