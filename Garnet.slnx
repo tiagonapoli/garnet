@@ -32,6 +32,7 @@
   </Folder>
   <Folder Name="/libs/Tsavorite/">
     <Project Path="libs/storage/Tsavorite/cs/src/core/Tsavorite.core.csproj" />
+    <Project Path="libs/storage/Tsavorite/cs/src/epoch/Garnet.LightEpoch.csproj" />
     <Project Path="libs/storage/Tsavorite/cs/src/devices/AzureStorageDevice/Tsavorite.devices.AzureStorageDevice.csproj" />
   </Folder>
   <Folder Name="/main/">
