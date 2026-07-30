@@ -12,6 +12,9 @@
 
   <ItemGroup>
     <None Remove="tla/**" />
+    <!-- herd/capture is a self-contained console project; its sources must not be globbed in here. -->
+    <Compile Remove="herd/capture/**" />
+    <None Remove="herd/capture/**" />
   </ItemGroup>
 
   <ItemGroup>
