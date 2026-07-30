@@ -1,7 +1,7 @@
 # TLC model checker for the CAS-carries-the-announce LightEpoch fix.
 #
 # Build (from the repository root):
-#   docker build -t garnet-lightepoch-tla libs/storage/Tsavorite/cs/test/epoch/tla
+#   docker build -t garnet-lightepoch-tla libs/storage/Tsavorite/cs/test/epoch/formal-verification/tla
 # Run every spec:
 #   docker run --rm garnet-lightepoch-tla
 #

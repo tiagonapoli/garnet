@@ -220,7 +220,7 @@ note "# one asks whether the reader is still using the object when it announces 
 note "# it is not:  ldr x2,[data]  /  str xzr,[slotEpoch]. AArch64 may make the"
 note "# unpublish visible first, so a scan in that window frees the object under a"
 note "# load that has not been satisfied. This is hazard A4 in"
-note "# ../herd/memory-ordering-bugs-found.md, found by herd7 first."
+note "# ../herd7/memory-ordering-bugs-found.md, found by herd7 first."
 note "#"
 note "# NEITHER StoreBuffer NOR WeakMemory can express it: both bind a load's value at"
 note "# its program point, so a store may be delayed but a load never can be. And in"

@@ -1,7 +1,7 @@
 # herd7 memory-model checks for the CAS-carries-the-announce LightEpoch fix.
 #
 # Build (from the repository root):
-#   docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/herd
+#   docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/formal-verification/herd7
 # Run every litmus test:
 #   docker run --rm garnet-lightepoch-herd
 # Run a subset:

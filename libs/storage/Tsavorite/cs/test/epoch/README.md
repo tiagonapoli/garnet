@@ -57,12 +57,12 @@ difference between detecting the bug and detecting nothing at all:
 The TLA+ suite below, not these tests, is what actually establishes correctness —
 within the reorderings its memory models express, which is `StoreLoad`,
 `StoreStore`, `LoadLoad`, and `Load→Store` at the dereference. See
-[`herd/`](herd) for the fourth hazard, which herd7 found first and which
+[`formal-verification/herd7/`](formal-verification/herd7) for the fourth hazard, which herd7 found first and which
 prompted the last of those.
 
 ## TLA+ models
 
-`tla/` holds the CAS-carries-the-announce specs. Every spec is checked under two
+`formal-verification/tla/` holds the CAS-carries-the-announce specs. Every spec is checked under two
 store-buffer memory models (`tso` = x86-TSO, `arm` = additionally relaxed
 StoreStore) and, for the refresh path, under `MODULE WeakMemory`, which gives each
 processor its own per-field view and so exposes load-side reordering that a
@@ -85,7 +85,7 @@ closes it by splitting the dereference into an issue step and a bind step.
 Run everything in Docker:
 
 ```
-docker build -t garnet-lightepoch-tla libs/storage/Tsavorite/cs/test/epoch/tla
+docker build -t garnet-lightepoch-tla libs/storage/Tsavorite/cs/test/epoch/formal-verification/tla
 docker run --rm garnet-lightepoch-tla
 ```
 
@@ -94,7 +94,7 @@ The container exits non-zero if any spec result differs from its expectation.
 To run outside Docker you need Java and `tla2tools.jar`:
 
 ```
-TLA_TOOLS=/path/to/tla2tools.jar bash libs/storage/Tsavorite/cs/test/epoch/tla/run.sh
+TLA_TOOLS=/path/to/tla2tools.jar bash libs/storage/Tsavorite/cs/test/epoch/formal-verification/tla/run.sh
 ```
 
 Both forms take an optional substring that selects which rows to run:
@@ -126,12 +126,12 @@ verdict.
 
 ## herd7 checks of the emitted code
 
-`herd/` takes the actual RyuJIT output for `LightEpoch` on x86-64 and AArch64,
+`formal-verification/herd7/` takes the actual RyuJIT output for `LightEpoch` on x86-64 and AArch64,
 reduces it to the instructions that carry the ordering, and checks those against
 x86-TSO and `aarch64.cat`:
 
 ```
-docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/herd
+docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/formal-verification/herd7
 docker run --rm garnet-lightepoch-herd
 ```
 
@@ -144,4 +144,4 @@ first; and the plain slot clear in `Release()` can be observed before the
 reader's own dereference has been satisfied. It also runs the whole
 `Acquire` → `ProtectAndDrain` → critical section → `Release` sequence against a
 full reclaimer, not just the individual hazard shapes. See
-`herd/memory-ordering-bugs-found.md`.
+`formal-verification/herd7/memory-ordering-bugs-found.md`.

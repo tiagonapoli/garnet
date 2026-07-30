@@ -221,7 +221,7 @@ AcquireLoadView(p, f) ==
 (* the abstraction is sound FOR THIS PROPERTY -- but a HOLDS here is not    *)
 (* evidence about any property that turns on the RCsc/RCpc difference.      *)
 (* That distinction must be settled with herd7 against the official cat     *)
-(* file, which can express both forms; see herd/results.txt.                *)
+(* file, which can express both forms; see herd7/results.txt.               *)
 (***************************************************************************)
 AcquireLoadFields(p, f, fields) ==
     IF LoadFrom(view[p], storeBuffer[p], f) = memory[f]

@@ -11,10 +11,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="tla/**" />
-    <!-- herd/capture is a self-contained console project; its sources must not be globbed in here. -->
-    <Compile Remove="herd/capture/**" />
-    <None Remove="herd/capture/**" />
+    <!-- formal-verification/ holds herd7 and TLA+ models plus the self-contained
+         herd7/capture console project; none of it belongs in this test assembly. -->
+    <Compile Remove="formal-verification/**" />
+    <None Remove="formal-verification/**" />
   </ItemGroup>
 
   <ItemGroup>

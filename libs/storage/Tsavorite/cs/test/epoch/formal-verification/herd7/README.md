@@ -11,7 +11,7 @@ that carry the ordering, and checks those against the vendors' own memory
 models with [herd7](https://github.com/herd/herdtools7).
 
 ```
-docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/herd
+docker build -t garnet-lightepoch-herd libs/storage/Tsavorite/cs/test/epoch/formal-verification/herd7
 docker run --rm garnet-lightepoch-herd
 ```
 
@@ -25,7 +25,7 @@ docker run --rm garnet-lightepoch-herd arm64-refresh
 To run outside Docker you need `herd7` on `PATH` (`opam install herdtools7`):
 
 ```
-bash libs/storage/Tsavorite/cs/test/epoch/herd/run.sh
+bash libs/storage/Tsavorite/cs/test/epoch/formal-verification/herd7/run.sh
 ```
 
 ## Results
