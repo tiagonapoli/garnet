@@ -1,16 +1,15 @@
 ; ===========================================================================
-; REDUCED AArch64 instruction stream -- LightEpoch, both variants.
+; REDUCED AArch64 instruction stream -- LightEpoch as it stands in this
+; repository, i.e. with the CAS-carries-the-announce fix applied.
 ;
 ; Derived from ../arm64.asm (verbatim RyuJIT FullOpts output, .NET 10.0.100
 ; on Ubuntu 24.04 aarch64, Azure Standard_D8ps_v5).
 ; Every removal is itemised and justified in ../../REDUCTION.md.
 ;
-; The two variants are kept in one file because they are meant to be read
-; against each other: the litmus tests in ../../litmus are a control/fix pair,
-; and what makes the fix legible is the diff between these two streams.
-;
-;   VARIANT main  -- LightEpoch as on origin/main
-;   VARIANT fixed -- the claim CAS targets LCE and carries the announce
+; The `*-main` litmus tests are controls: they are this same stream with the
+; claim CAS moved back onto TID and the announce left as a plain store to LCE,
+; which is what origin/main emits. That one-instruction difference is spelled
+; out in each of those tests.
 ;
 ; Symbolic locations (mapping explained in ../../MODEL.md):
 ;   LCE = tableAligned[entry].localCurrentEpoch   long, Entry offset 0x00
@@ -23,62 +22,6 @@
 ; ===========================================================================
 
 
-; ###########################################################################
-; ## VARIANT: main
-; ## The claim CAS targets TID; the announce is a separate plain store.
-; ###########################################################################
-
-
-; --- Acquire()  [raw: OpResume, G_M000_IG07 .. G_M000_IG16] ----------------
-
-Acquire:
-        ldr     w2, [TID]                       ; probe for a free slot
-        cbnz    w2, Acquire                     ; (probe sequence collapsed)
-
-        ldr     w1, [Metadata.threadId]
-        mov     w2, wzr
-        casal   w2, w1, [TID]                   ; CLAIM: TID 0 -> myTid
-        cbnz    w2, Acquire                     ; lost the race
-
-        ldp     x1, x0, [x19, #0x28]            ; PLAIN pair load: tableAligned AND CUR
-        str     x0, [LCE]                       ; PLAIN store -- THE ANNOUNCE
-
-
-; --- ProtectAndDrain()  [raw: OpProtectAndDrain, G_M000_IG02] --------------
-; CurrentEpoch is read as half of an LDP -- an ordinary, unordered pair load.
-; Nothing here orders this load against the caller's subsequent data accesses.
-
-Refresh:
-        ldp     x0, x2, [x19, #0x28]            ; PLAIN pair load: tableAligned AND CUR
-        str     x2, [LCE]                       ; PLAIN store -- the re-announce
-
-
-; --- Release()  [raw: OpSuspend, G_M000_IG02] ------------------------------
-
-Release:
-        str     xzr, [LCE]                      ; PLAIN store, LCE <- 0    (FIRST)
-        str     wzr, [TID]                      ; PLAIN store, TID <- 0    (SECOND)
-
-
-; --- BumpCurrentEpoch()  [raw: LightEpoch:BumpCurrentEpoch] ----------------
-
-Bump:
-        ldaddal x2, x1, [CUR]                   ; Interlocked.Increment -> LDADDAL
-
-
-; --- ComputeNewSafeToReclaimEpoch()  [raw: same method] --------------------
-; The reclaimer's scan: a plain load per entry, plain store of the result.
-
-Reclaim:
-        ldr     x4, [LCE]                       ; PLAIN load of one entry's announce
-        str     x1, [STR]                       ; PLAIN store of SafeToReclaimEpoch
-
-
-; ###########################################################################
-; ## VARIANT: fixed
-; ## The claim CAS targets LCE, so claiming the slot and announcing the epoch
-; ## are a single locked RMW.
-; ###########################################################################
 
 
 ; --- Acquire() / TryClaimEntry()  [raw: OpResume, G_M000_IG07] -------------

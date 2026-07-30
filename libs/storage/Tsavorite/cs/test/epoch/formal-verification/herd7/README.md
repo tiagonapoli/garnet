@@ -70,8 +70,8 @@ positive the first composed encoding produced.
 
 | Path | What it is |
 | --- | --- |
-| `jit/x86.asm`, `jit/arm64.asm` | verbatim RyuJIT FullOpts dumps; each holds both variants, `origin/main` and the fix, as two banner-delimited sections |
-| `jit/reduced/*.reduced.asm` | the same code cut down to what herd7 can parse, same two-section layout |
+| `jit/x86.asm`, `jit/arm64.asm` | verbatim RyuJIT FullOpts dumps of the epoch operations as they stand in this repository |
+| `jit/reduced/*.reduced.asm` | the same code cut down to what herd7 can parse |
 | `REDUCTION.md` | every removal and substitution, and why none of them can change the result |
 | `MODEL.md` | the protocol the tests encode and what each `exists` clause means operationally |
 | `memory-ordering-bugs-found.md` | the findings, split by architecture |
@@ -85,9 +85,11 @@ listings have to be auditable against the thing they were reduced from.
 
 ## Regenerating the dumps
 
-Each `jit/<arch>.asm` holds both variants. A capture run produces both sections
-in one file, so the two are always from the same toolchain and directly
-comparable.
+The dumps record the code as it stands in this repository. The `*-main` litmus
+tests, which are the controls, are that same instruction stream with the claim
+CAS moved back onto `threadId` and the announce left as a plain store — the
+one-instruction difference is spelled out in each of those tests rather than
+carried as a second dump.
 
 ### Without an ARM machine (Docker + NativeAOT)
 
@@ -99,12 +101,10 @@ is what lets one x64 host emit the AArch64 listings:
 ```powershell
 docker build -t garnet-lightepoch-disasm capture
 docker run --rm -v "${PWD}\..\..\..\..\..\..\..\..:/repo:ro" -v "${PWD}\jit:/out" `
-    garnet-lightepoch-disasm fixed=HEAD main=origin/main
+    garnet-lightepoch-disasm
 ```
 
-Arguments are `label=gitref` pairs and default to exactly the pair above. Refs
-from before the project split fall back to the old `Tsavorite.core` layout, so
-`origin/main` stays capturable.
+The single optional argument is the git ref to capture, defaulting to `HEAD`.
 
 Two things worth knowing about that image:
 
@@ -148,8 +148,7 @@ $env:DOTNET_JitDisasm         = 'OpResume OpProtectAndDrain OpSuspend BumpCurren
 .\bin\Release\net10.0\Disasm.exe 2>&1 | Out-String | Set-Content variant.asm
 ```
 
-Then paste the result under the matching `## VARIANT:` banner in
-`jit/<arch>.asm`.
+Then replace `jit/<arch>.asm` with the result, keeping the header banner.
 
 Two things that cost time the first go round:
 

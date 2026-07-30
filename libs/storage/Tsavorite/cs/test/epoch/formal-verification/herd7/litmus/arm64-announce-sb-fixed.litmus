@@ -1,5 +1,5 @@
 AArch64 arm64-announce-sb-fixed
-(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT fixed). Same protocol as
+(* Reduced from jit/reduced/arm64.reduced.asm. Same protocol as
    x86-announce-sb-fixed; the CASAL now targets lce and carries the announce. *)
 { 0:X0=tid; 0:X1=lce; 0:X2=unlinked; 1:X0=unlinked; 1:X1=cur; 1:X2=lce;
   lce=0; tid=0; cur=1; unlinked=0; }

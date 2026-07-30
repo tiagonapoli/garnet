@@ -1,5 +1,5 @@
 X86 x86-announce-sb-fixed
-(* Reduced from jit/reduced/x86.reduced.asm (VARIANT fixed). Same protocol and same
+(* Reduced from jit/reduced/x86.reduced.asm. Same protocol and same
    condition as x86-announce-sb-main; the only change is that the announce is
    carried by the claim RMW instead of a following plain store.
 

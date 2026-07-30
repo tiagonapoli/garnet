@@ -1,5 +1,5 @@
 AArch64 arm64-announce-sb-main
-(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT main). Same protocol as
+(* Reduced from jit/reduced/arm64.reduced.asm, with the pre-fix claim/announce (control). Same protocol as
    x86-announce-sb-main; see that file for the argument.
    CASAL claims tid, then a PLAIN STR publishes the announce. *)
 { 0:X0=tid; 0:X1=lce; 0:X2=unlinked; 1:X0=unlinked; 1:X1=cur; 1:X2=lce;

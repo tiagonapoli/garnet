@@ -1,5 +1,5 @@
 AArch64 arm64-refresh-mp-main
-(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT main) -- Refresh vs Bump.
+(* Reduced from jit/reduced/arm64.reduced.asm, with the pre-fix claim/announce (control) -- Refresh vs Bump.
    CurrentEpoch is read by a plain load (in the real dump it is one half of an
    LDP). Nothing orders it against the later metadata load. *)
 { 0:X0=cur; 0:X1=data; 1:X0=data; 1:X1=cur; }

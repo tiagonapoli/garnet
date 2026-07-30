@@ -4,16 +4,14 @@
 # AArch64, from a single x64 container.
 #
 # Usage (inside the image, with the repository mounted at /repo):
-#   capture.sh [label=gitref ...]
+#   capture.sh [gitref]
 # Default:
-#   capture.sh fixed=HEAD main=origin/main
+#   capture.sh HEAD
 #
-# Output: /out/<arch>.asm -- ONE file per architecture, holding every requested
-# label as a banner-delimited `## VARIANT:` section, matching ../jit/.
+# Output: /out/<arch>.asm -- one file per architecture, matching ../jit/.
 #
-# LightEpoch is a standalone project, so each ref's epoch sources are lifted out
-# whole rather than cherry-picked; refs from before that split fall back to the
-# old in-Tsavorite.core layout.
+# LightEpoch is a standalone project, so the epoch sources are lifted out whole
+# rather than cherry-picked; whatever the ref builds is what gets compiled.
 #
 # Method selection is by bare name, space separated; the Class:Method form
 # silently matches nothing. The Op* wrappers in Program.cs are NoInlining so each
@@ -29,135 +27,67 @@ OUT=${OUT:-/out}
 # of a git ref and compiled as-is -- no guessing at what it depends on.
 EPOCH_PROJECT_DIR=${EPOCH_PROJECT_DIR:-libs/storage/Tsavorite/cs/src/epoch}
 
-# Refs from before the project split keep LightEpoch inside Tsavorite.core, where
-# it reaches for Utility.Murmur3; UtilityShim.cs covers that so `main` can still
-# be captured for comparison.
-LEGACY_PATHS=${LEGACY_PATHS:-libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs libs/storage/Tsavorite/cs/src/core/Epochs/IEpochAccessor.cs}
-
 METHODS=${METHODS:-OpResume OpProtectAndDrain OpSuspend OpBumpCurrentEpoch BumpCurrentEpoch ComputeNewSafeToReclaimEpoch}
 
 # rid:arch-label pairs. The arch label is what ../jit/ already uses.
 RIDS=${RIDS:-linux-x64:x86 linux-arm64:arm64}
 
-pairs=("$@")
-if [ ${#pairs[@]} -eq 0 ]; then
-    pairs=(fixed=HEAD main=origin/main)
-fi
+ref=${1:-HEAD}
 
 mkdir -p "$OUT"
 failures=0
-sections=$(mktemp -d)
 
-for pair in "${pairs[@]}"; do
-    label=${pair%%=*}
-    ref=${pair#*=}
+echo "=============================================================="
+echo "== $ref ($(git -C "$REPO" rev-parse --short "$ref"))"
+echo "=============================================================="
 
-    echo "=============================================================="
-    echo "== $label  <-  $ref"
-    echo "=============================================================="
+if ! git -C "$REPO" cat-file -e "$ref:$EPOCH_PROJECT_DIR" 2>/dev/null; then
+    echo "ERROR: $ref has no $EPOCH_PROJECT_DIR." >&2
+    exit 1
+fi
 
-    rm -rf /work/epoch
-    mkdir -p /work/epoch
-    source_desc=""
+rm -rf /work/epoch
+mkdir -p /work/epoch
+git -C "$REPO" archive "$ref" "$EPOCH_PROJECT_DIR" \
+    | tar -x -C /work --strip-components=5 --wildcards '*.cs'
 
-    if git -C "$REPO" cat-file -e "$ref:$EPOCH_PROJECT_DIR" 2>/dev/null; then
-        git -C "$REPO" archive "$ref" "$EPOCH_PROJECT_DIR" \
-            | tar -x -C /work --strip-components=5 --wildcards '*.cs'
-        source_desc="$EPOCH_PROJECT_DIR (standalone project)"
-    else
-        missing=0
-        for path in $LEGACY_PATHS; do
-            if ! git -C "$REPO" cat-file -e "$ref:$path" 2>/dev/null; then
-                missing=1
-                break
-            fi
-            git -C "$REPO" show "$ref:$path" > "/work/epoch/$(basename "$path")"
-        done
-        if [ "$missing" -ne 0 ]; then
-            echo "ERROR: $ref has neither $EPOCH_PROJECT_DIR nor the pre-split epoch sources." >&2
-            failures=$((failures + 1))
-            continue
-        fi
-        source_desc="$LEGACY_PATHS (pre-split layout)"
-    fi
-
-    for entry in $RIDS; do
-        rid=${entry%%:*}
-        arch=${entry##*:}
-        asm="$sections/$arch-$label.section"
-        raw=$(mktemp)
-
-        echo "-- $rid ($label)"
-        rm -rf "/work/obj" "/work/bin"
-
-        # Cross-targeting AArch64 needs the aarch64 objcopy; passing it for the
-        # x64 target instead breaks the link.
-        extra_args=()
-        if [ "$rid" = "linux-arm64" ]; then
-            extra_args+=(-p:ObjCopyName=aarch64-linux-gnu-objcopy)
-        fi
-
-        # The disassembly is written by RyuJIT during ILC codegen, which happens
-        # before the native link. A cross-link failure therefore still leaves a
-        # complete and valid listing, so the publish exit code is not the signal
-        # to trust here -- the presence of the listing is.
-        dotnet publish Disasm.csproj \
-            -c Release \
-            -r "$rid" \
-            --self-contained \
-            -p:PublishAot=true \
-            -p:CaptureDisasm=true \
-            -p:JitDisasmMethods="$METHODS" \
-            "${extra_args[@]}" \
-            > "$raw" 2>&1
-        publish_status=$?
-
-        if ! grep -q '; Assembly listing for method' "$raw"; then
-            echo "ERROR: no disassembly captured for $rid/$label (publish exit $publish_status)." >&2
-            echo "------- last 40 lines of the build log -------" >&2
-            tail -n 40 "$raw" >&2
-            failures=$((failures + 1))
-            rm -f "$raw"
-            continue
-        fi
-
-        {
-            echo "; ###########################################################################"
-            echo "; ## VARIANT: $label"
-            echo ";   git ref    : $ref ($(git -C "$REPO" rev-parse --short "$ref"))"
-            echo ";   source     : $source_desc"
-            echo ";   target     : $rid"
-            echo ";   compiler   : NativeAOT ILC (hosts RyuJIT), $(dotnet --version) SDK"
-            echo ";   methods    : $METHODS"
-            echo "; ###########################################################################"
-            echo
-            # Keep only the listings; MSBuild progress lines are not evidence.
-            sed -n '/; Assembly listing for method/,$p' "$raw"
-        } > "$asm"
-
-        count=$(grep -c '; Assembly listing for method' "$asm")
-        echo "   captured $count method listing(s)"
-        if [ "$publish_status" -ne 0 ]; then
-            echo "   note: publish exited $publish_status (native link stage); codegen output is complete"
-        fi
-        rm -f "$raw"
-    done
-
-    rm -rf /work/epoch
-done
-
-# One file per architecture, with the labels as sections in the order given on
-# the command line. Keeping the variants together is the point: the litmus tests
-# are a control/fix pair and the streams are meant to be read against each other.
 for entry in $RIDS; do
+    rid=${entry%%:*}
     arch=${entry##*:}
     asm="$OUT/$arch.asm"
-    present=()
-    for pair in "${pairs[@]}"; do
-        section="$sections/$arch-${pair%%=*}.section"
-        [ -f "$section" ] && present+=("$section")
-    done
-    if [ ${#present[@]} -eq 0 ]; then
+    raw=$(mktemp)
+
+    echo "-- $rid"
+    rm -rf "/work/obj" "/work/bin"
+
+    # Cross-targeting AArch64 needs the aarch64 objcopy; passing it for the
+    # x64 target instead breaks the link.
+    extra_args=()
+    if [ "$rid" = "linux-arm64" ]; then
+        extra_args+=(-p:ObjCopyName=aarch64-linux-gnu-objcopy)
+    fi
+
+    # The disassembly is written by RyuJIT during ILC codegen, which happens
+    # before the native link. A cross-link failure therefore still leaves a
+    # complete and valid listing, so the publish exit code is not the signal
+    # to trust here -- the presence of the listing is.
+    dotnet publish Disasm.csproj \
+        -c Release \
+        -r "$rid" \
+        --self-contained \
+        -p:PublishAot=true \
+        -p:CaptureDisasm=true \
+        -p:JitDisasmMethods="$METHODS" \
+        "${extra_args[@]}" \
+        > "$raw" 2>&1
+    publish_status=$?
+
+    if ! grep -q '; Assembly listing for method' "$raw"; then
+        echo "ERROR: no disassembly captured for $rid (publish exit $publish_status)." >&2
+        echo "------- last 40 lines of the build log -------" >&2
+        tail -n 40 "$raw" >&2
+        failures=$((failures + 1))
+        rm -f "$raw"
         continue
     fi
 
@@ -165,20 +95,29 @@ for entry in $RIDS; do
         echo "; ==========================================================================="
         echo "; LightEpoch RyuJIT disassembly -- $arch"
         echo ";"
+        echo ";   git ref    : $ref ($(git -C "$REPO" rev-parse --short "$ref"))"
+        echo ";   source     : $EPOCH_PROJECT_DIR"
+        echo ";   target     : $rid"
+        echo ";   compiler   : NativeAOT ILC (hosts RyuJIT), $(dotnet --version) SDK"
+        echo ";   methods    : $METHODS"
+        echo ";"
         echo "; Generated by capture/capture.sh. Addresses and large immediates are"
         echo "; normalised by JitDisasmDiffable so these files diff cleanly."
-        echo "; Every variant below was produced by the same toolchain in the same run."
         echo "; ==========================================================================="
-        for section in "${present[@]}"; do
-            echo
-            echo
-            cat "$section"
-        done
+        echo
+        # Keep only the listings; MSBuild progress lines are not evidence.
+        sed -n '/; Assembly listing for method/,$p' "$raw"
     } > "$asm"
 
-    echo "-> $asm (${#present[@]} variant section(s))"
+    count=$(grep -c '; Assembly listing for method' "$asm")
+    echo "   captured $count method listing(s) -> $asm"
+    if [ "$publish_status" -ne 0 ]; then
+        echo "   note: publish exited $publish_status (native link stage); codegen output is complete"
+    fi
+    rm -f "$raw"
 done
-rm -rf "$sections"
+
+rm -rf /work/epoch
 
 echo
 if [ "$failures" -ne 0 ]; then

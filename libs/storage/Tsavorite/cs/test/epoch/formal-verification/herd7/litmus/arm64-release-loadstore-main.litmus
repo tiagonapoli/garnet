@@ -1,5 +1,5 @@
 AArch64 arm64-release-loadstore-main
-(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT main) -- critical section vs Release.
+(* Reduced from jit/reduced/arm64.reduced.asm, with the pre-fix claim/announce (control) -- critical section vs Release.
    The reader is already announced and inside its critical section. It performs
    its dereference and then Release() clears the slot with a PLAIN store.
    AArch64 permits Load->Store reordering, so the slot clear can become visible

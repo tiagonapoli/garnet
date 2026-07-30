@@ -1,6 +1,6 @@
 X86 x86-composed-main
 (* The whole reader sequence against the whole reclaimer, on x86-64.
-   Reduced from jit/reduced/x86.reduced.asm (VARIANT main); XCHG stands in for the locked
+   Reduced from jit/reduced/x86.reduced.asm, with the pre-fix claim/announce (control); XCHG stands in for the locked
    CMPXCHG and XADD, as explained in REDUCTION.md.
    Structure is identical to arm64-composed-main. *)
 { lce=0; tid=0; cur=1; unlinked=0; data=0; }

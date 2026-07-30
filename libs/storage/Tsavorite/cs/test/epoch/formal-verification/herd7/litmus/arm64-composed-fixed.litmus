@@ -1,6 +1,6 @@
 AArch64 arm64-composed-fixed
 (* The fixed reader sequence against the same reclaimer. Reduced from
-   jit/reduced/arm64.reduced.asm (VARIANT fixed).
+   jit/reduced/arm64.reduced.asm.
 
    P0 = Acquire (read CurrentEpoch, then CASAL on localCurrentEpoch which
         claims the slot AND publishes the announce; PLAIN threadId publish)
