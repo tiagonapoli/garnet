@@ -266,77 +266,65 @@ namespace Tsavorite.core
 
         #region Epoch table word access
 
-        // Every access to the epoch table's two shared words goes through one of the accessors
-        // below, and each accessor names the memory ordering it provides. The words cannot be
-        // declared `volatile` (C# forbids it on `long`, and they are reached through an `Entry*`
-        // and passed by `ref` to Interlocked), but more importantly a blanket acquire/release on
-        // every access would be both wrong and expensive: it does not constrain Store->Load, which
-        // is the reordering the announce-versus-scan hazard actually needs, and it would fence the
-        // full-table scans in ComputeNewSafeToReclaimEpoch() and SuspendDrain() for no benefit.
-        //
-        // Naming an access `Relaxed` therefore records that the unordered access is a deliberate,
-        // argued choice rather than a forgotten barrier.
+        // Every access to the epoch table's two shared words goes through an accessor named for the
+        // ordering it provides, so that `Relaxed` records an argued choice rather than a forgotten
+        // barrier. The words cannot be `volatile` (C# forbids it on `long`, and they are reached
+        // through an `Entry*` and passed by `ref` to Interlocked), and a blanket acquire/release
+        // would not constrain Store->Load anyway -- the reordering the announce hazard needs.
+        // The full argument is in test/epoch/formal-verification/herd7/MODEL.md.
 
         /// <summary>
-        /// Reference to the announced-epoch word of slot <paramref name="entry"/>, for interlocked
-        /// operations only. This word doubles as the slot-ownership word: 0 means free, non-zero
-        /// means claimed by the thread that announced it.
+        /// Reference to slot <paramref name="entry"/>'s announced-epoch word, for interlocked use.
+        /// Doubles as the ownership word: 0 means free, non-zero means claimed.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         ref long AnnouncedEpochRef(int entry) => ref (tableAligned + entry)->localCurrentEpoch;
 
         /// <summary>
-        /// Unordered read of slot <paramref name="entry"/>'s announced epoch. Used by the reclaimer's
-        /// table scans, where a stale read is safe in both directions: a stale non-zero value only
-        /// holds SafeToReclaimEpoch back, and a stale zero cannot be observed for a slot whose claim
-        /// CAS has completed, because that CAS is globally ordered.
+        /// Unordered read, for the reclaimer's table scans. Stale is safe both ways: stale non-zero
+        /// only holds SafeToReclaimEpoch back, and stale zero cannot follow a completed claim CAS.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         long ReadAnnouncedEpochRelaxed(int entry) => (tableAligned + entry)->localCurrentEpoch;
 
         /// <summary>
-        /// Unordered write of the announced epoch for a slot this thread already owns. Ordering here
-        /// comes from the acquire load of <see cref="CurrentEpoch"/> that produces the value, not
-        /// from the store.
+        /// Unordered write to a slot this thread owns; ordering comes from the acquire load of
+        /// <see cref="CurrentEpoch"/> that produced the value, not from this store.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void WriteAnnouncedEpochRelaxed(int entry, long epoch) => (tableAligned + entry)->localCurrentEpoch = epoch;
 
         /// <summary>
-        /// Release store that publishes slot <paramref name="entry"/> as free. The release is
-        /// required: were this store hoisted above the threadId clear that precedes it, another
-        /// thread could win the claim CAS and write its own threadId only for the clear to land
-        /// afterwards and wipe it.
+        /// Release store publishing the slot as free. Hoisting it above the preceding threadId clear
+        /// would let the next claimer's threadId be wiped by that clear.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void FreeSlotRelease(int entry) => Volatile.Write(ref (tableAligned + entry)->localCurrentEpoch, 0);
 
         /// <summary>
-        /// Unordered read of slot <paramref name="entry"/>'s thread id. The thread id is only ever
-        /// compared against the reading thread's own id, which no other thread can write.
+        /// Unordered read; the thread id is only ever compared against the reading thread's own id,
+        /// which no other thread can write.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         int ReadThreadIdRelaxed(int entry) => (tableAligned + entry)->threadId;
 
         /// <summary>
-        /// Unordered write of slot <paramref name="entry"/>'s thread id. Both call sites hold the
-        /// slot exclusively: after a winning claim CAS, and before the release store that frees it.
+        /// Unordered write; both call sites hold the slot exclusively (after a winning claim CAS,
+        /// and before the release store that frees it).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void WriteThreadIdRelaxed(int entry, int threadId) => (tableAligned + entry)->threadId = threadId;
 
         /// <summary>
-        /// Acquire load of the global epoch, for the refresh path. Reading the bumped epoch must
-        /// imply seeing the unlink the reclaimer performed before bumping it, because announcing
-        /// an epoch is what authorises reclamation of everything older.
+        /// Acquire load for the refresh path: reading the bumped epoch must imply seeing the unlink
+        /// the reclaimer performed before bumping it.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         long ReadCurrentEpochAcquire() => Volatile.Read(ref CurrentEpoch);
 
         /// <summary>
-        /// Unordered read of the global epoch, for the slot-acquire path. A stale (older) value is
-        /// safe: it can only lower oldestOngoingCall, hence lower SafeToReclaimEpoch, which is the
-        /// conservative direction. It can never let a reclaimer advance past this thread.
+        /// Unordered read for the slot-acquire path. A stale (older) value only lowers
+        /// SafeToReclaimEpoch, which is the conservative direction.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         long ReadCurrentEpochRelaxed() => CurrentEpoch;
@@ -408,18 +396,9 @@ namespace Tsavorite.core
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
             //
-            // The residual hazard on the refresh path is purely load-side. The reclaimer
-            // orders its unlink before the epoch bump (Interlocked.Increment is a full RMW),
-            // so this is message passing: reading the bumped epoch must imply seeing the
-            // unlink. Announcing an epoch this thread has not caught up to is what authorises
-            // the reclaimer to free an object this thread is about to read, because a raised
-            // slot raises SafeToReclaimEpoch. An acquire load supplies exactly the ordering
-            // needed and nothing more: a thread that announces the new epoch has necessarily
-            // observed the unlink that preceded it.
-            //
-            // x86 gives every load acquire semantics, so this is a plain MOV there; on AArch64
-            // it is a single LDAPR, far cheaper than the DMB ISH a full barrier would cost.
-            // The store side needs no ordering: this thread owns the slot.
+            // The acquire load is the load-side half of the fix: announcing an epoch this thread
+            // has not caught up to is what authorises the reclaimer to free an object it is about
+            // to read. Plain MOV on x86, single LDAPR on AArch64.
             WriteAnnouncedEpochRelaxed(entry, ReadCurrentEpochAcquire());
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
@@ -634,14 +613,12 @@ namespace Tsavorite.core
             Debug.Assert(entry == kInvalidIndex,
                 "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
-            // Read CurrentEpoch BEFORE claiming the slot; the relaxed read is deliberate and its
-            // safety argument is on ReadCurrentEpochRelaxed().
+            // Relaxed is deliberate; see ReadCurrentEpochRelaxed().
             var epoch = ReadCurrentEpochRelaxed();
 
-            // Reserve an entry in the epoch table for this thread. The reservation CAS writes
-            // localCurrentEpoch, so claiming the slot and announcing the epoch are a single
-            // locked RMW: the announce is globally visible before any load in the protected
-            // region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
+            // The reservation CAS writes localCurrentEpoch, so claiming the slot and announcing the
+            // epoch are one locked RMW -- the announce is globally visible before any load in the
+            // protected region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
             ReserveEntryForThread(ref entry, epoch);
 
             Debug.Assert(ReadThreadIdRelaxed(entry) > 0, "Epoch table entry missing threadId");
@@ -667,8 +644,7 @@ namespace Tsavorite.core
             // Clear "ThisInstanceProtected()" (non-static epoch table)
             WriteThreadIdRelaxed(entry, 0);
 
-            // localCurrentEpoch is the slot-ownership word, so this store is what publishes the
-            // slot as free, and it must not be hoisted above the threadId clear.
+            // Publishes the slot as free; must not be hoisted above the threadId clear.
             FreeSlotRelease(entry);
 
             entry = kInvalidIndex;
@@ -682,9 +658,9 @@ namespace Tsavorite.core
         /// startOffset1 contains the acquired offset so that the next acquire 
         /// can optimistically get the same slot.
         /// 
-        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>,
-        /// so reserving the slot and announcing the epoch are one locked RMW. This relies on
-        /// the fact that a protected thread never announces epoch 0.
+        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>, so
+        /// reserving the slot and announcing the epoch are one locked RMW. Relies on the fact that
+        /// a protected thread never announces epoch 0.
         /// </summary>
         /// <returns>True if entry was acquired, false if table is full</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
