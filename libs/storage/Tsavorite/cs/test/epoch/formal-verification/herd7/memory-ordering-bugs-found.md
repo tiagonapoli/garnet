@@ -216,7 +216,7 @@ A4 was invisible to the TLA+ suite for two structural reasons: neither
 and not yet bound, and the critical section in those specs is not a memory
 access at all — `CasAnnounceOneReader`'s `Dereference` step only flips a flag.
 Both are now addressed by
-[`CasAnnounceReleaseLoadStore.tla`](../tla/epoch/fixes/CasAnnounceReleaseLoadStore.tla),
+[`CasAnnounceReleaseLoadStore.tla`](../tla/CasAnnounceReleaseLoadStore.tla),
 which splits the dereference into issue and bind and reproduces the three rows
 above: `tso`+plain HOLDS, `arm`+plain VIOLATED, `arm`+release HOLDS.
 

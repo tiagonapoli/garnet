@@ -150,7 +150,7 @@ choice, and each is in the safe direction.
 The flags `unlinked`, `data` and `freed` do not exist in `LightEpoch`. They
 stand for the caller's object lifetime: `unlinked` is set by the reclaimer
 before it bumps the epoch, and the reader tests it to decide whether it is safe
-to dereference. They are modelled exactly as `tla/epoch/fixes/*.tla` models
+to dereference. They are modelled exactly as `tla/*.tla` models
 them, so the herd7 tests and the TLA+ specs are checking the same protocol at
 two different levels of abstraction. Without them there is nothing to state a
 use-after-free *about*: the epoch words alone are just integers.

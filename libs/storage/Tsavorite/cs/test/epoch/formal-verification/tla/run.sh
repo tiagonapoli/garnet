@@ -11,10 +11,8 @@ set -u
 
 JAR="${TLA_TOOLS:-/opt/tla2tools.jar}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-FIXES="$HERE/epoch/fixes"
-# -DTLA-Library lets specs in epoch/fixes/ resolve the shared MODULE StoreBuffer
-# and MODULE WeakMemory, which live at the top of this folder.
-TLC=(java -XX:+UseParallelGC "-DTLA-Library=$HERE" -cp "$JAR" tlc2.TLC -workers auto -deadlock -cleanup)
+SPECS="$HERE"
+TLC=(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers auto -deadlock -cleanup)
 failures=0
 matched=0
 FILTER="${1:-}"
@@ -75,7 +73,7 @@ run() {
   matched=$((matched + 1))
 
   cfg="generated-${name}.cfg"
-  write_cfg "$spec" "$constants" "$expected_result" "$description" "$invariants" "$FIXES/$cfg"
+  write_cfg "$spec" "$constants" "$expected_result" "$description" "$invariants" "$SPECS/$cfg"
 
   output="$(mktemp)"
   echo ""
@@ -84,7 +82,7 @@ run() {
   echo "# constants: $constants"
   echo "# expected: $expected_result ($description)"
   echo "############################################################"
-  if (cd "$FIXES" && "${TLC[@]}" -config "$cfg" "$spec.tla") >"$output" 2>&1; then
+  if (cd "$SPECS" && "${TLC[@]}" -config "$cfg" "$spec.tla") >"$output" 2>&1; then
     status=0
   else
     status=$?
@@ -106,7 +104,7 @@ run() {
   fi
 
   rm -f "$output"
-  [[ -n "${LE_KEEP_CFG:-}" ]] || rm -f "$FIXES/$cfg"
+  [[ -n "${LE_KEEP_CFG:-}" ]] || rm -f "$SPECS/$cfg"
 }
 
 note "========= CAS-carries-epoch fix (the fix implemented in LightEpoch.cs) ========="

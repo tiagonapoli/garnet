@@ -17,7 +17,7 @@ the first two fields matter here:
 | `cur` | `LightEpoch.CurrentEpoch` | `long` | this + 0x30 |
 
 Two further locations model the caller's object lifetime, exactly as the TLA+
-specs in `../tla/epoch/fixes/` do:
+specs in `../tla/` do:
 
 | Symbol | Meaning |
 |---|---|
