@@ -4,13 +4,95 @@
 #
 # Pass a substring to run only the matching rows, e.g.
 #   ./run.sh arm64-refresh
+#
+# Almost every test is half of a control/fix pair: the control shows the hazard
+# is architecturally permitted by the code we used to emit, the fix shows it is
+# forbidden by the code we emit now. A result of "Never" on its own proves very
+# little -- a mis-encoded test is also Never -- so the pairing is the argument,
+# not either file alone. To see a pair as a diff and run both halves together:
+#   ./run.sh --pair arm64-announce-sb
+#   ./run.sh --pairs            # list every pair and its one-line delta
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 LITMUS="$HERE/litmus"
 failures=0
 matched=0
-FILTER="${1:-}"
+SELECTED=""
+
+# The control/fix pairs, and the single instruction that separates each one.
+# Kept here rather than in prose in the .litmus headers so there is one place
+# that says what the suite is actually comparing.
+PAIRS=(
+  "x86-announce-sb            | x86-announce-sb-main            | x86-announce-sb-fixed            | XCHG targets tid and a plain MOV publishes the announce  ->  XCHG targets lce and carries it"
+  "arm64-announce-sb          | arm64-announce-sb-main          | arm64-announce-sb-fixed          | CASAL targets tid and a plain STR publishes the announce ->  CASAL targets lce and carries it"
+  "x86-refresh-mp             | x86-refresh-mp-main             | x86-refresh-mp-fixed             | none: Volatile.Read is a plain MOV on x86, so the two instruction streams are identical"
+  "arm64-refresh-mp           | arm64-refresh-mp-main           | arm64-refresh-mp-fixed           | LDR of CurrentEpoch  ->  LDAPR"
+  "arm64-release              | arm64-release-plainstore        | arm64-release-fixed              | STR XZR clears the slot  ->  STLR XZR (control is a counterfactual, not code we ever emitted)"
+  "arm64-release-loadstore    | arm64-release-loadstore-main    | arm64-release-loadstore-fixed    | STR XZR clears the slot  ->  STLR XZR"
+  "x86-composed               | x86-composed-main               | x86-composed-fixed               | the whole sequence; on x86 only the announce change is visible, the other two are no-ops"
+  "arm64-composed             | arm64-composed-main             | arm64-composed-fixed             | the whole sequence: announce onto the claim CASAL, LDAPR refresh, STLR unpublish, all at once"
+)
+# x86-release-loadstore-main is deliberately unpaired: x86-TSO preserves
+# Load->Store, so the hazard cannot arise there and there is nothing to fix.
+
+field() { echo "$1" | awk -F'|' -v n="$2" '{ gsub(/^ +| +$/, "", $n); print $n }'; }
+
+list_pairs() {
+  echo "Control/fix pairs. The delta column is the whole difference between them."
+  echo ""
+  for entry in "${PAIRS[@]}"; do
+    printf '  %-26s %s\n' "$(field "$entry" 1)" "$(field "$entry" 4)"
+  done
+  echo ""
+  echo "  x86-release-loadstore      (unpaired: x86-TSO preserves Load->Store, nothing to fix)"
+}
+
+show_pair() {
+  local want="$1" entry name control fix delta found=0
+  for entry in "${PAIRS[@]}"; do
+    name="$(field "$entry" 1)"
+    [[ "$name" == "$want" ]] || continue
+    found=1
+    control="$(field "$entry" 2)"
+    fix="$(field "$entry" 3)"
+    delta="$(field "$entry" 4)"
+
+    echo "############################################################"
+    echo "# $name"
+    echo "# control : $control"
+    echo "# fix     : $fix"
+    echo "# delta   : $delta"
+    echo "############################################################"
+    echo ""
+    diff -u "$LITMUS/$control.litmus" "$LITMUS/$fix.litmus"
+    echo ""
+    # Exact names, so a pair whose name is a prefix of another pair's
+    # (arm64-release vs arm64-release-loadstore) does not drag it in.
+    SELECTED="$control $fix"
+  done
+  if [[ $found -eq 0 ]]; then
+    echo "No such pair: '$want'. Known pairs:" >&2
+    list_pairs >&2
+    exit 1
+  fi
+}
+
+case "${1:-}" in
+  --pairs)
+    list_pairs
+    exit 0
+    ;;
+  --pair)
+    [[ $# -ge 2 ]] || { echo "usage: ./run.sh --pair <name>   (see ./run.sh --pairs)" >&2; exit 1; }
+    show_pair "$2"
+    # Fall through to run both halves, so the diff is followed by its results.
+    FILTER=""
+    ;;
+  *)
+    FILTER="${1:-}"
+    ;;
+esac
 
 # run <test> <Never|Sometimes> <description>
 #
@@ -22,7 +104,11 @@ FILTER="${1:-}"
 run() {
   local name="$1" expected="$2" description="$3" output status observed
 
-  [[ -z "$FILTER" || "$name" == *"$FILTER"* ]] || return 0
+  if [[ -n "$SELECTED" ]]; then
+    [[ " $SELECTED " == *" $name "* ]] || return 0
+  else
+    [[ -z "$FILTER" || "$name" == *"$FILTER"* ]] || return 0
+  fi
   matched=$((matched + 1))
 
   echo ""
@@ -45,7 +131,7 @@ run() {
   rm -f "$output"
 }
 
-note() { [[ -n "$FILTER" ]] || echo "$@"; }
+note() { [[ -n "$FILTER" || -n "$SELECTED" ]] || echo "$@"; }
 
 note "===================== LightEpoch herd7 litmus matrix ====================="
 note "# Every test below is reduced from real RyuJIT output captured on x86-64"

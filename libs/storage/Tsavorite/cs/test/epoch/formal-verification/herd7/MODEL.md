@@ -5,6 +5,32 @@ what each thread does to them, and what outcome would constitute a bug. Read it
 before `litmus/`; read `REDUCTION.md` for how the reduced code was derived from
 the raw JIT dumps.
 
+## The tests come in pairs
+
+Every hazard below is tested twice: once against the instruction stream we used
+to emit, and once against the one we emit now. Only the pair is an argument.
+`Never` on its own is equally consistent with "the architecture forbids this"
+and "the test is mis-encoded and forbids everything", so the control — which
+must come back `Sometimes` — is what makes the fix's `Never` mean anything.
+
+| Pair | Control | Fix | The whole difference |
+|---|---|---|---|
+| `x86-announce-sb` | `-main` | `-fixed` | `XCHG` targets `tid`, plain `MOV` publishes the announce → `XCHG` targets `lce` and carries it |
+| `arm64-announce-sb` | `-main` | `-fixed` | `CASAL` targets `tid`, plain `STR` publishes the announce → `CASAL` targets `lce` and carries it |
+| `x86-refresh-mp` | `-main` | `-fixed` | *none* — `Volatile.Read` is a plain `MOV` on x86, so the two streams are identical |
+| `arm64-refresh-mp` | `-main` | `-fixed` | `LDR` of `CurrentEpoch` → `LDAPR` |
+| `arm64-release` | `-plainstore` | `-fixed` | `STR XZR` → `STLR XZR`; the control is a counterfactual, not code that ever shipped |
+| `arm64-release-loadstore` | `-main` | `-fixed` | `STR XZR` → `STLR XZR` |
+| `x86-composed` | `-main` | `-fixed` | the whole sequence; on x86 only the announce change is visible, the other two are no-ops |
+| `arm64-composed` | `-main` | `-fixed` | the whole sequence: announce onto the claim `CASAL`, `LDAPR` refresh, and `STLR` unpublish, all at once |
+
+`x86-release-loadstore-main` is deliberately unpaired: x86-TSO preserves
+Load→Store, so the hazard cannot arise and there is nothing to fix.
+
+`./run.sh --pairs` prints this table, and `./run.sh --pair <name>` diffs the two
+files and runs both halves, which is the fastest way to see that the delta is
+the single instruction claimed above and nothing else.
+
 ## The shared state
 
 `LightEpoch` keeps a cache-line-aligned table of 64-byte `Entry` structs. Only

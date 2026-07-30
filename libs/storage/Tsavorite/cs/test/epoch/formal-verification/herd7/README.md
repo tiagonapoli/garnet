@@ -28,6 +28,17 @@ To run outside Docker you need `herd7` on `PATH` (`opam install herdtools7`):
 bash libs/storage/Tsavorite/cs/test/epoch/formal-verification/herd7/run.sh
 ```
 
+The tests are control/fix pairs, and the pairing is the argument — a lone
+`Never` is also what a mis-encoded test returns. To see a pair as a diff and run
+both halves together:
+
+```
+./run.sh --pairs              # every pair and the one instruction between them
+./run.sh --pair arm64-announce-sb
+```
+
+`MODEL.md` has the same table with the reasoning.
+
 ## Results
 
 | Test | Expected | Meaning |
