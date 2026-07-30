@@ -54,7 +54,11 @@ difference between detecting the bug and detecting nothing at all:
   reader loop delays it past the window, after which the announce always drains out
   of the store buffer before the reclaimer scans.
 
-The TLA+ suite below, not these tests, is what actually establishes correctness.
+The TLA+ suite below, not these tests, is what actually establishes correctness —
+within the reorderings its memory models express, which is `StoreLoad`,
+`StoreStore`, `LoadLoad`, and `Load→Store` at the dereference. See
+[`herd/`](herd) for the fourth hazard, which herd7 found first and which
+prompted the last of those.
 
 ## TLA+ models
 
@@ -67,6 +71,16 @@ store-buffer model cannot.
 Each configuration that is expected to hold is paired with a control that removes
 the fix and must be violated, so a passing run also proves the specs can still
 detect the bug they report absent.
+
+`CasAnnounceReleaseLoadStore.tla` is the exception to the "two store-buffer
+models" description above, and worth reading for what it says about the limits
+of the rest. Both `StoreBuffer` and `WeakMemory` bind a load's value at its
+program point, so neither can express a load that is still in flight when a
+later store becomes visible — and in the other specs the critical section is not
+a memory access at all, so there would be nothing to reorder even if they could.
+That blind spot hid a real ARM-only use-after-free (`Release()`'s slot clear
+passing the reader's own dereference) until the herd7 suite found it. This spec
+closes it by splitting the dereference into an issue step and a bind step.
 
 Run everything in Docker:
 

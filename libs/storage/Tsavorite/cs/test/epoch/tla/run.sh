@@ -29,6 +29,7 @@ declare -A INVARIANTS=(
   [CasAnnounceSymmetricPeers]="NoUseAfterFree SlotsDisjoint AnnounceVisibleWhileProtected"
   [CasAnnounceNoThreadId]="NoUseAfterFree SlotExclusive OwnedSlotNotWiped AnnounceVisibleWhileProtected"
   [CasAnnounceResumeRefreshWeak]="NoUseAfterFree"
+  [CasAnnounceReleaseLoadStore]="NoUseAfterFreeDereference NoFreeWhileDereferenceInFlight"
 )
 
 declare -A MODEL_NOTE=(
@@ -211,6 +212,28 @@ note "# report is attributable to the acquire announce alone."
 run CasAnnounceResumeRefreshWeak acqplain_armlb   "Model=armlb RefreshOrder=acqload AcquireOrder=plain"   VIOLATED "the acquire-load fix alone is NOT enough: the announce still lingers"
 run CasAnnounceResumeRefreshWeak acqrelease_armlb "Model=armlb RefreshOrder=acqload AcquireOrder=release" VIOLATED "a release store is not enough either, so the CAS is load-bearing"
 run CasAnnounceResumeRefreshWeak fence_armlb      "Model=armlb RefreshOrder=fence   AcquireOrder=cas"     HOLDS    "a full StoreLoad barrier also closes it, but is strictly more than needed"
+
+echo ""
+note "========= Load->Store: the dereference against the reader's own unpublish ========="
+note "# Every row above asks what OTHER threads observe of the reader's stores. This"
+note "# one asks whether the reader is still using the object when it announces that"
+note "# it is not:  ldr x2,[data]  /  str xzr,[slotEpoch]. AArch64 may make the"
+note "# unpublish visible first, so a scan in that window frees the object under a"
+note "# load that has not been satisfied. This is hazard A4 in"
+note "# ../herd/memory-ordering-bugs-found.md, found by herd7 first."
+note "#"
+note "# NEITHER StoreBuffer NOR WeakMemory can express it: both bind a load's value at"
+note "# its program point, so a store may be delayed but a load never can be. And in"
+note "# the other specs the critical section is not a memory access at all --"
+note "# CasAnnounceOneReader's Dereference only flips a flag -- so there would be"
+note "# nothing to reorder even in a substrate that modelled it. This spec splits the"
+note "# dereference into issue and bind, the smallest change that makes the reordering"
+note "# expressible. The algorithm is the CAS-carried announce in all three rows, so a"
+note "# violation is attributable to the release store alone, and the middle row is the"
+note "# liveness control for the two that hold."
+run CasAnnounceReleaseLoadStore plain_tso   "Model=tso ReleaseOrder=plain"   HOLDS    "x86-TSO preserves Load->Store, so the plain unpublish is safe there"
+run CasAnnounceReleaseLoadStore plain_arm   "Model=arm ReleaseOrder=plain"   VIOLATED "the plain unpublish is observed while the dereference is still in flight"
+run CasAnnounceReleaseLoadStore release_arm "Model=arm ReleaseOrder=release" HOLDS    "Volatile.Write -> STLR orders the dereference before the unpublish"
 
 echo ""
 if [[ -n "$FILTER" && $matched -eq 0 ]]; then
