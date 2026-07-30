@@ -351,7 +351,7 @@ namespace Tsavorite.core
         public bool ThisInstanceProtected()
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
-            return kInvalidIndex != entry && ReadThreadIdRelaxed(entry) == Metadata.threadId;
+            return entry != kInvalidIndex && ReadThreadIdRelaxed(entry) == Metadata.threadId;
         }
 
         /// <summary>
@@ -558,7 +558,7 @@ namespace Tsavorite.core
             for (var index = 1; index <= kTableSize; index++)
             {
                 var entry_epoch = ReadAnnouncedEpochRelaxed(index);
-                if (0 != entry_epoch)
+                if (entry_epoch != 0)
                 {
                     if (entry_epoch < oldestOngoingCall)
                         oldestOngoingCall = entry_epoch;
@@ -584,7 +584,7 @@ namespace Tsavorite.core
                 for (var index = 1; index <= kTableSize; index++)
                 {
                     var entry_epoch = ReadAnnouncedEpochRelaxed(index);
-                    if (0 != entry_epoch)
+                    if (entry_epoch != 0)
                         return;
                 }
                 Resume();
@@ -728,10 +728,10 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool TryClaimEntry(int entry, long epoch)
         {
-            if (0 != ReadAnnouncedEpochRelaxed(entry))
+            if (ReadAnnouncedEpochRelaxed(entry) != 0)
                 return false;
 
-            if (0 != Interlocked.CompareExchange(ref AnnouncedEpochRef(entry), epoch, 0))
+            if (Interlocked.CompareExchange(ref AnnouncedEpochRef(entry), epoch, 0) != 0)
                 return false;
 
             // The slot is now exclusively ours, so threadId needs no interlocked write.
