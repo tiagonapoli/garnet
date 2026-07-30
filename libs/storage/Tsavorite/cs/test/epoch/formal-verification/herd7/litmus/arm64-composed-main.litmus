@@ -1,6 +1,6 @@
 AArch64 arm64-composed-main
 (* The whole reader sequence against the whole reclaimer sequence, rather than
-   one hazard shape in isolation. Reduced from jit/reduced/arm64-main.reduced.asm.
+   one hazard shape in isolation. Reduced from jit/reduced/arm64.reduced.asm (VARIANT main).
 
    P0 = Acquire (read CurrentEpoch, claim tid by CASAL, PLAIN announce)
         -> ProtectAndDrain (PLAIN re-read of CurrentEpoch, PLAIN re-announce)

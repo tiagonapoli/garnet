@@ -1,5 +1,5 @@
 X86 x86-release-loadstore-main
-(* Reduced from jit/reduced/x86-main.reduced.asm -- critical section vs Release.
+(* Reduced from jit/reduced/x86.reduced.asm (VARIANT main) -- critical section vs Release.
    The x86 counterpart of arm64-release-loadstore-main, using the same plain
    store. x86-TSO does not reorder Load->Store, so the dereference is already
    ordered before the slot clear and no barrier is needed. The AArch64 row is

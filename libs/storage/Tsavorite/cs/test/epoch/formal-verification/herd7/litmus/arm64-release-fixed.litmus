@@ -1,5 +1,5 @@
 AArch64 arm64-release-fixed
-(* Reduced from jit/reduced/arm64-fixed.reduced.asm -- Release vs Acquire.
+(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT fixed) -- Release vs Acquire.
    Same scenario as arm64-release-plainstore, but with the STLR the fix
    actually emits. *)
 { 0:X0=tid; 0:X1=lce; 1:X0=lce; 1:X1=tid; }

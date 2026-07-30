@@ -1,5 +1,5 @@
 AArch64 arm64-refresh-mp-fixed
-(* Reduced from jit/reduced/arm64-fixed.reduced.asm -- Refresh vs Bump.
+(* Reduced from jit/reduced/arm64.reduced.asm (VARIANT fixed) -- Refresh vs Bump.
    Volatile.Read compiles to LDAPR here, which orders every subsequent load. *)
 { 0:X0=cur; 0:X1=data; 1:X0=data; 1:X1=cur; }
  P0            | P1                ;

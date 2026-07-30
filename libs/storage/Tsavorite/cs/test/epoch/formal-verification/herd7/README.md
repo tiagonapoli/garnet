@@ -70,8 +70,8 @@ positive the first composed encoding produced.
 
 | Path | What it is |
 | --- | --- |
-| `jit/*.asm` | verbatim RyuJIT FullOpts dumps, x86-64 and AArch64, for `origin/main` and the fix |
-| `jit/reduced/*.reduced.asm` | the same code cut down to what herd7 can parse |
+| `jit/x86.asm`, `jit/arm64.asm` | verbatim RyuJIT FullOpts dumps; each holds both variants, `origin/main` and the fix, as two banner-delimited sections |
+| `jit/reduced/*.reduced.asm` | the same code cut down to what herd7 can parse, same two-section layout |
 | `REDUCTION.md` | every removal and substitution, and why none of them can change the result |
 | `MODEL.md` | the protocol the tests encode and what each `exists` clause means operationally |
 | `memory-ordering-bugs-found.md` | the findings, split by architecture |
@@ -85,15 +85,59 @@ listings have to be auditable against the thing they were reduced from.
 
 ## Regenerating the dumps
 
+Each `jit/<arch>.asm` holds both variants. A capture run produces both sections
+in one file, so the two are always from the same toolchain and directly
+comparable.
+
+### Without an ARM machine (Docker + NativeAOT)
+
+`LightEpoch` is its own project (`src/epoch/Garnet.LightEpoch.csproj`), so the
+harness can lift the whole thing out of any git ref and compile it standalone.
+NativeAOT's ILC hosts the same RyuJIT the runtime does and cross-targets, which
+is what lets one x64 host emit the AArch64 listings:
+
+```powershell
+docker build -t garnet-lightepoch-disasm capture
+docker run --rm -v "${PWD}\..\..\..\..\..\..\..\..:/repo:ro" -v "${PWD}\jit:/out" `
+    garnet-lightepoch-disasm fixed=HEAD main=origin/main
+```
+
+Arguments are `label=gitref` pairs and default to exactly the pair above. Refs
+from before the project split fall back to the old `Tsavorite.core` layout, so
+`origin/main` stays capturable.
+
+Two things worth knowing about that image:
+
+- ILC compiles methods **in parallel onto one stdout**, which interleaves lines
+  from different listings. `Disasm.csproj` passes `--parallelism 1`; without it
+  the output looks plausible and is silently garbage.
+- The disassembly is written during ILC codegen, *before* the native link, so a
+  cross-link failure still leaves a complete listing. `capture.sh` therefore
+  keys success off the presence of `; Assembly listing for method`, not the
+  publish exit code.
+
+**Fidelity caveat.** NativeAOT is the same JIT but not the same surrounding
+codegen: no tiering, different statics and helper access, and `[ThreadStatic]`
+`Metadata.threadId` in particular is reached differently than under the runtime
+JIT. The memory-ordering-relevant instructions — the CAS, `ldar`/`ldapr`,
+`stlr`, `dmb`, and the plain loads and stores on the epoch table — should be
+identical, which is all the litmus tests reduce from. The committed dumps were
+taken with the **runtime JIT** (below); do not silently mix the two in one file.
+
+A higher-fidelity alternative, at the cost of emulation speed, is to run the
+ordinary apphost under `docker --platform linux/arm64` via QEMU, which gives
+actual runtime-JIT AArch64 output.
+
+### With the runtime JIT (how the committed dumps were taken)
+
 `capture/` is a standalone console app that news up a `LightEpoch` and drives
 it. The epoch operations are wrapped in `[MethodImpl(NoInlining)]` methods
 (`OpResume`, `OpSuspend`, `OpProtectAndDrain`, `OpBumpCurrentEpoch`) so each one
 gets its own listing while everything inside it still inlines as it would at a
 real call site — without those wrappers the whole thing collapses into `Main`.
 
-Point `capture/Disasm.csproj` at the `LightEpoch.cs` you want, build Release,
-and run the **apphost** (not `dotnet X.dll` — the environment variables below
-leak into the CLI muxer otherwise):
+Build Release and run the **apphost** (not `dotnet X.dll` — the environment
+variables below leak into the CLI muxer otherwise):
 
 ```powershell
 $env:DOTNET_TieredCompilation = '0'
@@ -101,8 +145,11 @@ $env:DOTNET_TieredPGO         = '0'
 $env:DOTNET_ReadyToRun        = '0'
 $env:DOTNET_JitDisasmDiffable = '1'
 $env:DOTNET_JitDisasm         = 'OpResume OpProtectAndDrain OpSuspend BumpCurrentEpoch ComputeNewSafeToReclaimEpoch'
-.\bin\Release\net10.0\Disasm.exe 2>&1 | Out-String | Set-Content jit\x86-fixed.asm
+.\bin\Release\net10.0\Disasm.exe 2>&1 | Out-String | Set-Content variant.asm
 ```
+
+Then paste the result under the matching `## VARIANT:` banner in
+`jit/<arch>.asm`.
 
 Two things that cost time the first go round:
 
@@ -115,10 +162,10 @@ Two things that cost time the first go round:
 `0xD1FFAB1E`, which is what makes the committed dumps stable enough to diff
 across runs.
 
-For AArch64 the dumps in `jit/` were taken on an Azure `Standard_D8ps_v5`
-(Ampere Altra) running Ubuntu 24.04 arm64 with the .NET 10 SDK — any AArch64
-machine with the same SDK will do. Same environment variables, and set
-`DOTNET_ROOT` if the SDK is not in the default location.
+The AArch64 sections in `jit/arm64.asm` were taken on an Azure
+`Standard_D8ps_v5` (Ampere Altra) running Ubuntu 24.04 arm64 with the .NET 10
+SDK — any AArch64 machine with the same SDK will do. Same environment
+variables, and set `DOTNET_ROOT` if the SDK is not in the default location.
 
 ## Scope, honestly
 

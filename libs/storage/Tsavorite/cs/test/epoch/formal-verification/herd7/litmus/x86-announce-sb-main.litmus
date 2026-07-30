@@ -1,5 +1,5 @@
 X86 x86-announce-sb-main
-(* Reduced from jit/reduced/x86-main.reduced.asm.
+(* Reduced from jit/reduced/x86.reduced.asm (VARIANT main).
    Protocol is the one pinned down by tla/epoch/fixes/CasAnnounceOneReader.tla.
 
    P0 reader    : claim the slot (locked RMW on tid), PLAIN-store the announce
