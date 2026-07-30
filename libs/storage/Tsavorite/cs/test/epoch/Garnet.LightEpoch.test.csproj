@@ -24,7 +24,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\epoch\Garnet.LightEpoch.csproj" />
+    <ProjectReference Include="..\..\src\core\Tsavorite.core.csproj" />
   </ItemGroup>
 
 </Project>
