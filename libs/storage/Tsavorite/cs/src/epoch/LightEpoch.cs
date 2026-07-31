@@ -300,7 +300,7 @@ namespace Tsavorite.core
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
             Debug.Assert(entry > 0, "Trying to refresh unacquired epoch");
-            AssertEpochAcquired(entry);
+            DebugAssertEpochAcquired(entry);
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
@@ -520,7 +520,7 @@ namespace Tsavorite.core
 
             ReserveEntryForThread(ref entry, CurrentEpoch);
 
-            AssertEpochAcquired(entry);
+            DebugAssertEpochAcquired(entry);
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
             if (drainCount > 0)
@@ -537,7 +537,7 @@ namespace Tsavorite.core
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
-            AssertEpochAcquired(entry,
+            DebugAssertEpochAcquired(entry,
                 "Trying to release unprotected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
             // Clear "ThisInstanceProtected()" (non-static epoch table)
