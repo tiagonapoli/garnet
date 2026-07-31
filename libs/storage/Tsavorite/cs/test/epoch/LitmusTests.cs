@@ -33,11 +33,17 @@ namespace Tsavorite.test.epoch
     /// absence of any work between the barrier and Resume() were each found to be the
     /// difference between detecting the bug and detecting nothing at all.</para>
     ///
-    /// Marked <c>Litmus</c> so CI can exclude them from the fast suite:
-    /// <c>dotnet test --filter "TestCategory!=Litmus"</c>.
+    /// <para>These are <see cref="ExplicitAttribute"/>: they are minute-scale, they pin cores, and
+    /// two of them running concurrently (as happens when the suite is multi-targeted) contend for
+    /// the same cores, which distorts the very timing the result depends on. They are therefore
+    /// opt-in rather than part of the default suite:
+    /// <c>dotnet test --filter "TestCategory=Litmus"</c>.
+    /// For sustained soaks prefer the standalone <c>Garnet.LightEpoch.litmus</c> CLI (and its
+    /// Dockerfile), which runs one configuration per process with the runtime tuned for it.</para>
     /// </summary>
     [TestFixture]
     [Category("Litmus")]
+    [Explicit("Minute-scale core-pinned soak; run with --filter \"TestCategory=Litmus\" or use the Garnet.LightEpoch.litmus CLI.")]
     public class LitmusTests
     {
         /// <summary>
