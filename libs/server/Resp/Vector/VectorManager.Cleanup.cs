@@ -140,9 +140,15 @@ namespace Garnet.server
         {
             while (await requestDropTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Drain all wake up signals
-                while (requestDropTaskChannel.Reader.TryRead(out _))
+                // Drain all wake up signals, collecting any drain-barrier sentinels so we can
+                // signal them once this pass over requestedDrops has completed.
+                List<TaskCompletionSource> sentinels = null;
+                while (requestDropTaskChannel.Reader.TryRead(out var item))
                 {
+                    if (item is TaskCompletionSource sentinel)
+                    {
+                        (sentinels ??= []).Add(sentinel);
+                    }
                 }
 
                 // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
@@ -186,6 +192,14 @@ namespace Garnet.server
                 finally
                 {
                     ActiveThreadSession = null;
+
+                    if (sentinels != null)
+                    {
+                        foreach (var sentinel in sentinels)
+                        {
+                            _ = sentinel.TrySetResult();
+                        }
+                    }
                 }
             }
         }
@@ -298,8 +312,17 @@ namespace Garnet.server
         {
             // Each drop index will queue a null object here
             // We'll handle multiple at once if possible, but using a channel simplifies cancellation and dispose
-            await foreach (var ignored in cleanupTaskChannel.Reader.ReadAllAsync().ConfigureAwait(false))
+            await foreach (var signal in cleanupTaskChannel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
+                // A drain barrier (WaitForCleanupComplete) enqueues a TaskCompletionSource sentinel. The
+                // channel is FIFO with a single reader, so reaching the sentinel means every cleanup
+                // pumped before it has already finished — just signal and move on without re-scanning.
+                if (signal is TaskCompletionSource sentinel)
+                {
+                    _ = sentinel.TrySetResult();
+                    continue;
+                }
+
                 await cleanupGate.WaitAsync().ConfigureAwait(false);
 
                 try
@@ -446,6 +469,85 @@ namespace Garnet.server
                 _ = Thread.Yield();
             }
         }
+
+        /// <summary>
+        /// Block until the entire background cleanup pipeline has quiesced: request-cleanup marking,
+        /// checkpoint-driven discovery, the in-flight cleanup scan, and native DiskANN drops.
+        ///
+        /// Unlike <see cref="WaitForCleanupRequests"/> (which only covers the marking and checkpoint
+        /// stages), this drains the cleanup scan (<see cref="RunCleanupTaskAsync"/>) and the drop task
+        /// (<see cref="RunRequestDropTaskAsync"/>) as well, by round-tripping a sentinel through each of
+        /// their channels. After it returns, no Vector Set cleanup work is outstanding.
+        ///
+        /// Callers use this at store-emptying boundaries (FLUSH and replica full sync) AFTER the store
+        /// has been emptied, so the eviction-driven drops enqueued by emptying the store are included.
+        ///
+        /// The cleanup task must NOT be paused (via <see cref="PauseCleanupAsync"/>) when this is
+        /// called, otherwise the cleanup-scan sentinel can never be processed and the wait will hang.
+        /// </summary>
+        public async Task WaitForCleanupCompleteAsync()
+        {
+            // The pipeline is acyclic: checkpoint discovery -> request-cleanup marking -> cleanup scan;
+            // native drops are independent. Drain in that order, then re-verify; repeat only if a
+            // concurrent checkpoint completion re-primed the chain.
+            while (true)
+            {
+                // Stage: checkpoint-driven discovery. While a QueueCleanups pass is running it keeps
+                // feeding the request-cleanup channel, so wait for it to finish first.
+                while (Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) != 0)
+                {
+                    await Task.Yield();
+                }
+
+                // Stage: request-cleanup marking. This pumps the cleanup scan, so drain it before the
+                // scan sentinel below.
+                while (requestCleanupTaskChannel.Reader.TryPeek(out _) || Volatile.Read(ref requestCleanupTaskRunning))
+                {
+                    await Task.Yield();
+                }
+
+                // Stage: cleanup scan. FIFO single-reader guarantees every pump enqueued above has been
+                // processed once our sentinel comes back.
+                await RoundTripAsync(cleanupTaskChannel).ConfigureAwait(false);
+
+                // Stage: native drops. Round-trip a sentinel, then confirm the pending-drop set drained.
+                await RoundTripAsync(requestDropTaskChannel).ConfigureAwait(false);
+                while (!requestedDrops.IsEmpty)
+                {
+                    await RoundTripAsync(requestDropTaskChannel).ConfigureAwait(false);
+                }
+
+                if (Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) == 0
+                    && !requestCleanupTaskChannel.Reader.TryPeek(out _)
+                    && !Volatile.Read(ref requestCleanupTaskRunning)
+                    && !cleanupTaskChannel.Reader.TryPeek(out _)
+                    && !requestDropTaskChannel.Reader.TryPeek(out _)
+                    && requestedDrops.IsEmpty)
+                {
+                    return;
+                }
+            }
+
+            // Enqueue a sentinel onto a background-task channel and wait for that task to process it.
+            // Because each channel has a single FIFO reader, completion of the sentinel proves every
+            // item enqueued before it has been fully handled.
+            static async Task RoundTripAsync(Channel<object> channel)
+            {
+                var sentinel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!channel.Writer.TryWrite(sentinel))
+                {
+                    // Channel completed (Dispose in progress) — nothing left to drain.
+                    return;
+                }
+
+                await sentinel.Task.ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Synchronous wrapper over <see cref="WaitForCleanupCompleteAsync"/>.
+        /// </summary>
+        public void WaitForCleanupComplete() => AsyncUtils.BlockingWait(WaitForCleanupCompleteAsync());
 
         /// <summary>
         /// Called when a Vector Set is discovered (typically via compaction) to _potentially_ be deleted.

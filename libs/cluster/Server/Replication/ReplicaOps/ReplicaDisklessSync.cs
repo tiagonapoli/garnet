@@ -118,6 +118,12 @@ namespace Garnet.cluster
                         {
                             vectorManager?.ResumeCleanup();
                         }
+
+                        // Reset empties the store, which queues eviction-driven native index drops and
+                        // may leave in-flight cleanup. Drain the pipeline (once the pause is lifted so the
+                        // cleanup task can process the drain sentinel) before syncing from the primary.
+                        if (vectorManager != null)
+                            await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
                     }
 
                     // Suspend background tasks that may interfere with AOF
@@ -237,6 +243,15 @@ namespace Garnet.cluster
 
                 // Before advertising updated replication offset, wait for Vector Set ops to finish
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForVectorOperationsToComplete();
+
+                if (primarySyncMetadata.fullSync)
+                {
+                    // A diskless full sync empties the replica store via the primary-driven CLUSTER
+                    // FLUSHALL and then streams records in. Drain the Vector Set cleanup pipeline so the
+                    // eviction-driven native drops (and any in-flight cleanup) queued by that flush
+                    // complete before we advertise the offset and resume serving.
+                    storeWrapper.DefaultDatabase.VectorManager?.WaitForCleanupComplete();
+                }
 
                 this.replicationOffset = _replicationOffset;
 

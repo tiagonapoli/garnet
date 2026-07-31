@@ -421,6 +421,14 @@ namespace Garnet.server
             {
                 this.manager = manager;
 
+                // Quiesce the background cleanup scan first. It holds cleanupGate for its whole
+                // iteration (including its own lock(this) / vectorSetLocks sections), so taking the
+                // gate before any other lock both waits out any in-flight scan and blocks a new one
+                // from starting — without which the scan could apply FinishedCleaningUp to the
+                // contextMetadatas array we wipe below. Taking it before vectorSetLocks / Monitor
+                // also avoids deadlocking against a scan that still needs those.
+                this.manager.cleanupGate.Wait();
+
                 // Stop other Vector Set operations
                 this.manager.vectorSetLocks.AcquireAllExclusiveLock(out lockToken);
 
@@ -437,14 +445,20 @@ namespace Garnet.server
                     return;
                 }
 
-                // Clear out all context data
+                // Clear out all context data. dirtyContextMetadatas must be cleared too: it indexes
+                // into contextMetadatas, so stale entries would fault the next UpdateContextMetadata
+                // once the array is replaced with a single empty block.
                 manager.contextMetadatas = new ContextMetadata[1];
+                manager.dirtyContextMetadatas.Clear();
+
+                // Allow new contexts to be issued
+                Monitor.Exit(manager);
 
                 // Allow Vector Set operations again
                 manager.vectorSetLocks.ReleaseLock(lockToken);
 
-                // Allow new contexts to be issued
-                Monitor.Exit(manager);
+                // Resume the background cleanup scan
+                _ = manager.cleanupGate.Release();
             }
         }
 

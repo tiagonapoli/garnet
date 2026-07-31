@@ -150,7 +150,11 @@ namespace Garnet.cluster
                         vectorManager?.ResumeCleanup();
                     }
 
-                    // Suspend background tasks that may interfere with AOF
+                    // Reset empties the store, which queues eviction-driven native index drops and
+                    // may leave in-flight cleanup. Drain the pipeline (once the pause is lifted so the
+                    // cleanup task can process the drain sentinel) before retrieving the checkpoint.
+                    if (vectorManager != null)
+                        await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
                     await storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
 
                     // Stop advance time task when reconfiguring node to be replica
