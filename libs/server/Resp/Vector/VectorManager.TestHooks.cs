@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading.Tasks;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -54,40 +55,43 @@ namespace Garnet.server
             }
         }
 
-        internal partial struct ContextMetadata
-        {
-            /// <summary>
-            /// Number of contexts in this block that are reserved for any reason (in use, cleaning up, or migrating).
-            /// </summary>
-            internal readonly int ReservedCount => BitOperations.PopCount(inUse | cleaningUp | migrating);
+        internal static int TestHookReservedCount(in ContextMetadata metadata) => BitOperations.PopCount(metadata.ReservedMask);
 
-            /// <summary>
-            /// Add every reserved context in this block to <paramref name="into"/>, composed with the
-            /// block's <paramref name="offset"/>.
-            /// </summary>
-            internal readonly void CollectReservedContexts(ulong offset, List<ulong> into)
+        /// <summary>
+        /// Add every reserved context in <paramref name="metadata"/> to <paramref name="into"/>, composed
+        /// with the block's <paramref name="offset"/>.
+        /// </summary>
+        internal static void TestHookCollectReservedContexts(in ContextMetadata metadata, ulong offset, List<ulong> into)
+        {
+            var reserved = metadata.ReservedMask;
+            while (reserved != 0)
             {
-                var reserved = inUse | cleaningUp | migrating;
-                while (reserved != 0)
-                {
-                    var bit = BitOperations.TrailingZeroCount(reserved);
-                    reserved &= reserved - 1;
-                    into.Add(offset + ((ulong)bit * ContextStep));
-                }
+                var bit = BitOperations.TrailingZeroCount(reserved);
+                reserved &= reserved - 1;
+                into.Add(offset + ((ulong)bit * ContextStep));
             }
         }
 
         /// <summary>
+        /// When drops are pending, hold the drop pass in flight so a store-empty boundary can be crossed
+        /// while native drops are still outstanding — proving the sync-path drain barrier waits for them.
+        /// </summary>
+        internal Task TestHookPauseInNativeDropAsync()
+            => requestedDrops.IsEmpty
+                ? Task.CompletedTask
+                : ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
+
+        /// <summary>
         /// Number of Vector Set contexts still reserved across every <see cref="ContextMetadata"/> block.
         /// </summary>
-        internal int GetReservedContextCount()
+        internal int TestHookGetReservedContextCount()
         {
             lock (this)
             {
                 var count = 0;
                 for (var i = 0; i < contextMetadatas.Length; i++)
                 {
-                    count += contextMetadatas[i].ReservedCount;
+                    count += TestHookReservedCount(in contextMetadatas[i]);
                 }
 
                 return count;
@@ -97,7 +101,7 @@ namespace Garnet.server
         /// <summary>
         /// Number of <see cref="ContextMetadata"/> blocks still pending persistence.
         /// </summary>
-        internal int GetDirtyContextMetadataCount()
+        internal int TestHookGetDirtyContextMetadataCount()
         {
             lock (this)
             {
@@ -108,12 +112,12 @@ namespace Garnet.server
         /// <summary>
         /// Number of native DiskANN index drops still pending.
         /// </summary>
-        internal int GetPendingDropCount() => requestedDrops.Count;
+        internal int TestHookGetPendingDropCount() => requestedDrops.Count;
 
         /// <summary>
         /// The composed contexts currently reserved across every <see cref="ContextMetadata"/> block.
         /// </summary>
-        internal List<ulong> GetReservedContexts()
+        internal List<ulong> TestHookGetReservedContexts()
         {
             var ret = new List<ulong>();
             lock (this)
@@ -121,7 +125,7 @@ namespace Garnet.server
                 for (var i = 0; i < contextMetadatas.Length; i++)
                 {
                     var offset = ContextMetadata.OffsetForContextMetadata(i);
-                    contextMetadatas[i].CollectReservedContexts(offset, ret);
+                    TestHookCollectReservedContexts(in contextMetadatas[i], offset, ret);
                 }
             }
 
@@ -133,7 +137,7 @@ namespace Garnet.server
         /// bypassing context reservation and the <see cref="WaitForDiskANNIndexDrop"/> recreate guard —
         /// how a diskless full sync streams records in as-is.
         /// </summary>
-        internal void TestOnlyStreamElementIntoContext(ulong context, ReadOnlySpan<byte> elementKey, ReadOnlySpan<byte> value)
+        internal void TestHookStreamElementIntoContext(ulong context, ReadOnlySpan<byte> elementKey, ReadOnlySpan<byte> value)
         {
             using var session = (RespServerSession)getTempSession();
             if (session.activeDbId != dbId && !session.TrySwitchActiveDatabaseSession(dbId))
@@ -159,7 +163,7 @@ namespace Garnet.server
         /// <summary>
         /// Number of element records whose namespace maps to <paramref name="context"/>'s block.
         /// </summary>
-        internal int TestOnlyCountRecordsInContext(ulong context)
+        internal int TestHookCountRecordsInContext(ulong context)
         {
             using var session = (RespServerSession)getTempSession();
             if (session.activeDbId != dbId && !session.TrySwitchActiveDatabaseSession(dbId))

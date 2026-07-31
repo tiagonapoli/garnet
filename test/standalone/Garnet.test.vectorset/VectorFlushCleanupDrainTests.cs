@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 // Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
@@ -48,7 +48,7 @@ namespace Garnet.test
                 PopulateVectorSet(db, $"{{vs}}set-{s}", ElementsPerSet, seed: 2026_08_01 + s);
             }
 
-            ClassicAssert.AreEqual(Sets, vectorManager.GetReservedContextCount(), "each populated Vector Set should reserve exactly one context");
+            ClassicAssert.AreEqual(Sets, vectorManager.TestHookGetReservedContextCount(), "each populated Vector Set should reserve exactly one context");
 
             adminServer.FlushDatabase(0);
 
@@ -56,9 +56,9 @@ namespace Garnet.test
             // cleanup scan, and native DiskANN drops queued by emptying the store.
             vectorManager.WaitForCleanupComplete();
 
-            ClassicAssert.AreEqual(0, vectorManager.GetReservedContextCount(), "FLUSHDB must leave no reserved Vector Set context");
-            ClassicAssert.AreEqual(0, vectorManager.GetDirtyContextMetadataCount(), "FLUSHDB must leave no dirty context metadata");
-            ClassicAssert.AreEqual(0, vectorManager.GetPendingDropCount(), "the drain must complete every pending native index drop");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetReservedContextCount(), "FLUSHDB must leave no reserved Vector Set context");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetDirtyContextMetadataCount(), "FLUSHDB must leave no dirty context metadata");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetPendingDropCount(), "the drain must complete every pending native index drop");
 
             var dbSize = (long)db.Execute("DBSIZE");
             ClassicAssert.AreEqual(0, dbSize, "FLUSHDB must remove every record across all namespaces");
@@ -93,13 +93,13 @@ namespace Garnet.test
             adminServer.FlushDatabase(0);
             vectorManager.WaitForCleanupComplete();
 
-            ClassicAssert.AreEqual(0, vectorManager.GetReservedContextCount());
-            ClassicAssert.AreEqual(0, vectorManager.GetDirtyContextMetadataCount());
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetReservedContextCount());
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetDirtyContextMetadataCount());
 
             // A fresh Vector Set must create cleanly on top of the reset reservation state.
             PopulateVectorSet(db, "{vs}fresh", 100, seed: 2026_08_20);
 
-            ClassicAssert.AreEqual(1, vectorManager.GetReservedContextCount(), "the fresh Vector Set should reserve exactly one context after the reset");
+            ClassicAssert.AreEqual(1, vectorManager.TestHookGetReservedContextCount(), "the fresh Vector Set should reserve exactly one context after the reset");
             ClassicAssert.IsTrue(db.KeyExists("{vs}fresh"), "the fresh Vector Set must persist after being created post-FLUSHDB");
         }
     }

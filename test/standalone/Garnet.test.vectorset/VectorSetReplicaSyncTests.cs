@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 // Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
@@ -58,7 +58,7 @@ namespace Garnet.test
             var adminServer = redis.GetServers()[0];
 
             PopulateVectorSet(db, "{vs}pending", 100, seed: 2026_08_30);
-            ClassicAssert.AreEqual(1, vectorManager.GetReservedContextCount(), "the populated Vector Set should reserve one context");
+            ClassicAssert.AreEqual(1, vectorManager.TestHookGetReservedContextCount(), "the populated Vector Set should reserve one context");
 
             // Arm the pause BEFORE emptying the store so the eviction-driven drop parks in flight.
             ExceptionInjectionHelper.EnableException(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
@@ -69,13 +69,13 @@ namespace Garnet.test
                 "the background drop task never reached the in-flight pause after FLUSHDB");
 
             // Boundary crossed without a drain: a native index drop is still outstanding.
-            ClassicAssert.Greater(vectorManager.GetPendingDropCount(), 0,
+            ClassicAssert.Greater(vectorManager.TestHookGetPendingDropCount(), 0,
                 "emptying the store must leave a native index drop pending — the hazard the sync-path drain guards against");
 
             // Release and drain so the fixture tears down cleanly.
             ExceptionInjectionHelper.EnableException(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
             vectorManager.WaitForCleanupComplete();
-            ClassicAssert.AreEqual(0, vectorManager.GetPendingDropCount());
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetPendingDropCount());
         }
 
         /// <summary>
@@ -102,7 +102,7 @@ namespace Garnet.test
 
             WaitUntilParked(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop,
                 "the background drop task never reached the in-flight pause after FLUSHDB");
-            ClassicAssert.Greater(vectorManager.GetPendingDropCount(), 0, "a native drop should be parked in flight");
+            ClassicAssert.Greater(vectorManager.TestHookGetPendingDropCount(), 0, "a native drop should be parked in flight");
 
             var drain = Task.Run(() => vectorManager.WaitForCleanupComplete());
 
@@ -115,8 +115,8 @@ namespace Garnet.test
 
             ClassicAssert.IsTrue(drain.Wait(TimeSpan.FromSeconds(30)),
                 "WaitForCleanupComplete did not return after the in-flight drop was released");
-            ClassicAssert.AreEqual(0, vectorManager.GetPendingDropCount(), "the drain must complete every pending native index drop");
-            ClassicAssert.AreEqual(0, vectorManager.GetReservedContextCount(), "no Vector Set context may remain reserved after the drain");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetPendingDropCount(), "the drain must complete every pending native index drop");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetReservedContextCount(), "no Vector Set context may remain reserved after the drain");
         }
 
         /// <summary>
@@ -135,7 +135,7 @@ namespace Garnet.test
             var db = redis.GetDatabase(0);
 
             PopulateVectorSet(db, "{vs}a", 5, seed: 2026_09_01);
-            var reserved = vectorManager.GetReservedContexts();
+            var reserved = vectorManager.TestHookGetReservedContexts();
             ClassicAssert.AreEqual(1, reserved.Count, "the populated Vector Set should reserve exactly one context");
             var context = reserved[0];
 
@@ -152,9 +152,9 @@ namespace Garnet.test
             var streamedKey = Encoding.ASCII.GetBytes("streamed-element");
             var value = new byte[VectorDimensions];
             new Random(0xBEEF).NextBytes(value);
-            vectorManager.TestOnlyStreamElementIntoContext(context, streamedKey, value);
+            vectorManager.TestHookStreamElementIntoContext(context, streamedKey, value);
 
-            ClassicAssert.Greater(vectorManager.TestOnlyCountRecordsInContext(context), 0,
+            ClassicAssert.Greater(vectorManager.TestHookCountRecordsInContext(context), 0,
                 "the streamed element must be present in the namespace before the scan resumes");
 
             // Release the scan and let the whole pipeline finish.
@@ -163,7 +163,7 @@ namespace Garnet.test
 
             // The in-flight scan deleted the streamed element: crossing the boundary without a drain
             // corrupts (loses) the streamed data.
-            ClassicAssert.AreEqual(0, vectorManager.TestOnlyCountRecordsInContext(context),
+            ClassicAssert.AreEqual(0, vectorManager.TestHookCountRecordsInContext(context),
                 "the in-flight cleanup scan deleted the streamed element — the silent data loss the sync-path drain prevents");
         }
 
@@ -183,27 +183,27 @@ namespace Garnet.test
             var db = redis.GetDatabase(0);
 
             PopulateVectorSet(db, "{vs}a", 5, seed: 2026_09_02);
-            var context = vectorManager.GetReservedContexts()[0];
+            var context = vectorManager.TestHookGetReservedContexts()[0];
 
             // Drop the set and DRAIN fully first — the sync-path ordering (empty store, then drain,
             // then stream). The cleanup scan runs to completion here, removing the set's own elements.
             _ = db.KeyDelete("{vs}a");
             vectorManager.WaitForCleanupComplete();
-            ClassicAssert.AreEqual(0, vectorManager.TestOnlyCountRecordsInContext(context),
+            ClassicAssert.AreEqual(0, vectorManager.TestHookCountRecordsInContext(context),
                 "the drain should have removed the dropped set's elements");
 
             // Now stream a record into that namespace — no in-flight cleanup remains to delete it.
             var streamedKey = Encoding.ASCII.GetBytes("streamed-element");
             var value = new byte[VectorDimensions];
             new Random(0xF00D).NextBytes(value);
-            vectorManager.TestOnlyStreamElementIntoContext(context, streamedKey, value);
+            vectorManager.TestHookStreamElementIntoContext(context, streamedKey, value);
 
-            ClassicAssert.AreEqual(1, vectorManager.TestOnlyCountRecordsInContext(context),
+            ClassicAssert.AreEqual(1, vectorManager.TestHookCountRecordsInContext(context),
                 "the streamed element must survive when the pipeline was drained before streaming");
 
             // A subsequent drain must not touch it — nothing is queued against this namespace.
             vectorManager.WaitForCleanupComplete();
-            ClassicAssert.AreEqual(1, vectorManager.TestOnlyCountRecordsInContext(context),
+            ClassicAssert.AreEqual(1, vectorManager.TestHookCountRecordsInContext(context),
                 "the streamed element must remain after a subsequent drain (nothing queued against its namespace)");
         }
     }

@@ -159,11 +159,9 @@ namespace Garnet.server
 
                     ActiveThreadSession = dropSession.storageSession;
 
-                    // Test seam: when drops are pending, hold this pass in flight so a store-empty
-                    // boundary can be crossed while native drops are still outstanding — proving the
-                    // sync-path drain barrier is what waits for them.
-                    if (!requestedDrops.IsEmpty)
-                        await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop).ConfigureAwait(false);
+#if DEBUG
+                    await TestHookPauseInNativeDropAsync().ConfigureAwait(false);
+#endif
 
                     // Process all pending drops
                     foreach (var (k, (context, indexPtr)) in requestedDrops)
@@ -388,9 +386,8 @@ namespace Garnet.server
                             continue;
                         }
 
-                        // Test seam: park here with the needCleanup snapshot built but before the delete-scan,
-                        // so a test can stream a record into one of those namespaces (mimicking diskless as-is
-                        // streaming) and prove the scan below then deletes it.
+                        // Test seam: park with the needCleanup snapshot built but before the delete-scan,
+                        // so a test can stream a record into one of those namespaces and prove the scan deletes it.
                         await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
 
                         // Take the scan/delete contexts after the pause so no ref local crosses the await.
@@ -503,19 +500,13 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Block until the entire background cleanup pipeline has quiesced: request-cleanup marking,
-        /// checkpoint-driven discovery, the in-flight cleanup scan, and native DiskANN drops.
+        /// Block until the whole cleanup pipeline has quiesced: marking, checkpoint discovery, the
+        /// cleanup scan and native DiskANN drops. <see cref="WaitForCleanupRequests"/> only covers the
+        /// first two.
         ///
-        /// Unlike <see cref="WaitForCleanupRequests"/> (which only covers the marking and checkpoint
-        /// stages), this drains the cleanup scan (<see cref="RunCleanupTaskAsync"/>) and the drop task
-        /// (<see cref="RunRequestDropTaskAsync"/>) as well, by round-tripping a sentinel through each of
-        /// their channels. After it returns, no Vector Set cleanup work is outstanding.
-        ///
-        /// Callers use this at store-emptying boundaries (FLUSH and replica full sync) AFTER the store
-        /// has been emptied, so the eviction-driven drops enqueued by emptying the store are included.
-        ///
-        /// The cleanup task must NOT be paused (via <see cref="PauseCleanupAsync"/>) when this is
-        /// called, otherwise the queued cleanup scans can never run and the wait will hang.
+        /// Call at store-emptying boundaries (FLUSH, replica full sync) AFTER the store is emptied, so
+        /// the drops that emptying enqueues are included. The cleanup task must not be paused (see
+        /// <see cref="PauseCleanupAsync"/>) or the queued scans can never run and this hangs.
         /// </summary>
         public Task WaitForCleanupCompleteAsync() => cleanupTracker.WaitAllCleanupsAsync();
 
