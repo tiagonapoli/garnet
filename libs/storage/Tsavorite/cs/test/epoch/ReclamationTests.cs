@@ -54,8 +54,7 @@ namespace Tsavorite.test.epoch
                     _ = epoch.BumpCurrentEpoch();
 
                 Assert.That(epoch.CurrentEpoch, Is.GreaterThan(reader.AnnouncedEpoch));
-                Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch),
-                    "the parked reader is the oldest announcement and must define the minimum");
+                Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch), "the parked reader is the oldest announcement and must define the minimum");
             }
             finally
             {
@@ -80,10 +79,8 @@ namespace Tsavorite.test.epoch
                     _ = epoch.BumpCurrentEpoch();
                     epoch.ProtectAndDrain();
 
-                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(reader.AnnouncedEpoch),
-                        "an epoch that a live reader had announced was declared safe to reclaim");
-                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(epoch.MinAnnouncedEpoch()),
-                        "SafeToReclaimEpoch overtook the oldest announcement in the table");
+                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(reader.AnnouncedEpoch), "an epoch that a live reader had announced was declared safe to reclaim");
+                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(epoch.MinAnnouncedEpoch()), "SafeToReclaimEpoch overtook the oldest announcement in the table");
                 }
             }
             finally
@@ -97,8 +94,7 @@ namespace Tsavorite.test.epoch
             try
             {
                 _ = epoch.BumpCurrentEpoch();
-                Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(reader.AnnouncedEpoch),
-                    "once the reader left, the epoch it held must become reclaimable");
+                Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(reader.AnnouncedEpoch), "once the reader left, the epoch it held must become reclaimable");
             }
             finally
             {
@@ -128,8 +124,7 @@ namespace Tsavorite.test.epoch
             try
             {
                 _ = epoch.BumpCurrentEpoch();
-                Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(announced),
-                    "the previously announced epoch stayed unreclaimable after the thread suspended");
+                Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(announced), "the previously announced epoch stayed unreclaimable after the thread suspended");
             }
             finally
             {
@@ -276,8 +271,7 @@ namespace Tsavorite.test.epoch
             foreach (var thread in churn)
                 Assert.That(thread.Join(TimeSpan.FromMinutes(1)), Is.True, "churn thread did not finish");
 
-            Assert.That(Volatile.Read(ref violations), Is.Zero,
-                "SafeToReclaimEpoch reached an epoch a thread was still announcing");
+            Assert.That(Volatile.Read(ref violations), Is.Zero, "SafeToReclaimEpoch reached an epoch a thread was still announcing");
         }
 
         /// <summary>

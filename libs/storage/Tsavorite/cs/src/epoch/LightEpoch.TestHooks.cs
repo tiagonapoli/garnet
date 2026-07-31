@@ -21,18 +21,18 @@ namespace Tsavorite.core
         internal long ThisThreadAnnouncedEpoch()
         {
             var entry = Metadata.Entries.GetRef(instanceId);
-            return entry == kInvalidIndex ? 0 : (*(tableAligned + entry)).localCurrentEpoch;
+            return entry == kInvalidIndex ? 0 : EntryAt(entry).localCurrentEpoch;
         }
 
         /// <summary>
         /// The epoch announced in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// </summary>
-        internal long AnnouncedEpochAt(int entry) => (*(tableAligned + entry)).localCurrentEpoch;
+        internal long AnnouncedEpochAt(int entry) => EntryAt(entry).localCurrentEpoch;
 
         /// <summary>
         /// The thread id recorded in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// </summary>
-        internal int ThreadIdAt(int entry) => (*(tableAligned + entry)).threadId;
+        internal int ThreadIdAt(int entry) => EntryAt(entry).threadId;
 
         /// <summary>
         /// Smallest epoch announced by any slot, or <see cref="CurrentEpoch"/> if none is protected.
@@ -43,7 +43,7 @@ namespace Tsavorite.core
             var min = CurrentEpoch;
             for (var index = 1; index <= kTableSize; index++)
             {
-                var announced = (*(tableAligned + index)).localCurrentEpoch;
+                var announced = EntryAt(index).localCurrentEpoch;
                 if (announced != 0 && announced < min)
                     min = announced;
             }

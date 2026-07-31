@@ -110,8 +110,7 @@ namespace Tsavorite.test.epoch
             var second = new LightEpoch();
             try
             {
-                Assert.That(second.ThisInstanceProtected(), Is.False,
-                    "a recycled instance id left stale thread-static state behind");
+                Assert.That(second.ThisInstanceProtected(), Is.False, "a recycled instance id left stale thread-static state behind");
 
                 second.Resume();
                 try

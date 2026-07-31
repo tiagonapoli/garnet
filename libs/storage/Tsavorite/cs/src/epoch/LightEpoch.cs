@@ -300,7 +300,7 @@ namespace Tsavorite.core
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
             Debug.Assert(entry > 0, "Trying to refresh unacquired epoch");
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            Debug.Assert(EntryAt(entry).threadId > 0, "Epoch table entry missing threadId");
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
@@ -525,7 +525,7 @@ namespace Tsavorite.core
             // protected region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
             ReserveEntryForThread(ref entry, epoch);
 
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            Debug.Assert(EntryAt(entry).threadId > 0, "Epoch table entry missing threadId");
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
             if (drainCount > 0)
@@ -549,7 +549,7 @@ namespace Tsavorite.core
             (*(tableAligned + entry)).threadId = 0;
 
             // Publishes the slot as free; must not be reordered before the threadId clear.
-            (*(tableAligned + entry)).localCurrentEpoch = 0;
+            EntryAt(entry).localCurrentEpoch = 0;
 
             entry = kInvalidIndex;
             if (waiterCount > 0)
@@ -608,14 +608,14 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool TryClaimEntry(int entry, long epoch)
         {
-            if ((*(tableAligned + entry)).localCurrentEpoch != 0)
+            if (EntryAt(entry).localCurrentEpoch != 0)
                 return false;
 
-            if (Interlocked.CompareExchange(ref (tableAligned + entry)->localCurrentEpoch, epoch, 0) != 0)
+            if (Interlocked.CompareExchange(ref EntryAt(entry).localCurrentEpoch, epoch, 0) != 0)
                 return false;
 
             // The slot is now exclusively ours, so threadId needs no interlocked write.
-            (*(tableAligned + entry)).threadId = Metadata.threadId;
+            EntryAt(entry).threadId = Metadata.threadId;
             return true;
         }
 

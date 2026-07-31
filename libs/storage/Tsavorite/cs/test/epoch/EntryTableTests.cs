@@ -116,12 +116,10 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 latecomer.Start();
 
-                Assert.That(acquired.Wait(TimeSpan.FromMilliseconds(500)), Is.False,
-                    "a thread acquired a slot from a completely full table");
+                Assert.That(acquired.Wait(TimeSpan.FromMilliseconds(500)), Is.False, "a thread acquired a slot from a completely full table");
 
                 _ = SpinWait.SpinUntil(() => epoch.WaiterCount > 0, Generous);
-                Assert.That(epoch.WaiterCount, Is.GreaterThan(0),
-                    "the blocked thread never parked on the waiter semaphore");
+                Assert.That(epoch.WaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
 
                 releaseFirst.Set();
 
@@ -192,8 +190,7 @@ namespace Tsavorite.test.epoch
                 disposable.Dispose();
 
                 Assert.That(waiter.Join(Generous), Is.True, "the parked thread was never released by Dispose");
-                Assert.That(caught, Is.TypeOf<ObjectDisposedException>(),
-                    $"expected ObjectDisposedException, got {caught?.GetType().Name ?? "no exception"}");
+                Assert.That(caught, Is.TypeOf<ObjectDisposedException>(), $"expected ObjectDisposedException, got {caught?.GetType().Name ?? "no exception"}");
             }
             finally
             {
