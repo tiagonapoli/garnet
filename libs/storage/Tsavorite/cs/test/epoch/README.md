@@ -43,6 +43,21 @@ That blind spot hid a real ARM-only use-after-free (`Release()`'s slot clear
 passing the reader's own dereference) until the herd7 suite found it. This spec
 closes it by splitting the dereference into an issue step and a bind step.
 
+`CasAnnounceProtectedQuery.tla` is the only spec in which a thread *performs*
+`ThisInstanceProtected()` and branches on the result, rather than the invariant
+inspecting the slot from outside. That distinction matters because the fix
+demotes `Entry.threadId` from the claim word to a plain store that trails the
+claim, while `TrySuspend()` and `ResumeIfNotProtected()` still decide what to do
+based on it. A false positive is unreachable — the query also tests the
+thread-private entry index — so the hazard is the false negative, and the spec
+states its invariants over what each API then does: `TrySuspend` returns `false`
+and never suspends, pinning `SafeToReclaimEpoch` for the life of the process,
+and `ResumeIfNotProtected` returns `true` and acquires a *second* slot,
+orphaning the first. Its `upstream_*` rows keep the fix's CAS but restore
+upstream's `Release()` order and fail under plain `tso`, with no reordering
+involved at all — the trailing `threadId = 0` is simply issued after the slot is
+already free, so the next owner can claim and publish in between.
+
 Run everything in Docker:
 
 ```
@@ -76,6 +91,7 @@ which is what you want to open one in the TLA+ Toolbox.
 | Claiming the slot with `CAS(localCurrentEpoch, 0 -> epoch)` closes the store-buffering window against `ComputeNewSafeToReclaimEpoch` | `CasAnnounceOneReader`, `CasAnnounceTwoReaders`, `CasAnnounceSymmetricPeers` |
 | A plain store in `Release()` is not enough once StoreStore is relaxed — the unpublish can wipe the next owner's announce | `CasAnnounceTwoReaders_plainrelease_*` |
 | `Entry.threadId` no longer participates in slot ownership once the CAS carries the announce | `CasAnnounceNoThreadId`, `CasAnnounceTwoReaders_nothreadid_*` |
+| Because `threadId` is now a plain store trailing the claim, `Release()` must clear it *before* unpublishing the slot, or `TrySuspend()` / `ResumeIfNotProtected()` report a protected thread as unprotected — and that ordering is load-bearing on plain x86, not only under relaxed StoreStore | `CasAnnounceProtectedQuery` (the `upstream_*` rows) |
 | The refresh announce in `ProtectAndDrain` is a load-side message-passing hazard; an acquire load of `CurrentEpoch` is necessary and sufficient, and a release store is not enough | `CasAnnounceResumeRefreshWeak` (the `armlb` rows) |
 | The acquire announce and the refresh announce fail in different shapes, so the CAS cannot be weakened to a release store | `CasAnnounceResumeRefreshWeak_acqplain_armlb`, `_acqrelease_armlb` |
 

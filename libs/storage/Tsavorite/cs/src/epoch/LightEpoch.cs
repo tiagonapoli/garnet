@@ -672,7 +672,10 @@ namespace Tsavorite.core
             Debug.Assert(ReadAnnouncedEpochRelaxed(entry) != 0,
                 "Trying to release unprotected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
-            // Clear "ThisInstanceProtected()" (non-static epoch table)
+            // Cleared before the slot is published as free: otherwise the next owner claims
+            // the slot and publishes its own threadId, and this trailing store wipes it,
+            // making TrySuspend()/ResumeIfNotProtected() misreport a protected thread.
+            // See formal-verification/tla/CasAnnounceProtectedQuery.tla (the upstream_* rows).
             WriteThreadIdRelaxed(entry, 0);
 
             // Publishes the slot as free; must not be hoisted above the threadId clear.
