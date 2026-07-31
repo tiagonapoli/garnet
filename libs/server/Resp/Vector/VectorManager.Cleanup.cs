@@ -550,6 +550,42 @@ namespace Garnet.server
         public void WaitForCleanupComplete() => AsyncUtils.BlockingWait(WaitForCleanupCompleteAsync());
 
         /// <summary>
+        /// For testing purposes, the number of Vector Set contexts that are still reserved (in use,
+        /// cleaning up, or migrating) across every <see cref="ContextMetadata"/> block. Zero means the
+        /// reservation bitmap is fully reset — no Vector Set context is outstanding.
+        /// </summary>
+        internal int GetReservedContextCount()
+        {
+            lock (this)
+            {
+                var count = 0;
+                for (var i = 0; i < contextMetadatas.Length; i++)
+                {
+                    count += contextMetadatas[i].ReservedCount;
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>
+        /// For testing purposes, the number of <see cref="ContextMetadata"/> blocks still pending
+        /// persistence. Zero means no stale dirty index can fault the next UpdateContextMetadata.
+        /// </summary>
+        internal int GetDirtyContextMetadataCount()
+        {
+            lock (this)
+            {
+                return dirtyContextMetadatas.Count;
+            }
+        }
+
+        /// <summary>
+        /// For testing purposes, the number of native DiskANN index drops still pending.
+        /// </summary>
+        internal int GetPendingDropCount() => requestedDrops.Count;
+
+        /// <summary>
         /// Called when a Vector Set is discovered (typically via compaction) to _potentially_ be deleted.
         /// 
         /// Contexts and keys are retained for a final liveliness check when checkpointing completes.

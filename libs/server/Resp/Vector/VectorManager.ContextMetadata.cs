@@ -60,6 +60,12 @@ namespace Garnet.server
             public readonly bool IsEmpty
             => inUse == 0 && migrating == 0 && cleaningUp == 0;
 
+            /// <summary>
+            /// Number of contexts in this block that are reserved for any reason (in use, cleaning up,
+            /// or migrating). Used by tests to assert the reservation bitmap has fully reset.
+            /// </summary>
+            internal readonly int ReservedCount => BitOperations.PopCount(inUse | cleaningUp | migrating);
+
             public readonly bool IsInUse(bool allowZero, ushort context)
             {
                 Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
