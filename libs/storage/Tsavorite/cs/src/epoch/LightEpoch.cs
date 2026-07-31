@@ -300,7 +300,7 @@ namespace Tsavorite.core
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
             Debug.Assert(entry > 0, "Trying to refresh unacquired epoch");
-            Debug.Assert(EntryAt(entry).threadId > 0, "Epoch table entry missing threadId");
+            AssertSlotClaimed(entry);
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
@@ -525,7 +525,7 @@ namespace Tsavorite.core
             // protected region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
             ReserveEntryForThread(ref entry, epoch);
 
-            Debug.Assert(EntryAt(entry).threadId > 0, "Epoch table entry missing threadId");
+            AssertSlotClaimed(entry);
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
             if (drainCount > 0)
