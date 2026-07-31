@@ -131,5 +131,13 @@ namespace Garnet.common
         /// the cleanup pipeline mid-drain across a store-empty boundary to prove the sync-path drain.
         /// </summary>
         VectorSet_Pause_In_Native_Index_Drop,
+
+        /// <summary>
+        /// Vector Set: pause inside the background cleanup scan after the <c>needCleanup</c> snapshot
+        /// has been built but before the delete-scan (<c>IterateLookupSnapshot</c>) runs. Lets a test
+        /// stream a record into a namespace already queued for cleanup and prove the in-flight scan
+        /// then deletes that just-streamed record — the corruption the sync-path drain prevents.
+        /// </summary>
+        VectorSet_Pause_In_Cleanup_Scan,
     }
 }

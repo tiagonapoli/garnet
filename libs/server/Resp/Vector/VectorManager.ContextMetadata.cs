@@ -66,6 +66,22 @@ namespace Garnet.server
             /// </summary>
             internal readonly int ReservedCount => BitOperations.PopCount(inUse | cleaningUp | migrating);
 
+            /// <summary>
+            /// Add every reserved (in use, cleaning up, or migrating) context in this block to
+            /// <paramref name="into"/>, composed with the block's <paramref name="offset"/>. Used by
+            /// tests to discover the exact context a Vector Set reserved.
+            /// </summary>
+            internal readonly void CollectReservedContexts(ulong offset, List<ulong> into)
+            {
+                var reserved = inUse | cleaningUp | migrating;
+                while (reserved != 0)
+                {
+                    var bit = BitOperations.TrailingZeroCount(reserved);
+                    reserved &= reserved - 1;
+                    into.Add(offset + ((ulong)bit * ContextStep));
+                }
+            }
+
             public readonly bool IsInUse(bool allowZero, ushort context)
             {
                 Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
