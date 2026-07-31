@@ -264,6 +264,70 @@ namespace Tsavorite.core
             waiterSemaphore.Dispose();
         }
 
+        #region Epoch table word access
+
+        // Every access to the epoch table's two shared words goes through an accessor named for the
+        // ordering it provides, so that `Relaxed` records an argued choice rather than a forgotten
+        // barrier. The words cannot be `volatile` (C# forbids it on `long`, and they are reached
+        // through an `Entry*` and passed by `ref` to Interlocked), and a blanket acquire/release
+        // would not constrain Store->Load anyway -- the reordering the announce hazard needs.
+        //
+        // The ordering argued here is x86-64's (TSO): stores are not reordered with older stores,
+        // and loads are not reordered with older loads, so the only fence needed is the one the
+        // claim CAS already provides. Weaker architectures need explicit acquire/release on two of
+        // these accessors; that is deliberately left to a follow-up change.
+
+        /// <summary>
+        /// Reference to slot <paramref name="entry"/>'s announced-epoch word, for interlocked use.
+        /// Doubles as the ownership word: 0 means free, non-zero means claimed.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        ref long AnnouncedEpochRef(int entry) => ref (tableAligned + entry)->localCurrentEpoch;
+
+        /// <summary>
+        /// Unordered read, for the reclaimer's table scans. Stale is safe both ways: stale non-zero
+        /// only holds SafeToReclaimEpoch back, and stale zero cannot follow a completed claim CAS.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        long ReadAnnouncedEpochRelaxed(int entry) => (tableAligned + entry)->localCurrentEpoch;
+
+        /// <summary>
+        /// Unordered write to a slot this thread owns; the value came from a plain read of
+        /// <see cref="CurrentEpoch"/> and no ordering is claimed for this store.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void WriteAnnouncedEpochRelaxed(int entry, long epoch) => (tableAligned + entry)->localCurrentEpoch = epoch;
+
+        /// <summary>
+        /// Publishes the slot as free. On x86-64 this store cannot be reordered before the preceding
+        /// threadId clear, which would let the next claimer's threadId be wiped by that clear.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void FreeSlot(int entry) => (tableAligned + entry)->localCurrentEpoch = 0;
+
+        /// <summary>
+        /// Unordered read; the thread id is only ever compared against the reading thread's own id,
+        /// which no other thread can write.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        int ReadThreadIdRelaxed(int entry) => (tableAligned + entry)->threadId;
+
+        /// <summary>
+        /// Unordered write; both call sites hold the slot exclusively (after a winning claim CAS,
+        /// and before the store that frees it).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        void WriteThreadIdRelaxed(int entry, int threadId) => (tableAligned + entry)->threadId = threadId;
+
+        /// <summary>
+        /// Unordered read of the global epoch. On x86-64 loads are not reordered with older loads,
+        /// so the refresh path needs no acquire to see the unlink that preceded the bump.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        long ReadCurrentEpochRelaxed() => CurrentEpoch;
+
+        #endregion Epoch table word access
+
         /// <summary>
         /// Check whether current epoch instance is protected on this thread
         /// </summary>
@@ -272,8 +336,63 @@ namespace Tsavorite.core
         public bool ThisInstanceProtected()
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
-            return kInvalidIndex != entry && (*(tableAligned + entry)).threadId == Metadata.threadId;
+            return entry != kInvalidIndex && ReadThreadIdRelaxed(entry) == Metadata.threadId;
         }
+
+        /// <summary>
+        /// The epoch table index this thread currently holds for this instance, or 0 if unprotected.
+        /// </summary>
+        internal int ThisThreadEntry() => Metadata.Entries.GetRef(instanceId);
+
+        /// <summary>
+        /// The epoch this thread currently announces for this instance, or 0 if unprotected.
+        /// </summary>
+        internal long ThisThreadAnnouncedEpoch()
+        {
+            var entry = Metadata.Entries.GetRef(instanceId);
+            return entry == kInvalidIndex ? 0 : ReadAnnouncedEpochRelaxed(entry);
+        }
+
+        /// <summary>
+        /// The epoch announced in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
+        /// </summary>
+        internal long AnnouncedEpochAt(int entry) => ReadAnnouncedEpochRelaxed(entry);
+
+        /// <summary>
+        /// The thread id recorded in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
+        /// </summary>
+        internal int ThreadIdAt(int entry) => ReadThreadIdRelaxed(entry);
+
+        /// <summary>
+        /// Smallest epoch announced by any slot, or <see cref="CurrentEpoch"/> if none is protected.
+        /// <see cref="SafeToReclaimEpoch"/> must always stay strictly below this.
+        /// </summary>
+        internal long MinAnnouncedEpoch()
+        {
+            var min = ReadCurrentEpochRelaxed();
+            for (var index = 1; index <= kTableSize; index++)
+            {
+                var announced = ReadAnnouncedEpochRelaxed(index);
+                if (announced != 0 && announced < min)
+                    min = announced;
+            }
+            return min;
+        }
+
+        /// <summary>
+        /// Number of threads parked waiting for a table slot.
+        /// </summary>
+        internal int WaiterCount => waiterCount & ~kDisposedFlag;
+
+        /// <summary>
+        /// Capacity of the drain list.
+        /// </summary>
+        internal static int DrainListCapacity => kDrainListSize;
+
+        /// <summary>
+        /// Maximum number of concurrent <see cref="LightEpoch"/> instances.
+        /// </summary>
+        internal static int MaxInstanceCount => InstanceIndexBuffer.MaxInstances;
 
         /// <summary>
         /// Try to suspend the epoch, if it is currently held
@@ -300,15 +419,15 @@ namespace Tsavorite.core
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
             Debug.Assert(entry > 0, "Trying to refresh unacquired epoch");
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            Debug.Assert(ReadThreadIdRelaxed(entry) > 0, "Epoch table entry missing threadId");
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
-            (*(tableAligned + entry)).localCurrentEpoch = CurrentEpoch;
+            WriteAnnouncedEpochRelaxed(entry, ReadCurrentEpochRelaxed());
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
             if (drainCount > 0)
-                Drain((*(tableAligned + entry)).localCurrentEpoch);
+                Drain(ReadAnnouncedEpochRelaxed(entry));
 
             if (waiterCount > 0)
             {
@@ -441,8 +560,8 @@ namespace Tsavorite.core
 
             for (var index = 1; index <= kTableSize; index++)
             {
-                var entry_epoch = (*(tableAligned + index)).localCurrentEpoch;
-                if (0 != entry_epoch)
+                var entry_epoch = ReadAnnouncedEpochRelaxed(index);
+                if (entry_epoch != 0)
                 {
                     if (entry_epoch < oldestOngoingCall)
                         oldestOngoingCall = entry_epoch;
@@ -467,8 +586,8 @@ namespace Tsavorite.core
                 Thread.MemoryBarrier();
                 for (var index = 1; index <= kTableSize; index++)
                 {
-                    var entry_epoch = (*(tableAligned + index)).localCurrentEpoch;
-                    if (0 != entry_epoch)
+                    var entry_epoch = ReadAnnouncedEpochRelaxed(index);
+                    if (entry_epoch != 0)
                         return;
                 }
                 Resume();
@@ -518,21 +637,20 @@ namespace Tsavorite.core
             Debug.Assert(entry == kInvalidIndex,
                 "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
-            // Reserve an entry in the epoch table for this thread
-            ReserveEntryForThread(ref entry);
+            // Relaxed is deliberate; see ReadCurrentEpochRelaxed().
+            var epoch = ReadCurrentEpochRelaxed();
 
-            Debug.Assert((*(tableAligned + entry)).localCurrentEpoch == 0,
-                "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            // The reservation CAS writes localCurrentEpoch, so claiming the slot and announcing the
+            // epoch are one locked RMW -- the announce is globally visible before any load in the
+            // protected region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
+            ReserveEntryForThread(ref entry, epoch);
 
-            // Protect CurrentEpoch by copying it to the instance-specific epoch table
-            // so that ComputeNewSafeToReclaimEpoch() will see it.
-            (*(tableAligned + entry)).localCurrentEpoch = CurrentEpoch;
+            Debug.Assert(ReadThreadIdRelaxed(entry) > 0, "Epoch table entry missing threadId");
 
             // Max epoch across all threads may have advanced, so check for pending drain actions to process
             if (drainCount > 0)
             {
-                Drain((*(tableAligned + entry)).localCurrentEpoch);
+                Drain(ReadAnnouncedEpochRelaxed(entry));
             }
         }
 
@@ -544,12 +662,14 @@ namespace Tsavorite.core
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
-            Debug.Assert((*(tableAligned + entry)).localCurrentEpoch != 0,
+            Debug.Assert(ReadAnnouncedEpochRelaxed(entry) != 0,
                 "Trying to release unprotected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
             // Clear "ThisInstanceProtected()" (non-static epoch table)
-            (*(tableAligned + entry)).localCurrentEpoch = 0;
-            (*(tableAligned + entry)).threadId = 0;
+            WriteThreadIdRelaxed(entry, 0);
+
+            // Publishes the slot as free; must not be reordered before the threadId clear.
+            FreeSlot(entry);
 
             entry = kInvalidIndex;
             if (waiterCount > 0)
@@ -560,22 +680,20 @@ namespace Tsavorite.core
         /// Try to acquire an entry by probing startOffset1, startOffset2, 
         /// then circling twice around the epoch table. On a successful acquire, 
         /// startOffset1 contains the acquired offset so that the next acquire 
-        /// can optimistically get the same slot. This method relies on the fact 
-        /// that no thread will ever have ID 0.
+        /// can optimistically get the same slot.
+        /// 
+        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>, so
+        /// reserving the slot and announcing the epoch are one locked RMW. Relies on the fact that
+        /// a protected thread never announces epoch 0.
         /// </summary>
         /// <returns>True if entry was acquired, false if table is full</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        bool TryAcquireEntry(ref int entry)
+        bool TryAcquireEntry(ref int entry, long epoch)
         {
             // Try primary offset
             entry = Metadata.startOffset1;
-            if (0 == (tableAligned + entry)->threadId)
-            {
-                if (0 == Interlocked.CompareExchange(
-                    ref (tableAligned + entry)->threadId,
-                    Metadata.threadId, 0))
-                    return true;
-            }
+            if (TryClaimEntry(entry, epoch))
+                return true;
 
             // Try alternate offset
             var tmp = Metadata.startOffset1;
@@ -583,13 +701,8 @@ namespace Tsavorite.core
             Metadata.startOffset2 = tmp;
 
             entry = Metadata.startOffset1;
-            if (0 == (tableAligned + entry)->threadId)
-            {
-                if (0 == Interlocked.CompareExchange(
-                    ref (tableAligned + entry)->threadId,
-                    Metadata.threadId, 0))
-                    return true;
-            }
+            if (TryClaimEntry(entry, epoch))
+                return true;
 
             // Circle twice around the table looking for free entries
             for (var i = 0; i < 2 * kTableSize; i++)
@@ -599,13 +712,8 @@ namespace Tsavorite.core
                     Metadata.startOffset1 -= kTableSize;
 
                 entry = Metadata.startOffset1;
-                if (0 == (tableAligned + entry)->threadId)
-                {
-                    if (0 == Interlocked.CompareExchange(
-                        ref (tableAligned + entry)->threadId,
-                        Metadata.threadId, 0))
-                        return true;
-                }
+                if (TryClaimEntry(entry, epoch))
+                    return true;
             }
 
             // Note: Metadata.startOffset1 should now be back to where it started because
@@ -615,13 +723,30 @@ namespace Tsavorite.core
         }
 
         /// <summary>
+        /// Claim a single epoch table slot by CAS-ing the announced epoch into it.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        bool TryClaimEntry(int entry, long epoch)
+        {
+            if (ReadAnnouncedEpochRelaxed(entry) != 0)
+                return false;
+
+            if (Interlocked.CompareExchange(ref AnnouncedEpochRef(entry), epoch, 0) != 0)
+                return false;
+
+            // The slot is now exclusively ours, so threadId needs no interlocked write.
+            WriteThreadIdRelaxed(entry, Metadata.threadId);
+            return true;
+        }
+
+        /// <summary>
         /// Reserve entry for thread. First try synchronous acquire, then fall back to a SemaphoreSlim wait.
         /// </summary>
         /// <returns>Reserved entry</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void ReserveEntry(ref int entry)
+        void ReserveEntry(ref int entry, long epoch)
         {
-            if (TryAcquireEntry(ref entry))
+            if (TryAcquireEntry(ref entry, epoch))
                 return;
 
             // Table is full, fall back to slow path with waiting
@@ -649,7 +774,9 @@ namespace Tsavorite.core
                     // us waiting on the semaphore forever in case we increment waiterCount
                     // immediately after the epoch releaser sees a zero waiterCount (and
                     // therefore does not release the semaphore).
-                    if (TryAcquireEntry(ref entry))
+                    // Re-read CurrentEpoch on each attempt so a long wait does not announce a
+                    // stale epoch and pin reclamation behind this thread.
+                    if (TryAcquireEntry(ref entry, ReadCurrentEpochRelaxed()))
                         return;
 
                     // No slot available, wait for a signal from Release()
@@ -671,16 +798,16 @@ namespace Tsavorite.core
         /// </summary>
         /// <returns>Reserved entry</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void ReserveEntryForThread(ref int entry)
+        void ReserveEntryForThread(ref int entry, long epoch)
         {
             if (Metadata.threadId == 0) // run once per thread for performance
             {
                 Metadata.threadId = Environment.CurrentManagedThreadId;
-                var code = (uint)Utility.Murmur3(Metadata.threadId);
+                var code = (uint)Murmur3.Hash(Metadata.threadId);
                 Metadata.startOffset1 = (ushort)(1 + (code % kTableSize));
                 Metadata.startOffset2 = (ushort)(1 + ((code >> 16) % kTableSize));
             }
-            ReserveEntry(ref entry);
+            ReserveEntry(ref entry, epoch);
         }
 
         /// <inheritdoc/>
@@ -698,11 +825,11 @@ namespace Tsavorite.core
             bool first = true;
             for (int i = 1; i <= kTableSize; i++)
             {
-                var e = *(tableAligned + i);
-                if (e.threadId != 0)
+                var tid = ReadThreadIdRelaxed(i);
+                if (tid != 0)
                 {
                     if (!first) sb.Append(", ");
-                    sb.Append($"tid={e.threadId} epoch={e.localCurrentEpoch}");
+                    sb.Append($"tid={tid} epoch={ReadAnnouncedEpochRelaxed(i)}");
                     first = false;
                 }
             }
