@@ -79,8 +79,7 @@ namespace Tsavorite.test.epoch
             var word = epoch.AllocateUserWord(1234);
             try
             {
-                Assert.That(epoch.GetMinUserWord(word), Is.EqualTo(1234),
-                    "every entry's slot must carry the initial value, or the minimum is meaningless");
+                Assert.That(epoch.GetMinUserWord(word), Is.EqualTo(1234), "every entry's slot must carry the initial value, or the minimum is meaningless");
             }
             finally
             {
@@ -131,8 +130,7 @@ namespace Tsavorite.test.epoch
                         epoch.ThisThreadUserWord(words[i]) = 100 + i;
 
                     for (var i = 0; i < words.Count; i++)
-                        Assert.That(epoch.GetMinUserWord(words[i]), Is.EqualTo(100 + i),
-                            $"slot {words[i]} did not hold its own value");
+                        Assert.That(epoch.GetMinUserWord(words[i]), Is.EqualTo(100 + i), $"slot {words[i]} did not hold its own value");
                 }
                 finally
                 {
@@ -160,8 +158,7 @@ namespace Tsavorite.test.epoch
                 epoch.ThisThreadUserWord(word) = 42;
                 epoch.Suspend();
 
-                Assert.That(epoch.GetMinUserWord(word), Is.EqualTo(42),
-                    "LightEpoch must not reset user words when the thread suspends");
+                Assert.That(epoch.GetMinUserWord(word), Is.EqualTo(42), "LightEpoch must not reset user words when the thread suspends");
             }
             finally
             {

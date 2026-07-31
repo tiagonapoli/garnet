@@ -37,8 +37,7 @@ namespace Tsavorite.test.epoch
             try
             {
                 epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref ran));
-                Assert.That(Volatile.Read(ref ran), Is.EqualTo(1),
-                    "with no other thread protected the action's epoch is immediately reclaimable");
+                Assert.That(Volatile.Read(ref ran), Is.EqualTo(1), "with no other thread protected the action's epoch is immediately reclaimable");
             }
             finally
             {
@@ -71,8 +70,7 @@ namespace Tsavorite.test.epoch
 
             reader.LeaveAndJoin();
 
-            Assert.That(Volatile.Read(ref drained), Is.EqualTo(1),
-                "the last thread to suspend must drain the pending action itself");
+            Assert.That(Volatile.Read(ref drained), Is.EqualTo(1), "the last thread to suspend must drain the pending action itself");
         }
 
         [Test]
@@ -101,8 +99,7 @@ namespace Tsavorite.test.epoch
 
             reader.LeaveAndJoin();
 
-            Assert.That(counts, Is.All.EqualTo(1),
-                $"every registered action must run exactly once; got [{string.Join(",", counts)}]");
+            Assert.That(counts, Is.All.EqualTo(1), $"every registered action must run exactly once; got [{string.Join(",", counts)}]");
         }
 
         /// <summary>
@@ -144,13 +141,11 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 latecomer.Start();
 
-                Assert.That(registered.Wait(TimeSpan.FromMilliseconds(500)), Is.False,
-                    "registered an action into a full drain list while nothing was reclaimable");
+                Assert.That(registered.Wait(TimeSpan.FromMilliseconds(500)), Is.False, "registered an action into a full drain list while nothing was reclaimable");
 
                 reader.LeaveAndJoin();
 
-                Assert.That(registered.Wait(TimeSpan.FromSeconds(30)), Is.True,
-                    "the blocked registration never completed after the drain list could be emptied");
+                Assert.That(registered.Wait(TimeSpan.FromSeconds(30)), Is.True, "the blocked registration never completed after the drain list could be emptied");
                 Assert.That(latecomer.Join(TimeSpan.FromSeconds(30)), Is.True);
 
                 Assert.That(counts, Is.All.EqualTo(1), "the backlog did not drain exactly once each");
@@ -187,8 +182,7 @@ namespace Tsavorite.test.epoch
 
             reader.LeaveAndJoin();
 
-            Assert.That(order.ToArray(), Is.EqualTo(Enumerable.Range(0, ActionCount).ToArray()),
-                "actions registered against increasing epochs must drain in that order");
+            Assert.That(order.ToArray(), Is.EqualTo(Enumerable.Range(0, ActionCount).ToArray()), "actions registered against increasing epochs must drain in that order");
         }
 
         [Test]
@@ -241,8 +235,7 @@ namespace Tsavorite.test.epoch
                 epoch.Suspend();
             }
 
-            Assert.That(counts, Is.All.EqualTo(1),
-                $"{counts.Count(c => c == 0)} actions never ran and {counts.Count(c => c > 1)} ran more than once");
+            Assert.That(counts, Is.All.EqualTo(1), $"{counts.Count(c => c == 0)} actions never ran and {counts.Count(c => c > 1)} ran more than once");
         }
 
         [Test]

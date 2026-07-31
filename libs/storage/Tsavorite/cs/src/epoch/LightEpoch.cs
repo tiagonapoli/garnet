@@ -14,7 +14,7 @@ namespace Tsavorite.core
     /// <summary>
     /// Epoch protection
     /// </summary>
-    public sealed unsafe class LightEpoch : IEpochAccessor
+    public sealed unsafe partial class LightEpoch : IEpochAccessor
     {
         /// <summary>
         /// Buffer to track information for LightEpoch instances. This is used:
@@ -278,42 +278,42 @@ namespace Tsavorite.core
         /// Doubles as the ownership word: 0 means free, non-zero means claimed.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        ref long AnnouncedEpochRef(int entry) => ref (tableAligned + entry)->localCurrentEpoch;
+        ref long AnnouncedEpochRef(int entry) => ref EntryAt(entry).localCurrentEpoch;
 
         /// <summary>
         /// Unordered read, for the reclaimer's table scans. Stale is safe both ways: stale non-zero
         /// only holds SafeToReclaimEpoch back, and stale zero cannot follow a completed claim CAS.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        long ReadAnnouncedEpochRelaxed(int entry) => (tableAligned + entry)->localCurrentEpoch;
+        long ReadAnnouncedEpochRelaxed(int entry) => EntryAt(entry).localCurrentEpoch;
 
         /// <summary>
         /// Unordered write to a slot this thread owns; ordering comes from the acquire load of
         /// <see cref="CurrentEpoch"/> that produced the value, not from this store.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void WriteAnnouncedEpochRelaxed(int entry, long epoch) => (tableAligned + entry)->localCurrentEpoch = epoch;
+        void WriteAnnouncedEpochRelaxed(int entry, long epoch) => EntryAt(entry).localCurrentEpoch = epoch;
 
         /// <summary>
         /// Release store publishing the slot as free. Hoisting it above the preceding threadId clear
         /// would let the next claimer's threadId be wiped by that clear.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void FreeSlotRelease(int entry) => Volatile.Write(ref (tableAligned + entry)->localCurrentEpoch, 0);
+        void FreeSlotRelease(int entry) => Volatile.Write(ref EntryAt(entry).localCurrentEpoch, 0);
 
         /// <summary>
         /// Unordered read; the thread id is only ever compared against the reading thread's own id,
         /// which no other thread can write.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        int ReadThreadIdRelaxed(int entry) => (tableAligned + entry)->threadId;
+        int ReadThreadIdRelaxed(int entry) => EntryAt(entry).threadId;
 
         /// <summary>
         /// Unordered write; both call sites hold the slot exclusively (after a winning claim CAS,
         /// and before the release store that frees it).
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void WriteThreadIdRelaxed(int entry, int threadId) => (tableAligned + entry)->threadId = threadId;
+        void WriteThreadIdRelaxed(int entry, int threadId) => EntryAt(entry).threadId = threadId;
 
         /// <summary>
         /// Acquire load for the refresh path: reading the bumped epoch must imply seeing the unlink
@@ -963,7 +963,7 @@ namespace Tsavorite.core
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         ref long UserWordRef(int entryIndex, int wordIndex)
-            => ref Unsafe.Add(ref (*(tableAligned + entryIndex)).userWord0, wordIndex);
+            => ref Unsafe.Add(ref EntryAt(entryIndex).userWord0, wordIndex);
 
         #endregion
 

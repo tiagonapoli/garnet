@@ -90,13 +90,10 @@ namespace Tsavorite.test.epoch
             TestContext.Out.WriteLine($"quarantine litmus: {result} cores({cores})");
 
             // Vacuity guards first: a clean run only means something if it raced and reclaimed.
-            Assert.That(result.SampledRounds, Is.GreaterThan(0),
-                "the reader never captured a live page pointer, so the race window was never sampled and this run proves nothing");
-            Assert.That(result.Quarantines, Is.GreaterThan(0),
-                "the epoch never decided any page was safe to recycle, so this run could not have failed regardless of correctness");
+            Assert.That(result.SampledRounds, Is.GreaterThan(0), "the reader never captured a live page pointer, so the race window was never sampled and this run proves nothing");
+            Assert.That(result.Quarantines, Is.GreaterThan(0), "the epoch never decided any page was safe to recycle, so this run could not have failed regardless of correctness");
 
-            Assert.That(result.Violations, Is.EqualTo(0),
-                $"a protected reader read a recycled page - use-after-free. {result}");
+            Assert.That(result.Violations, Is.EqualTo(0), $"a protected reader read a recycled page - use-after-free. {result}");
         }
 
         /// <summary>
@@ -112,10 +109,8 @@ namespace Tsavorite.test.epoch
 
             TestContext.Out.WriteLine($"quarantine litmus self-test: {result} cores({cores})");
 
-            Assert.That(result.SampledRounds, Is.GreaterThan(0),
-                "the reader never captured a live page pointer, so even the forced failure could not be observed");
-            Assert.That(result.Violations, Is.GreaterThan(0),
-                "THE DETECTOR IS BLIND: pages were recycled under the reader on every round and nothing was reported, so every clean verdict from the quarantine litmus is void");
+            Assert.That(result.SampledRounds, Is.GreaterThan(0), "the reader never captured a live page pointer, so even the forced failure could not be observed");
+            Assert.That(result.Violations, Is.GreaterThan(0), "THE DETECTOR IS BLIND: pages were recycled under the reader on every round and nothing was reported, so every clean verdict from the quarantine litmus is void");
         }
     }
 }
