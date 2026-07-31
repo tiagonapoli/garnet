@@ -373,6 +373,11 @@ namespace Garnet.server
         /// <summary>
         /// Called during recovery for each Vector Set index key.
         /// </summary>
+        /// <remarks>
+        /// <see cref="recoveredIndexes"/> is released by <see cref="ResumePostRecovery"/>, which runs
+        /// unconditionally at startup, so any later recovery — a replica attaching by disk-based full
+        /// sync, for instance — finds it null and has to reallocate it.
+        /// </remarks>
         public void RecoveredVectorSetIndexKey(ref LogRecord record)
         {
             if (record.ValueSpan.Length != IndexSize)
@@ -381,12 +386,17 @@ namespace Garnet.server
             }
 
             ReadIndex(record.ValueSpan, out var context, out _, out _, out _, out _, out _, out _, out _, out _);
-            recoveredIndexes[context] = 0;
+            (recoveredIndexes ??= new())[context] = 0;
         }
 
         /// <summary>
         /// Called during recovery for each ContextMetadata record.
         /// </summary>
+        /// <remarks>
+        /// <see cref="recoveredMetadata"/> is released by <see cref="ResumePostRecovery"/>, which runs
+        /// unconditionally at startup, so any later recovery — a replica attaching by disk-based full
+        /// sync, for instance — finds it null and has to reallocate it.
+        /// </remarks>
         public void RecoveredContextMetadata(ref LogRecord record)
         {
             if (record.ValueSpan.Length != ContextMetadata.Size || record.KeyBytes.Length != sizeof(int))
@@ -405,7 +415,7 @@ namespace Garnet.server
                 return;
             }
 
-            if (!recoveredMetadata.TryAdd(index, metadata))
+            if (!(recoveredMetadata ??= new()).TryAdd(index, metadata))
             {
                 throw new GarnetException($"Recovered multiple instances of the same ContextMetadata: {index}");
             }
