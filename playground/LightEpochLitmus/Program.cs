@@ -141,7 +141,7 @@ namespace Tsavorite.epoch.litmus
 
         static void WriteHeader(Options options, LitmusCores cores, Emulation.Result emulated)
         {
-            Console.WriteLine($"Garnet.LightEpoch.litmus  {RuntimeInformation.FrameworkDescription}");
+            Console.WriteLine($"LightEpochLitmus  {RuntimeInformation.FrameworkDescription}");
             Console.WriteLine($"  os        {RuntimeInformation.OSDescription}");
             Console.WriteLine($"  arch      {RuntimeInformation.ProcessArchitecture} ({Environment.ProcessorCount} logical processors)");
             Console.WriteLine($"  cores     {cores}");
@@ -223,7 +223,7 @@ namespace Tsavorite.epoch.litmus
             A reader announces its epoch and dereferences a page while a reclaimer retires that
             same page. The run asserts the epoch never authorises the free under the live reader.
 
-            usage: Garnet.LightEpoch.litmus [options]
+            usage: LightEpochLitmus [options]
 
               --seconds N          main soak duration, per iteration (default 30)
               --iterations N       repeat the soak N times (default 1)
@@ -313,7 +313,7 @@ namespace Tsavorite.epoch.litmus
 
             internal object ToPayload() => new
             {
-                tool = "Garnet.LightEpoch.litmus",
+                tool = "LightEpochLitmus",
                 verdict = Verdict,
                 exitCode = ExitCode,
                 machine = new

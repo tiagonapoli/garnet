@@ -51,6 +51,7 @@
     <Project Path="playground/CommandInfoUpdater/CommandInfoUpdater.csproj" />
     <Project Path="playground/Embedded.perftest/Embedded.perftest.csproj" />
     <Project Path="playground/GarnetClientStress/GarnetClientStress.csproj" />
+    <Project Path="playground/LightEpochLitmus/LightEpochLitmus.csproj" />
     <Project Path="playground/MigrateBench/MigrateBench.csproj" />
     <Project Path="playground/SampleModule/SampleModule.csproj" />
     <Project Path="playground/TstRunner/TstRunner.csproj" />
@@ -78,7 +79,6 @@
   </Folder>
   <Folder Name="/test/">
     <Project Path="libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj" />
-    <Project Path="libs/storage/Tsavorite/cs/test/epoch/litmus/Garnet.LightEpoch.litmus.csproj" />
     <Project Path="test/Garnet.fuzz/Garnet.fuzz.csproj" />
     <Project Path="test/standalone/BfTreeInterop.test/BfTreeInterop.test.csproj" />
     <Project Path="test/standalone/Garnet.test/Garnet.test.csproj" />
