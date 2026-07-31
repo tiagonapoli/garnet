@@ -4,8 +4,6 @@
 // Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
 #if DEBUG
 
-using System;
-using System.Buffers.Binary;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;
@@ -23,38 +21,8 @@ namespace Garnet.test
     /// no pending native drops.
     /// </summary>
     [TestFixture]
-    public class VectorFlushCleanupDrainTests : TestBase
+    public class VectorFlushCleanupDrainTests : VectorSetCleanupTestBase
     {
-        private global::Garnet.GarnetServer server;
-
-        [SetUp]
-        public void Setup()
-        {
-            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
-            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, enableVectorSetPreview: true);
-            server.Start();
-        }
-
-        [TearDown]
-        public void TearDown()
-        {
-            try { server.Dispose(); } catch { }
-            TestUtils.OnTearDown();
-        }
-
-        private static void PopulateVectorSet(IDatabase db, string key, int elements, int seed)
-        {
-            var elem = new byte[4];
-            var data = new byte[75];
-            var rand = new Random(seed);
-            for (var i = 0; i < elements; i++)
-            {
-                BinaryPrimitives.WriteInt32LittleEndian(elem, i);
-                rand.NextBytes(data);
-                _ = db.Execute("VADD", [key, "XB8", data, elem, "XPREQ8"]);
-            }
-        }
-
         /// <summary>
         /// Create several Vector Sets, each in its own context, then FLUSHDB and drain. After the
         /// barrier returns the reservation bitmap, the dirty-metadata set, and the pending-drop set
@@ -66,8 +34,7 @@ namespace Garnet.test
             const int Sets = 5;
             const int ElementsPerSet = 200;
 
-            var vectorManager = server.Provider.StoreWrapper.DefaultDatabase.VectorManager;
-            ClassicAssert.IsNotNull(vectorManager, "VectorManager not initialised — enableVectorSetPreview must be true");
+            var vectorManager = VectorManager;
 
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
             var db = redis.GetDatabase(0);
@@ -112,8 +79,7 @@ namespace Garnet.test
         [Test]
         public void FreshVectorSetAfterFlushDbSucceeds()
         {
-            var vectorManager = server.Provider.StoreWrapper.DefaultDatabase.VectorManager;
-            ClassicAssert.IsNotNull(vectorManager, "VectorManager not initialised — enableVectorSetPreview must be true");
+            var vectorManager = VectorManager;
 
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
             var db = redis.GetDatabase(0);
