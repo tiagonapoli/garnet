@@ -37,7 +37,7 @@ namespace Tsavorite.test.epoch
     /// </summary>
     [TestFixture]
     [Category("Litmus")]
-    public class LightEpochLitmusTests
+    public class LitmusTests
     {
         /// <summary>
         /// Words the reader dereferences per protected region, wrapping over the 4 KiB page. This

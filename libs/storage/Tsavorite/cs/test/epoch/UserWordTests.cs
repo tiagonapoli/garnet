@@ -15,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// cache line. Slots are claimed by bitmask CAS, and the values are owned by the application.
     /// </summary>
     [TestFixture]
-    public class LightEpochUserWordTests
+    public class UserWordTests
     {
         LightEpoch epoch;
 

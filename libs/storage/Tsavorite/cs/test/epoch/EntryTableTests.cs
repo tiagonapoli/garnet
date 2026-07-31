@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using NUnit.Framework;
 using Tsavorite.core;
@@ -13,7 +14,7 @@ namespace Tsavorite.test.epoch
     /// slot is occupied.
     /// </summary>
     [TestFixture]
-    public class LightEpochEntryTableTests
+    public class EntryTableTests
     {
         static readonly TimeSpan Generous = TimeSpan.FromSeconds(30);
 
@@ -200,6 +201,79 @@ namespace Tsavorite.test.epoch
                 foreach (var holder in holders)
                     _ = holder.Join(Generous);
             }
+        }
+
+        [Test]
+        public void SlotsAreReleasedAndReusedAcrossThreads()
+        {
+            var seen = new HashSet<int>();
+            for (var i = 0; i < 64; i++)
+            {
+                var entry = -1;
+                var t = new Thread(() =>
+                {
+                    epoch.Resume();
+                    entry = epoch.ThisThreadEntry();
+                    epoch.Suspend();
+                })
+                { IsBackground = true };
+                t.Start();
+                Assert.That(t.Join(Generous), Is.True);
+
+                Assert.That(entry, Is.GreaterThan(0));
+                _ = seen.Add(entry);
+            }
+
+            // Sequential threads must be able to recycle slots; if nothing was ever
+            // released the table would hand out 64 distinct entries.
+            Assert.That(seen.Count, Is.LessThan(64), "no epoch table slot was ever reused");
+
+            for (var i = 1; i <= epoch.EntryCount; i++)
+                Assert.That(epoch.AnnouncedEpochAt(i), Is.Zero, $"slot {i} left announced");
+        }
+
+        /// <summary>
+        /// The slot claim and the epoch announce are a single locked RMW, so two threads can never
+        /// hold the same slot and a claimed slot is never observed unannounced.
+        /// </summary>
+        [Test]
+        public void ConcurrentAcquireReleaseNeverDoubleClaimsASlot()
+        {
+            const int ThreadCount = 16;
+            const int Rounds = 20_000;
+
+            var conflicts = 0;
+            var threads = new Thread[ThreadCount];
+            using var start = new ManualResetEventSlim();
+
+            for (var t = 0; t < ThreadCount; t++)
+            {
+                threads[t] = new Thread(() =>
+                {
+                    var myId = Environment.CurrentManagedThreadId;
+                    start.Wait();
+                    for (var r = 0; r < Rounds; r++)
+                    {
+                        epoch.Resume();
+
+                        if (epoch.ThreadIdAt(epoch.ThisThreadEntry()) != myId)
+                            _ = Interlocked.Increment(ref conflicts);
+                        if (epoch.ThisThreadAnnouncedEpoch() == 0)
+                            _ = Interlocked.Increment(ref conflicts);
+
+                        epoch.ProtectAndDrain();
+                        epoch.Suspend();
+                    }
+                })
+                { IsBackground = true };
+                threads[t].Start();
+            }
+
+            start.Set();
+            foreach (var thread in threads)
+                Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True);
+
+            Assert.That(Volatile.Read(ref conflicts), Is.Zero, "a slot was claimed by two threads at once");
         }
     }
 }

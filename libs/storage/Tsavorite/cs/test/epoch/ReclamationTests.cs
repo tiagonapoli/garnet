@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using NUnit.Framework;
 using Tsavorite.core;
@@ -14,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// statement about it never overtaking a thread that is still inside a protected region.
     /// </summary>
     [TestFixture]
-    public class LightEpochReclamationTests
+    public class ReclamationTests
     {
         LightEpoch epoch;
 
@@ -277,6 +278,74 @@ namespace Tsavorite.test.epoch
 
             Assert.That(Volatile.Read(ref violations), Is.Zero,
                 "SafeToReclaimEpoch reached an epoch a thread was still announcing");
+        }
+
+        /// <summary>
+        /// The property the fix exists for: an object retired at epoch E must not be freed while any
+        /// thread is still inside a protected region that could dereference it. A reader that observes
+        /// the object as live must never see it freed.
+        /// </summary>
+        [Test]
+        public void RetiredObjectIsNeverFreedUnderALiveReader()
+        {
+            const int ReaderCount = 8;
+            var duration = TimeSpan.FromSeconds(5);
+
+            var page = new Page();
+            var violations = 0;
+            var freed = 0L;
+            var stop = false;
+
+            var readers = new Thread[ReaderCount];
+            for (var i = 0; i < ReaderCount; i++)
+            {
+                readers[i] = new Thread(() =>
+                {
+                    while (!Volatile.Read(ref stop))
+                    {
+                        epoch.Resume();
+
+                        // Refresh first, then load the published pointer: anything observed as
+                        // live after the announce cannot be retired before this thread suspends.
+                        epoch.ProtectAndDrain();
+                        var observed = Volatile.Read(ref page);
+
+                        if (observed is not null && Volatile.Read(ref observed.freed))
+                            _ = Interlocked.Increment(ref violations);
+
+                        epoch.Suspend();
+                    }
+                })
+                { IsBackground = true };
+                readers[i].Start();
+            }
+
+            var sw = Stopwatch.StartNew();
+            while (sw.Elapsed < duration && Volatile.Read(ref violations) == 0)
+            {
+                var retired = Volatile.Read(ref page);
+                Volatile.Write(ref page, new Page());
+
+                epoch.Resume();
+                epoch.BumpCurrentEpoch(() =>
+                {
+                    Volatile.Write(ref retired.freed, true);
+                    _ = Interlocked.Increment(ref freed);
+                });
+                epoch.Suspend();
+            }
+
+            Volatile.Write(ref stop, true);
+            foreach (var reader in readers)
+                Assert.That(reader.Join(TimeSpan.FromSeconds(30)), Is.True);
+
+            Assert.That(Volatile.Read(ref freed), Is.GreaterThan(0), "the reclaimer never freed anything, so the test proved nothing");
+            Assert.That(Volatile.Read(ref violations), Is.Zero, "a reader dereferenced a page that had already been freed");
+        }
+
+        sealed class Page
+        {
+            internal bool freed;
         }
     }
 }

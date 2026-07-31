@@ -14,7 +14,7 @@ dotnet test libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj
 
 `Litmus/` holds a hardware stress harness that runs the real race: a reader
 announces its epoch and dereferences a page while a reclaimer retires that same
-page. `LightEpochLitmusTests` drives it for 30 s, under the `Litmus`
+page. `LitmusTests` drives it for 30 s, under the `Litmus`
 category so a fast suite can skip it:
 
 ```

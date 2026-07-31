@@ -14,7 +14,7 @@ namespace Tsavorite.test.epoch
     /// registered against becomes safe to reclaim, and must not run one moment sooner.
     /// </summary>
     [TestFixture]
-    public class LightEpochDrainTests
+    public class DrainTests
     {
         LightEpoch epoch;
 
@@ -243,6 +243,41 @@ namespace Tsavorite.test.epoch
 
             Assert.That(counts, Is.All.EqualTo(1),
                 $"{counts.Count(c => c == 0)} actions never ran and {counts.Count(c => c > 1)} ran more than once");
+        }
+
+        [Test]
+        public void ActionDoesNotRunWhileAnotherThreadIsProtected()
+        {
+            using var protectedThreadEntered = new ManualResetEventSlim();
+            using var releaseProtectedThread = new ManualResetEventSlim();
+
+            var drained = 0;
+
+            var reader = new Thread(() =>
+            {
+                epoch.Resume();
+                protectedThreadEntered.Set();
+                releaseProtectedThread.Wait();
+                epoch.Suspend();
+            })
+            { IsBackground = true };
+            reader.Start();
+            Assert.That(protectedThreadEntered.Wait(TimeSpan.FromSeconds(30)), Is.True);
+
+            epoch.Resume();
+            epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref drained));
+            epoch.Suspend();
+
+            Assert.That(Volatile.Read(ref drained), Is.Zero, "action drained while a thread was still protected");
+
+            releaseProtectedThread.Set();
+            Assert.That(reader.Join(TimeSpan.FromSeconds(30)), Is.True);
+
+            epoch.Resume();
+            epoch.ProtectAndDrain();
+            epoch.Suspend();
+
+            Assert.That(Volatile.Read(ref drained), Is.EqualTo(1));
         }
     }
 }
