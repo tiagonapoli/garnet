@@ -12,7 +12,7 @@ namespace Tsavorite.test.epoch
     /// and the refresh path leave behind in the epoch table.
     /// </summary>
     [TestFixture]
-    public class LightEpochProtectionTests
+    public class ProtectionTests
     {
         LightEpoch epoch;
 
@@ -157,6 +157,53 @@ namespace Tsavorite.test.epoch
             }
 
             Assert.That(epoch.ToString(), Does.Contain("none]"));
+        }
+
+        [Test]
+        public void ResumeAndSuspendTrackProtectionState()
+        {
+            Assert.That(epoch.ThisInstanceProtected(), Is.False);
+
+            epoch.Resume();
+            Assert.That(epoch.ThisInstanceProtected(), Is.True);
+
+            epoch.Suspend();
+            Assert.That(epoch.ThisInstanceProtected(), Is.False);
+        }
+
+        [Test]
+        public void ResumeIfNotProtectedIsIdempotent()
+        {
+            Assert.That(epoch.ResumeIfNotProtected(), Is.True);
+            Assert.That(epoch.ResumeIfNotProtected(), Is.False);
+            Assert.That(epoch.TrySuspend(), Is.True);
+            Assert.That(epoch.TrySuspend(), Is.False);
+        }
+
+        [Test]
+        public void AcquireAnnouncesCurrentEpoch()
+        {
+            Bump();
+            Bump();
+
+            epoch.Resume();
+            try
+            {
+                Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+            }
+            finally
+            {
+                epoch.Suspend();
+            }
+
+            Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(0));
+        }
+
+        void Bump()
+        {
+            epoch.Resume();
+            _ = epoch.BumpCurrentEpoch();
+            epoch.Suspend();
         }
     }
 }
