@@ -33,15 +33,10 @@ namespace Tsavorite.test.epoch
         {
             var ran = 0;
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref ran));
                 Assert.That(Volatile.Read(ref ran), Is.EqualTo(1), "with no other thread protected the action's epoch is immediately reclaimable");
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -56,14 +51,9 @@ namespace Tsavorite.test.epoch
             var drained = 0;
             using var reader = new ParkedReader(epoch);
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref drained));
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(Volatile.Read(ref drained), Is.Zero, "the action ran while a reader was still protected");
@@ -81,18 +71,13 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < capacity; i++)
                 {
                     var index = i;
                     epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref counts[index]));
                 }
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(counts, Is.All.Zero, "actions ran while a reader was still protected");
@@ -115,8 +100,7 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < capacity; i++)
                 {
@@ -127,15 +111,10 @@ namespace Tsavorite.test.epoch
                 using var registered = new ManualResetEventSlim();
                 var latecomer = new Thread(() =>
                 {
-                    epoch.Resume();
-                    try
+                    using (epoch.Protected())
                     {
                         epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref extraRan));
                         registered.Set();
-                    }
-                    finally
-                    {
-                        epoch.Suspend();
                     }
                 })
                 { IsBackground = true };
@@ -150,10 +129,6 @@ namespace Tsavorite.test.epoch
 
                 Assert.That(counts, Is.All.EqualTo(1), "the backlog did not drain exactly once each");
             }
-            finally
-            {
-                epoch.Suspend();
-            }
         }
 
         [Test]
@@ -164,18 +139,13 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < ActionCount; i++)
                 {
                     var index = i;
                     epoch.BumpCurrentEpoch(() => order.Enqueue(index));
                 }
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(order, Is.Empty);
@@ -204,14 +174,9 @@ namespace Tsavorite.test.epoch
                     for (var i = 0; i < PerThread; i++)
                     {
                         var index = (threadIndex * PerThread) + i;
-                        epoch.Resume();
-                        try
+                        using (epoch.Protected())
                         {
                             epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref counts[index]));
-                        }
-                        finally
-                        {
-                            epoch.Suspend();
                         }
                     }
                 })
@@ -224,15 +189,10 @@ namespace Tsavorite.test.epoch
                 Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True, "worker did not finish");
 
             // Anything still pending drains on the next quiescent pass.
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 _ = epoch.BumpCurrentEpoch();
                 epoch.ProtectAndDrain();
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(counts, Is.All.EqualTo(1), $"{counts.Count(c => c == 0)} actions never ran and {counts.Count(c => c > 1)} ran more than once");

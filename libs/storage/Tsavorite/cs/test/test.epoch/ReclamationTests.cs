@@ -47,18 +47,13 @@ namespace Tsavorite.test.epoch
             using var reader = new ParkedReader(epoch);
             Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch));
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < 8; i++)
                     _ = epoch.BumpCurrentEpoch();
 
                 Assert.That(epoch.CurrentEpoch, Is.GreaterThan(reader.AnnouncedEpoch));
                 Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch), "the parked reader is the oldest announcement and must define the minimum");
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -71,8 +66,7 @@ namespace Tsavorite.test.epoch
         {
             using var reader = new ParkedReader(epoch);
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < 64; i++)
                 {
@@ -83,22 +77,13 @@ namespace Tsavorite.test.epoch
                     Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(epoch.MinAnnouncedEpoch()), "SafeToReclaimEpoch overtook the oldest announcement in the table");
                 }
             }
-            finally
-            {
-                epoch.Suspend();
-            }
 
             reader.LeaveAndJoin();
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 _ = epoch.BumpCurrentEpoch();
                 Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(reader.AnnouncedEpoch), "once the reader left, the epoch it held must become reclaimable");
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -120,15 +105,10 @@ namespace Tsavorite.test.epoch
             // The only announcement was this thread's own, so everything before it is reclaimable.
             Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(announced - 1));
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 _ = epoch.BumpCurrentEpoch();
                 Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(announced), "the previously announced epoch stayed unreclaimable after the thread suspended");
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -143,14 +123,9 @@ namespace Tsavorite.test.epoch
                 {
                     readers[i] = new ParkedReader(epoch);
 
-                    epoch.Resume();
-                    try
+                    using (epoch.Protected())
                     {
                         _ = epoch.BumpCurrentEpoch();
-                    }
-                    finally
-                    {
-                        epoch.Suspend();
                     }
                 }
 
@@ -161,29 +136,19 @@ namespace Tsavorite.test.epoch
 
                 Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(oldest));
 
-                epoch.Resume();
-                try
+                using (epoch.Protected())
                 {
                     _ = epoch.BumpCurrentEpoch();
                     Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(oldest - 1));
-                }
-                finally
-                {
-                    epoch.Suspend();
                 }
 
                 // Retiring the oldest reader must move the frontier up to the next oldest, and no further.
                 readers[0].LeaveAndJoin();
 
-                epoch.Resume();
-                try
+                using (epoch.Protected())
                 {
                     _ = epoch.BumpCurrentEpoch();
                     Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(readers[1].AnnouncedEpoch - 1));
-                }
-                finally
-                {
-                    epoch.Suspend();
                 }
             }
             finally
@@ -222,8 +187,7 @@ namespace Tsavorite.test.epoch
                 checkers[t] = new Thread(() =>
                 {
                     start.Wait();
-                    epoch.Resume();
-                    try
+                    using (epoch.Protected())
                     {
                         for (var r = 0; r < Rounds; r++)
                         {
@@ -236,10 +200,6 @@ namespace Tsavorite.test.epoch
                             if (Volatile.Read(ref epoch.SafeToReclaimEpoch) >= announced)
                                 _ = Interlocked.Increment(ref violations);
                         }
-                    }
-                    finally
-                    {
-                        epoch.Suspend();
                     }
                 })
                 { IsBackground = true };

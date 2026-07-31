@@ -38,17 +38,12 @@ namespace Tsavorite.test.epoch
         [Test]
         public void SlotIndexIsWithinTheTable()
         {
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 var entry = epoch.ThisThreadEntry();
                 Assert.That(entry, Is.GreaterThan(0));
                 Assert.That(entry, Is.LessThanOrEqualTo(epoch.EntryCount));
                 Assert.That(epoch.ThreadIdAt(entry), Is.EqualTo(Environment.CurrentManagedThreadId));
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -75,8 +70,7 @@ namespace Tsavorite.test.epoch
 
             for (var i = 0; i < 32; i++)
             {
-                epoch.Resume();
-                try
+                using (epoch.Protected())
                 {
                     Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     _ = epoch.BumpCurrentEpoch();
@@ -85,18 +79,13 @@ namespace Tsavorite.test.epoch
                     Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     Assert.That(epoch.CurrentEpoch, Is.GreaterThan(0));
                 }
-                finally
-                {
-                    epoch.Suspend();
-                }
             }
         }
 
         [Test]
         public void SuspendResumeKeepsTheThreadProtected()
         {
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 epoch.SuspendResume();
 
@@ -104,17 +93,12 @@ namespace Tsavorite.test.epoch
                 Assert.That(epoch.ThisThreadEntry(), Is.GreaterThan(0));
                 Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
             }
-            finally
-            {
-                epoch.Suspend();
-            }
         }
 
         [Test]
         public void RefreshRepublishesTheLatestEpochEveryTime()
         {
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 for (var i = 0; i < 16; i++)
                 {
@@ -122,10 +106,6 @@ namespace Tsavorite.test.epoch
                     epoch.ProtectAndDrain();
                     Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
                 }
-            }
-            finally
-            {
-                epoch.Suspend();
             }
         }
 
@@ -144,16 +124,11 @@ namespace Tsavorite.test.epoch
         [Test]
         public void ToStringReportsProtectedThreads()
         {
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 var description = epoch.ToString();
                 Assert.That(description, Does.Contain("CurrentEpoch"));
                 Assert.That(description, Does.Contain($"tid={Environment.CurrentManagedThreadId}"));
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(epoch.ToString(), Does.Contain("none]"));
@@ -186,14 +161,9 @@ namespace Tsavorite.test.epoch
             Bump();
             Bump();
 
-            epoch.Resume();
-            try
+            using (epoch.Protected())
             {
                 Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
-            }
-            finally
-            {
-                epoch.Suspend();
             }
 
             Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(0));

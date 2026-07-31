@@ -45,8 +45,7 @@ namespace Tsavorite.test.epoch
             {
                 var secondEpoch = second.CurrentEpoch;
 
-                first.Resume();
-                try
+                using (first.Protected())
                 {
                     Assert.That(first.ThisInstanceProtected(), Is.True);
                     Assert.That(second.ThisInstanceProtected(), Is.False);
@@ -56,10 +55,6 @@ namespace Tsavorite.test.epoch
 
                     Assert.That(second.CurrentEpoch, Is.EqualTo(secondEpoch), "bumping one instance advanced another");
                     Assert.That(second.MinAnnouncedEpoch(), Is.EqualTo(secondEpoch));
-                }
-                finally
-                {
-                    first.Suspend();
                 }
             }
             finally
@@ -76,17 +71,11 @@ namespace Tsavorite.test.epoch
             var second = new LightEpoch();
             try
             {
-                first.Resume();
-                second.Resume();
-                try
+                using (first.Protected())
+                using (second.Protected())
                 {
                     Assert.That(first.ThisInstanceProtected(), Is.True);
                     Assert.That(second.ThisInstanceProtected(), Is.True);
-                }
-                finally
-                {
-                    second.Suspend();
-                    first.Suspend();
                 }
 
                 Assert.That(first.ThisInstanceProtected(), Is.False);
@@ -112,14 +101,9 @@ namespace Tsavorite.test.epoch
             {
                 Assert.That(second.ThisInstanceProtected(), Is.False, "a recycled instance id left stale thread-static state behind");
 
-                second.Resume();
-                try
+                using (second.Protected())
                 {
                     Assert.That(second.ThisInstanceProtected(), Is.True);
-                }
-                finally
-                {
-                    second.Suspend();
                 }
             }
             finally

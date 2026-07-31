@@ -94,17 +94,12 @@ namespace Tsavorite.test.epoch
             var second = epoch.AllocateUserWord(20);
             try
             {
-                epoch.Resume();
-                try
+                using (epoch.Protected())
                 {
                     epoch.ThisThreadUserWord(first) = 5;
 
                     Assert.That(epoch.GetMinUserWord(first), Is.EqualTo(5));
                     Assert.That(epoch.GetMinUserWord(second), Is.EqualTo(20), "a write bled into the neighbouring slot");
-                }
-                finally
-                {
-                    epoch.Suspend();
                 }
             }
             finally
@@ -123,18 +118,13 @@ namespace Tsavorite.test.epoch
                 for (var i = 0; i < LightEpoch.MaxUserWords; i++)
                     words.Add(epoch.AllocateUserWord(long.MaxValue));
 
-                epoch.Resume();
-                try
+                using (epoch.Protected())
                 {
                     for (var i = 0; i < words.Count; i++)
                         epoch.ThisThreadUserWord(words[i]) = 100 + i;
 
                     for (var i = 0; i < words.Count; i++)
                         Assert.That(epoch.GetMinUserWord(words[i]), Is.EqualTo(100 + i), $"slot {words[i]} did not hold its own value");
-                }
-                finally
-                {
-                    epoch.Suspend();
                 }
             }
             finally
