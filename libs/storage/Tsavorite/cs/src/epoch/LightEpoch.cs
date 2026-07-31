@@ -518,12 +518,7 @@ namespace Tsavorite.core
             Debug.Assert(entry == kInvalidIndex,
                 "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
-            var epoch = CurrentEpoch;
-
-            // The reservation CAS writes localCurrentEpoch, so claiming the slot and announcing the
-            // epoch are one locked RMW -- the announce is globally visible before any load in the
-            // protected region, closing the StoreLoad window against ComputeNewSafeToReclaimEpoch().
-            ReserveEntryForThread(ref entry, epoch);
+            ReserveEntryForThread(ref entry, CurrentEpoch);
 
             AssertEpochAcquired(entry);
 
@@ -548,8 +543,9 @@ namespace Tsavorite.core
             // Clear "ThisInstanceProtected()" (non-static epoch table)
             (*(tableAligned + entry)).threadId = 0;
 
-            // Publishes the slot as free; must not be reordered before the threadId clear.
-            EntryAt(entry).localCurrentEpoch = 0;
+            // Publishes the slot as free. Release semantics: the threadId clear above must not sink
+            // below it, or the next owner's threadId is wiped by this thread's trailing store.
+            Volatile.Write(ref EntryAt(entry).localCurrentEpoch, 0);
 
             entry = kInvalidIndex;
             if (waiterCount > 0)
@@ -562,9 +558,10 @@ namespace Tsavorite.core
         /// startOffset1 contains the acquired offset so that the next acquire 
         /// can optimistically get the same slot.
         /// 
-        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>, so
-        /// reserving the slot and announcing the epoch are one locked RMW. Relies on the fact that
-        /// a protected thread never announces epoch 0.
+        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>, so reserving
+        /// the slot and announcing the epoch (which needs a memory barrier) are one locked RMW. 0 is
+        /// usable as the free-slot sentinel because <c>CurrentEpoch</c> starts at 1 and only increments,
+        /// so a protected thread never announces epoch 0.
         /// </summary>
         /// <returns>True if entry was acquired, false if table is full</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -603,7 +600,9 @@ namespace Tsavorite.core
         }
 
         /// <summary>
-        /// Claim a single epoch table slot by CAS-ing the announced epoch into it.
+        /// Claim a single epoch table slot by CAS-ing the announced epoch into it. The CAS is also the
+        /// barrier that publishes the announce: it drains the store buffer, so the announce is globally
+        /// visible before any load in the protected region can be issued.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool TryClaimEntry(int entry, long epoch)
@@ -654,8 +653,6 @@ namespace Tsavorite.core
                     // us waiting on the semaphore forever in case we increment waiterCount
                     // immediately after the epoch releaser sees a zero waiterCount (and
                     // therefore does not release the semaphore).
-                    // Re-read CurrentEpoch on each attempt so a long wait does not announce a
-                    // stale epoch and pin reclamation behind this thread.
                     if (TryAcquireEntry(ref entry, CurrentEpoch))
                         return;
 
