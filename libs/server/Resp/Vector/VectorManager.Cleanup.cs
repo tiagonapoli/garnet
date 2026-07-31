@@ -161,6 +161,13 @@ namespace Garnet.server
                 ActiveThreadSession = dropSession.storageSession;
                 try
                 {
+                    // Test seam: when drops are pending, hold this pass in flight so a store-empty
+                    // boundary can be crossed while native drops are still outstanding — proving the
+                    // sync-path drain barrier is what waits for them. Guarded on non-empty drops so the
+                    // drain's own sentinel round-trips (which carry no drops) never re-park here.
+                    if (!requestedDrops.IsEmpty)
+                        await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop).ConfigureAwait(false);
+
                     // Process all pending drops
                     foreach (var (k, (context, indexPtr)) in requestedDrops)
                     {

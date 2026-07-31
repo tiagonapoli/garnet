@@ -125,5 +125,11 @@ namespace Garnet.common
         /// Vector Set: pause in the index-recreate window before RMW write refreshed index pointer back to the main store.
         /// </summary>
         VectorSet_Pause_Before_Recreate_Rmw,
+        /// <summary>
+        /// Vector Set: pause inside the background native-index drop task while a drop is in flight
+        /// (picked up from the pending-drop set but before DiskANN DropIndex runs). Lets a test hold
+        /// the cleanup pipeline mid-drain across a store-empty boundary to prove the sync-path drain.
+        /// </summary>
+        VectorSet_Pause_In_Native_Index_Drop,
     }
 }

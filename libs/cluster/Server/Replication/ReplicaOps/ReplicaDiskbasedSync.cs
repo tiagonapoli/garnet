@@ -155,6 +155,7 @@ namespace Garnet.cluster
                     // cleanup task can process the drain sentinel) before retrieving the checkpoint.
                     if (vectorManager != null)
                         await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
+
                     await storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
 
                     // Stop advance time task when reconfiguring node to be replica
