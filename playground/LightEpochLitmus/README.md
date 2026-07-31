@@ -73,14 +73,14 @@ that architecture.** Nothing else produces evidence.
 ## Measured power, and its limits
 
 These are soak tests, not deterministic gates. Against a deliberately unfixed epoch
-(announce reverted to a plain store, refresh reverted to a plain load) on a
-20-logical-processor x86-64 host, successive 30 s runs reported 1641, 11, 8, 5, 3, 1
-and 0 violations; with the CAS-carried announce every run reports 0. So a single run
-catches the regression most of the time but not always, and `--seconds` is worth
-raising when that matters.
+(announce reverted to a plain store behind a `threadId` CAS) on a 20-logical-processor
+x86-64 host, successive 30 s runs reported 44, 33, 52, 111 and 36 violations; with the
+CAS-carried announce every run reports 0. So a single 30 s run reliably catches this
+regression here, but the counts are small enough that it is still a probabilistic
+signal — `--seconds` is worth raising when that matters.
 
-The configuration is not arbitrary. Two settings were each measured to be the
-difference between detecting the bug and detecting nothing at all:
+The configuration is not arbitrary. Three settings were each measured to be the
+difference between detecting the bug and detecting nothing at all, or close to it:
 
 - **`DerefWords`.** The reclaimer only stamps the page from the drain callback,
   several epoch operations after the unlink. A reader walking 64 words has already
@@ -88,4 +88,8 @@ difference between detecting the bug and detecting nothing at all:
 - **Nothing between the barrier and `Resume()`.** A single extra volatile load in the
   reader loop delays it past the window, after which the announce always drains out
   of the store buffer before the reclaimer scans.
+- **Counters on separate cache lines.** With the reader's and reclaimer's counters
+  sharing a line, the same runs reported 10, 16, 22 and 22 — roughly a third of the
+  detection power. The contended line delays the reader into exactly the "arriving
+  late" regime described above.
 

@@ -75,12 +75,27 @@ namespace Tsavorite.epoch.litmus
         readonly Action[] drainCallbacks = new Action[PoolPages];
 
         byte* pool;
-        long curPage;
-        long sink;
-        long violations;
-        long observedPages;
-        long drains;
-        long quarantines;
+        byte* counters;
+
+        // The reader and the reclaimer each increment their own counters every round, so sharing a
+        // cache line between them would put an RFO on the critical path of the very loop whose
+        // timing this harness measures. Each side gets its own line out of a dedicated page, and
+        // curPage -- the reclaimer-to-reader channel, which the reader loads every round -- gets a
+        // third, so reading it does not drag either side's counters along with it.
+        const nuint CounterLine = 128;
+
+        // The mapping carries one extra page for the counters, so it is page-aligned and outside
+        // every pool page the reclaimer poisons.
+        const nuint MappedBytes = (PageSize * PoolPages) + PageSize;
+
+        ref long ObservedPages => ref *(long*)counters;
+        ref long Sink => ref *(long*)(counters + 8);
+        ref long Violations => ref *(long*)(counters + 16);
+
+        ref long CurPage => ref *(long*)(counters + CounterLine);
+
+        ref long Drains => ref *(long*)(counters + (2 * CounterLine));
+        ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
 
         internal QuarantineLitmus(TimeSpan duration, int deref, LitmusCores cores, bool selfTest = false)
         {
@@ -92,7 +107,8 @@ namespace Tsavorite.epoch.litmus
 
         internal QuarantineLitmusResult Run()
         {
-            pool = LitmusNative.MapPage(PageSize * PoolPages);
+            pool = LitmusNative.MapPage(MappedBytes);
+            counters = pool + (PageSize * PoolPages);
             try
             {
                 for (var slot = 0; slot < PoolPages; slot++)
@@ -129,17 +145,17 @@ namespace Tsavorite.epoch.litmus
 
                 return new QuarantineLitmusResult
                 {
-                    Violations = Volatile.Read(ref violations),
-                    SampledRounds = Volatile.Read(ref observedPages),
+                    Violations = Volatile.Read(ref Violations),
+                    SampledRounds = Volatile.Read(ref ObservedPages),
                     Rounds = rounds,
-                    Drains = Volatile.Read(ref drains),
-                    Quarantines = Volatile.Read(ref quarantines),
+                    Drains = Volatile.Read(ref Drains),
+                    Quarantines = Volatile.Read(ref Quarantines),
                     Elapsed = stopwatch.Elapsed
                 };
             }
             finally
             {
-                LitmusNative.Unmap(pool, PageSize * PoolPages);
+                LitmusNative.Unmap(pool, MappedBytes);
                 epoch.Dispose();
             }
         }
@@ -155,7 +171,7 @@ namespace Tsavorite.epoch.litmus
                     local += epoch.AnnouncedEpochAt(i);
             }
 
-            _ = Interlocked.Add(ref sink, local);
+            _ = Interlocked.Add(ref Sink, local);
         }
 
         void ReaderLoop()
@@ -196,11 +212,11 @@ namespace Tsavorite.epoch.litmus
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void ReadAndCheck()
         {
-            var pageAddress = curPage;
+            var pageAddress = CurPage;
             if (pageAddress == 0)
                 return;
 
-            observedPages++;
+            ObservedPages++;
 
             var page = (long*)pageAddress;
             long accumulator = 0;
@@ -212,10 +228,10 @@ namespace Tsavorite.epoch.litmus
                 accumulator += value;
             }
 
-            sink += accumulator;
+            Sink += accumulator;
 
             if (poisoned)
-                _ = Interlocked.Increment(ref violations);
+                _ = Interlocked.Increment(ref Violations);
         }
 
         /// <summary>
@@ -236,11 +252,11 @@ namespace Tsavorite.epoch.litmus
                 var words = (long*)page;
                 for (var index = 0; index < WordsPerPage; index++)
                     words[index] = index;
-                Volatile.Write(ref curPage, (long)page);
+                Volatile.Write(ref CurPage, (long)page);
 
                 rendezvous.StartBarrier();
 
-                curPage = 0;
+                CurPage = 0;
 
                 // Self-test: poison unconditionally, as if the epoch had wrongly decided the page
                 // was reclaimable on every round. Any reader that captured the pointer must then
@@ -250,8 +266,7 @@ namespace Tsavorite.epoch.litmus
 
                 epoch.BumpCurrentEpoch(drainCallbacks[round % PoolPages]);
                 epoch.ProtectAndDrain();
-                drains++;
-
+                Drains++;
                 rendezvous.EndBarrier();
                 round++;
             }
@@ -267,7 +282,7 @@ namespace Tsavorite.epoch.litmus
         /// </summary>
         void Quarantine(long page)
         {
-            _ = Interlocked.Increment(ref quarantines);
+            _ = Interlocked.Increment(ref Quarantines);
             var words = (long*)page;
             for (var index = 0; index < WordsPerPage; index++)
                 words[index] = Poison;
