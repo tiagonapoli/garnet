@@ -19,13 +19,15 @@ namespace Tsavorite.core
         ref Entry EntryAt(int index) => ref *(tableAligned + index);
 
         /// <summary>
-        /// Asserts that the slot at <paramref name="index"/> is claimed, i.e. carries an owner's thread id.
+        /// Asserts that the slot at <paramref name="index"/> has been acquired, i.e. carries an announced epoch.
         /// </summary>
         /// <remarks>
+        /// <c>localCurrentEpoch</c> is the word the reservation CAS claims from 0, so it -- not
+        /// <c>threadId</c>, which is only a trailing tag -- is what says the slot is held.
         /// <see cref="ConditionalAttribute"/> rather than a plain method wrapping the assert, so the
         /// call site disappears from release builds instead of compiling to an empty call.
         /// </remarks>
         [Conditional("DEBUG")]
-        void AssertSlotClaimed(int index) => Debug.Assert(EntryAt(index).threadId > 0, "Epoch table entry missing threadId");
+        void AssertEpochAcquired(int index, string message = "Epoch table entry has no announced epoch") => Debug.Assert(EntryAt(index).localCurrentEpoch != 0, message);
     }
 }
