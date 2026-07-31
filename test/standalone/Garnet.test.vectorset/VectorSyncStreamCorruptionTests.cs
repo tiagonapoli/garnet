@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+// Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
+#if DEBUG
+
 using System;
 using System.Buffers.Binary;
 using System.Diagnostics;
@@ -167,3 +170,5 @@ namespace Garnet.test
         }
     }
 }
+
+#endif

@@ -119,9 +119,11 @@ namespace Garnet.cluster
                             vectorManager?.ResumeCleanup();
                         }
 
-                        // Reset empties the store, which queues eviction-driven native index drops and
-                        // may leave in-flight cleanup. Drain the pipeline (once the pause is lifted so the
-                        // cleanup task can process the drain sentinel) before syncing from the primary.
+                        // For replica sync the primary issues a FLUSHALL just before this command and expects
+                        // the replica to be empty. If we don't wait for all Vector Sets to be cleaned up, the
+                        // streamed namespaced keys will possibly race with a cleanup task deleting a namespace.
+                        // Awaited after ResumeCleanup, since a paused cleanup task can never process the drain
+                        // sentinel.
                         if (vectorManager != null)
                             await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
                     }
@@ -244,14 +246,13 @@ namespace Garnet.cluster
                 // Before advertising updated replication offset, wait for Vector Set ops to finish
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForVectorOperationsToComplete();
 
-                if (primarySyncMetadata.fullSync)
-                {
-                    // A diskless full sync empties the replica store via the primary-driven CLUSTER
-                    // FLUSHALL and then streams records in. Drain the Vector Set cleanup pipeline so the
-                    // eviction-driven native drops (and any in-flight cleanup) queued by that flush
-                    // complete before we advertise the offset and resume serving.
-                    storeWrapper.DefaultDatabase.VectorManager?.WaitForCleanupComplete();
-                }
+                // Wait for the Vector Set cleanup pipeline to drain before advertising the offset and
+                // resuming serving. Streamed records carry the primary's namespaces as-is, so any
+                // cleanup task still draining on this replica could delete a namespace that the stream
+                // just wrote into. This is unconditional: a full sync empties the store via the
+                // primary-driven CLUSTER FLUSHALL (queueing eviction-driven native drops), and a
+                // partial sync streams into a store where ordinary cleanup may already be in flight.
+                storeWrapper.DefaultDatabase.VectorManager?.WaitForCleanupComplete();
 
                 this.replicationOffset = _replicationOffset;
 

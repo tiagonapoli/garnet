@@ -29,7 +29,7 @@ namespace Garnet.server
         /// Used for tracking which contexts are currently active.
         /// </summary>
         [StructLayout(LayoutKind.Explicit, Size = Size)]
-        internal struct ContextMetadata
+        internal partial struct ContextMetadata
         {
             [InlineArray(64)]
             private struct HashSlots
@@ -59,28 +59,6 @@ namespace Garnet.server
 
             public readonly bool IsEmpty
             => inUse == 0 && migrating == 0 && cleaningUp == 0;
-
-            /// <summary>
-            /// Number of contexts in this block that are reserved for any reason (in use, cleaning up,
-            /// or migrating). Used by tests to assert the reservation bitmap has fully reset.
-            /// </summary>
-            internal readonly int ReservedCount => BitOperations.PopCount(inUse | cleaningUp | migrating);
-
-            /// <summary>
-            /// Add every reserved (in use, cleaning up, or migrating) context in this block to
-            /// <paramref name="into"/>, composed with the block's <paramref name="offset"/>. Used by
-            /// tests to discover the exact context a Vector Set reserved.
-            /// </summary>
-            internal readonly void CollectReservedContexts(ulong offset, List<ulong> into)
-            {
-                var reserved = inUse | cleaningUp | migrating;
-                while (reserved != 0)
-                {
-                    var bit = BitOperations.TrailingZeroCount(reserved);
-                    reserved &= reserved - 1;
-                    into.Add(offset + ((ulong)bit * ContextStep));
-                }
-            }
 
             public readonly bool IsInUse(bool allowZero, ushort context)
             {

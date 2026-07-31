@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+// Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
+#if DEBUG
+
 using System;
 using System.Buffers.Binary;
 using NUnit.Framework;
@@ -70,10 +73,8 @@ namespace Garnet.test
             var db = redis.GetDatabase(0);
             var adminServer = redis.GetServers()[0];
 
-#if DEBUG
             var preCreateCalls = vectorManager.Service.CreateIndexCalls;
             var preDropCalls = vectorManager.Service.DropIndexCalls;
-#endif
 
             for (var s = 0; s < Sets; s++)
             {
@@ -95,14 +96,12 @@ namespace Garnet.test
             var dbSize = (long)db.Execute("DBSIZE");
             ClassicAssert.AreEqual(0, dbSize, "FLUSHDB must remove every record across all namespaces");
 
-#if DEBUG
             var finalCreateCalls = vectorManager.Service.CreateIndexCalls;
             var finalDropCalls = vectorManager.Service.DropIndexCalls;
 
             // Every native index that was created must have been dropped by the drain.
             ClassicAssert.Greater(finalCreateCalls, preCreateCalls, "populating the Vector Sets should have created native indexes");
             ClassicAssert.AreEqual(finalCreateCalls - preCreateCalls, finalDropCalls - preDropCalls, "every created native index must be dropped by the drain");
-#endif
         }
 
         /// <summary>
@@ -139,3 +138,5 @@ namespace Garnet.test
         }
     }
 }
+
+#endif

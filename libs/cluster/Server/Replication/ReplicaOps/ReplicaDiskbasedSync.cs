@@ -150,9 +150,11 @@ namespace Garnet.cluster
                         vectorManager?.ResumeCleanup();
                     }
 
-                    // Reset empties the store, which queues eviction-driven native index drops and
-                    // may leave in-flight cleanup. Drain the pipeline (once the pause is lifted so the
-                    // cleanup task can process the drain sentinel) before retrieving the checkpoint.
+                    // For replica sync the primary issues a FLUSHALL just before this command and expects
+                    // the replica to be empty. If we don't wait for all Vector Sets to be cleaned up, the
+                    // streamed namespaced keys will possibly race with a cleanup task deleting a namespace.
+                    // Awaited after ResumeCleanup, since a paused cleanup task can never process the drain
+                    // sentinel.
                     if (vectorManager != null)
                         await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
 

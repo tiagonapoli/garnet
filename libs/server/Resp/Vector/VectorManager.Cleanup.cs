@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -83,45 +83,6 @@ namespace Garnet.server
                 Debug.Assert(status.IsCompletedSuccessfully, "Nothing else should be deleting namespaced keys");
 
                 cursorRecordResult = CursorRecordResult.Accept;
-                return true;
-            }
-        }
-
-        /// <summary>
-        /// Read-only scan companion to <see cref="PostDropCleanupFunctions"/>: counts element records
-        /// whose namespace maps to a single context block, without deleting anything. Test-only.
-        /// </summary>
-        private sealed class ContextRecordCounter : IScanIteratorFunctions
-        {
-            private readonly ulong pairedContext;
-
-            public int Count { get; private set; }
-
-            public ContextRecordCounter(ulong pairedContext)
-            {
-                this.pairedContext = pairedContext;
-            }
-
-            public void OnException(Exception exception, long numberOfRecords) { }
-            public bool OnStart(long beginAddress, long endAddress) => true;
-            public void OnStop(bool completed, long numberOfRecords) { }
-
-            public bool Reader<TSourceLogRecord>(in TSourceLogRecord logRecord, RecordMetadata recordMetadata, long numberOfRecords, out CursorRecordResult cursorRecordResult)
-                where TSourceLogRecord : ISourceLogRecord
-            {
-                cursorRecordResult = CursorRecordResult.Skip;
-
-                if (!logRecord.HasNamespace)
-                    return true;
-
-                var namespaceBytes = logRecord.NamespaceBytes;
-                if (namespaceBytes.Length is not (sizeof(byte) or sizeof(uint)))
-                    return true;
-
-                var ns = ExtractContextFromNamespaces(namespaceBytes);
-                if ((ns & ~(ContextStep - 1)) == pairedContext)
-                    Count++;
-
                 return true;
             }
         }
@@ -602,110 +563,6 @@ namespace Garnet.server
         /// Synchronous wrapper over <see cref="WaitForCleanupCompleteAsync"/>.
         /// </summary>
         public void WaitForCleanupComplete() => AsyncUtils.BlockingWait(WaitForCleanupCompleteAsync());
-
-        /// <summary>
-        /// For testing purposes, the number of Vector Set contexts that are still reserved (in use,
-        /// cleaning up, or migrating) across every <see cref="ContextMetadata"/> block. Zero means the
-        /// reservation bitmap is fully reset — no Vector Set context is outstanding.
-        /// </summary>
-        internal int GetReservedContextCount()
-        {
-            lock (this)
-            {
-                var count = 0;
-                for (var i = 0; i < contextMetadatas.Length; i++)
-                {
-                    count += contextMetadatas[i].ReservedCount;
-                }
-
-                return count;
-            }
-        }
-
-        /// <summary>
-        /// For testing purposes, the number of <see cref="ContextMetadata"/> blocks still pending
-        /// persistence. Zero means no stale dirty index can fault the next UpdateContextMetadata.
-        /// </summary>
-        internal int GetDirtyContextMetadataCount()
-        {
-            lock (this)
-            {
-                return dirtyContextMetadatas.Count;
-            }
-        }
-
-        /// <summary>
-        /// For testing purposes, the number of native DiskANN index drops still pending.
-        /// </summary>
-        internal int GetPendingDropCount() => requestedDrops.Count;
-
-        /// <summary>
-        /// For testing purposes, the composed contexts currently reserved (in use, cleaning up, or
-        /// migrating) across every <see cref="ContextMetadata"/> block. Lets a test learn the exact
-        /// context a Vector Set reserved so it can target that namespace directly.
-        /// </summary>
-        internal List<ulong> GetReservedContexts()
-        {
-            var ret = new List<ulong>();
-            lock (this)
-            {
-                for (var i = 0; i < contextMetadatas.Length; i++)
-                {
-                    var offset = ContextMetadata.OffsetForContextMetadata(i);
-                    contextMetadatas[i].CollectReservedContexts(offset, ret);
-                }
-            }
-
-            return ret;
-        }
-
-        /// <summary>
-        /// For testing purposes, write a single Vector Set element record directly into
-        /// <paramref name="context"/>'s namespace, bypassing context reservation and the
-        /// <see cref="WaitForDiskANNIndexDrop"/> recreate guard — exactly how a diskless full sync
-        /// streams records in as-is. Used to reproduce the cleanup-scan-vs-streamed-record hazard the
-        /// sync-path drain barrier prevents.
-        /// </summary>
-        internal void TestOnlyStreamElementIntoContext(ulong context, ReadOnlySpan<byte> elementKey, ReadOnlySpan<byte> value)
-        {
-            using var session = (RespServerSession)getTempSession();
-            if (session.activeDbId != dbId && !session.TrySwitchActiveDatabaseSession(dbId))
-                throw new GarnetException($"Could not switch VectorManager test session to {dbId}, initialization failed");
-
-            Span<byte> nsBytes = stackalloc byte[sizeof(uint)];
-            StoreContextInNamespace(context, ref nsBytes);
-
-            VectorElementKey key = new(nsBytes, elementKey);
-            VectorInput input = default;
-            input.AlignmentExpected = true;
-            VectorOutput outputSpan = new(new SpanByteAndMemory());
-
-            ref var vectorCtx = ref session.storageSession.vectorBasicContext;
-            var status = vectorCtx.Upsert(key, ref input, value, ref outputSpan);
-            if (status.IsPending)
-                CompletePending(ref status, ref outputSpan, ref vectorCtx);
-
-            if (!status.IsCompletedSuccessfully)
-                throw new GarnetException("Test-only streamed element write did not complete successfully");
-        }
-
-        /// <summary>
-        /// For testing purposes, the number of element records whose namespace maps to
-        /// <paramref name="context"/>'s block. Zero means every element in that namespace has been
-        /// removed (e.g. by the cleanup scan).
-        /// </summary>
-        internal int TestOnlyCountRecordsInContext(ulong context)
-        {
-            using var session = (RespServerSession)getTempSession();
-            if (session.activeDbId != dbId && !session.TrySwitchActiveDatabaseSession(dbId))
-                throw new GarnetException($"Could not switch VectorManager test session to {dbId}, initialization failed");
-
-            var counter = new ContextRecordCounter(context & ~(ContextStep - 1));
-            ref var scanCtx = ref session.storageSession.stringBasicContext;
-            _ = scanCtx.Session.IterateLookupSnapshot(ref counter);
-
-            return counter.Count;
-        }
 
         /// <summary>
         /// Called when a Vector Set is discovered (typically via compaction) to _potentially_ be deleted.
