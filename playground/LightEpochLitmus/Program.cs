@@ -12,9 +12,8 @@ namespace Tsavorite.epoch.litmus
 {
     /// <summary>
     /// Console driver for the Store-Buffer quarantine litmus over
-    /// <see cref="Tsavorite.core.LightEpoch"/>. Runs the same harness the NUnit
-    /// <c>LitmusTests</c> fixture drives, but with the run parameters exposed as arguments so a
-    /// soak can be pointed at real hardware for hours instead of the 30 s the test suite allows.
+    /// <see cref="Tsavorite.core.LightEpoch"/>, with the run parameters exposed as arguments so a
+    /// soak can be pointed at real hardware for hours.
     /// </summary>
     internal static class Program
     {

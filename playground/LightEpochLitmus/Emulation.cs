@@ -9,22 +9,10 @@ using System.Runtime.InteropServices;
 namespace Tsavorite.epoch.litmus
 {
     /// <summary>
-    /// Best-effort detection of running under an emulator.
-    ///
-    /// <para>This matters more than it looks. An emulator interleaves guest instructions on the
-    /// host's memory model, so it does not reproduce the guest architecture's ordering: a
-    /// weakly-ordered guest emulated on a strongly-ordered host will simply never exhibit the
-    /// reorderings this harness is built to catch. The run comes back clean and looks like
-    /// evidence that the epoch is correct on that architecture, when it is evidence of nothing.
-    /// The classic way to get burned is <c>docker run --platform linux/arm64</c> on an x86 host,
-    /// where binfmt_misc silently routes the image through qemu-aarch64.</para>
-    ///
-    /// <para>The forced-failure control does not protect against this, because it recycles pages
-    /// unconditionally rather than relying on a reordering, so it fires under emulation exactly
-    /// as it does on real hardware.</para>
-    ///
-    /// <para>Detection is heuristic and can only ever be one-sided: a positive is reliable, a
-    /// negative is not a guarantee of native execution.</para>
+    /// Best-effort detection of running under an emulator, which would make a clean run
+    /// meaningless: an emulator interleaves guest instructions on the host's memory model, so
+    /// the reorderings this harness exists to catch cannot occur. Detection is one-sided -- a
+    /// positive is reliable, a negative is not a guarantee of native execution.
     /// </summary>
     internal static class Emulation
     {

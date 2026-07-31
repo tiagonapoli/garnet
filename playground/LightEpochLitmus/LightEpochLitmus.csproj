@@ -1,15 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- The Store-Buffer litmus harness for LightEpoch, plus a console driver for it.
-
-       This is a standalone stress tool rather than a test assembly, which is why it lives
-       in playground/ next to the other standalone runners. Two things keep it out of the
-       test project: the NUnit host cannot pin threads to specific logical processors the
-       way this harness needs, and a plain executable can be shipped in a container and
-       pointed at real hardware (see Dockerfile). Garnet.LightEpoch.test references it so
-       the NUnit tests and the CLI drive exactly the same code. -->
+  <!-- See README.md. -->
 
   <PropertyGroup>
+    <TargetFrameworks>net10.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>Tsavorite.epoch.litmus</RootNamespace>
     <SignAssembly>true</SignAssembly>
@@ -20,18 +14,15 @@
     <NoWarn>1701;1702;1591;IDE0130;IDE0065;IDE0007;IDE0048</NoWarn>
 
     <!-- The harness measures memory ordering, so the runtime must not reshape the run.
-         Tiered compilation would leave the hot loop in tier-0 code for the first part of
-         a short run, and a background/concurrent GC introduces pauses that swamp the
+         Disabling tiered compilation means every method is JITted once at full optimization,
+         with no tier-0 pass and no OSR, so the hot loop is steady-state code from the first
+         iteration. A background/concurrent GC would introduce pauses that swamp the
          microsecond race window this is trying to sample. -->
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredCompilation>false</TieredCompilation>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="Garnet.LightEpoch.test" Key="0024000004800000940000000602000000240000525341310004000001000100011b1661238d3d3c76232193c8aa2de8c05b8930d6dfe8cd88797a8f5624fdf14a1643141f31da05c0f67961b0e3a64c7120001d2f8579f01ac788b0ff545790d44854abe02f42bfe36a056166a75c6a694db8c5b6609cff8a2dbb429855a1d9f79d4d8ec3e145c74bfdd903274b7344beea93eab86b422652f8dd8eecf530d2" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\libs\storage\Tsavorite\cs\src\epoch\Garnet.LightEpoch.csproj" />

@@ -48,13 +48,11 @@ namespace Tsavorite.epoch.litmus
     /// observes poison in a page it was protecting is a use-after-free by the algorithm's
     /// own definition.
     ///
-    /// This detects the race without unmapping anything, which is what makes it work on
-    /// x86-64: x86 has no architectural broadcast TLB invalidation, so unmapping sends a
-    /// shootdown IPI to every core holding the mapping, and taking an interrupt on x86
-    /// drains the interrupted core's store buffer. A reader would be fenced by the OS on
-    /// every round. Here pages come from a pool allocated once, and the drain callbacks are
-    /// pre-built, so nothing allocates per round and no GC suspension (which would call
-    /// FlushProcessWriteBuffers) intrudes on the race window.
+    /// This detects the race without unmapping anything, which is what makes it work on x86-64:
+    /// an unmap would send a TLB shootdown IPI, and taking an interrupt drains the interrupted
+    /// core's store buffer, so the OS would fence the reader on every round and the race could
+    /// never appear. Pages come from a pool allocated once and the drain callbacks are pre-built,
+    /// so nothing allocates per round.
     /// </summary>
     internal sealed unsafe class QuarantineLitmus
     {

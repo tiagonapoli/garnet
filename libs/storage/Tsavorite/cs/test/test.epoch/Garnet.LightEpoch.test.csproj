@@ -21,7 +21,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\core\Tsavorite.core.csproj" />
-    <ProjectReference Include="..\..\..\..\..\..\playground\LightEpochLitmus\LightEpochLitmus.csproj" />
   </ItemGroup>
 
 </Project>

@@ -2,15 +2,11 @@
 
 A hardware stress harness that runs the real `LightEpoch` use-after-free race: a
 reader announces its epoch and dereferences a page while a reclaimer retires that
-same page. It ships as a standalone executable, `LightEpochLitmus`, and the NUnit
-`LitmusTests` in
-[`libs/storage/Tsavorite/cs/test/epoch`](../../libs/storage/Tsavorite/cs/test/epoch)
-are a thin wrapper over the same code.
+same page. It ships as a standalone executable, `LightEpochLitmus`.
 
 It lives in `playground/` rather than under `test/` because it is a tool, not part
-of the test gate: it pins threads to specific logical processors and saturates them,
-which the NUnit host cannot do and which no shared CI machine should be asked to
-absorb.
+of the test gate: it pins threads to specific logical processors and saturates them
+for minutes at a time, which no shared CI machine should be asked to absorb.
 
 ## What it asserts
 
@@ -28,7 +24,7 @@ Two things make a green run mean something, and both are asserted:
 ## Running it
 
 ```
-dotnet run --project playground/LightEpochLitmus -f net8.0 -- --seconds 600 --json result.json
+dotnet run --project playground/LightEpochLitmus -- --seconds 600 --json result.json
 ```
 
 It runs the forced-failure control first and refuses to continue unless the
@@ -47,20 +43,9 @@ docker run --rm garnet-lightepoch-litmus --seconds 3600 --iterations 8 --json -
 The container needs at least 4 logical processors and pins threads with
 `sched_setaffinity`, so do not restrict it below that with `--cpuset-cpus`.
 
-## Running it through NUnit instead
-
-The same harness is driven by `LitmusTests`, marked `[Explicit]` because it is
-minute-scale and core-pinned:
-
-```
-dotnet test libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj --filter "TestCategory=Litmus"
-LE_LITMUS_SECONDS=300 dotnet test ... --filter "TestCategory=Litmus"   # longer soak
-```
-
-Prefer the executable for anything sustained. Because the core layout is fixed, two
-instances on one machine pin to the same processors and contend, which distorts the
-microsecond window the result depends on — so do not run it multi-targeted, in
-parallel, or alongside another copy.
+Because the core layout is fixed, two instances on one machine pin to the same
+processors and contend, which distorts the microsecond window the result depends
+on — so do not run two copies side by side.
 
 ## Do not run this under emulation
 
@@ -91,8 +76,8 @@ These are soak tests, not deterministic gates. Against a deliberately unfixed ep
 (announce reverted to a plain store, refresh reverted to a plain load) on a
 20-logical-processor x86-64 host, successive 30 s runs reported 1641, 11, 8, 5, 3, 1
 and 0 violations; with the CAS-carried announce every run reports 0. So a single run
-catches the regression most of the time but not always, and the run length is worth
-raising via `LE_LITMUS_SECONDS` when that matters.
+catches the regression most of the time but not always, and `--seconds` is worth
+raising when that matters.
 
 The configuration is not arbitrary. Two settings were each measured to be the
 difference between detecting the bug and detecting nothing at all:
