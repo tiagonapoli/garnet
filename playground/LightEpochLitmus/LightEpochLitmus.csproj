@@ -2,19 +2,18 @@
 
   <!-- The Store-Buffer litmus harness for LightEpoch, plus a console driver for it.
 
-       This is a tool, not a test assembly. It lives here because the harness is only
-       meaningful next to the epoch tests, but it is a separate project for two reasons:
-       the NUnit host cannot pin threads to specific logical processors the way this
-       harness needs, and a plain executable can be shipped in a container and pointed
-       at real hardware (see Dockerfile). Garnet.LightEpoch.test references it so the
-       NUnit tests and the CLI drive exactly the same code. -->
+       This is a standalone stress tool rather than a test assembly, which is why it lives
+       in playground/ next to the other standalone runners. Two things keep it out of the
+       test project: the NUnit host cannot pin threads to specific logical processors the
+       way this harness needs, and a plain executable can be shipped in a container and
+       pointed at real hardware (see Dockerfile). Garnet.LightEpoch.test references it so
+       the NUnit tests and the CLI drive exactly the same code. -->
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <AssemblyName>Garnet.LightEpoch.litmus</AssemblyName>
     <RootNamespace>Tsavorite.epoch.litmus</RootNamespace>
     <SignAssembly>true</SignAssembly>
-    <AssemblyOriginatorKeyFile>../../../../../../../Garnet.snk</AssemblyOriginatorKeyFile>
+    <AssemblyOriginatorKeyFile>../../Garnet.snk</AssemblyOriginatorKeyFile>
     <DelaySign>false</DelaySign>
     <IsPackable>false</IsPackable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -35,7 +34,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\..\src\epoch\Garnet.LightEpoch.csproj" />
+    <ProjectReference Include="..\..\libs\storage\Tsavorite\cs\src\epoch\Garnet.LightEpoch.csproj" />
   </ItemGroup>
 
 </Project>

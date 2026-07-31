@@ -15,10 +15,6 @@
          herd7/capture console project; none of it belongs in this test assembly. -->
     <Compile Remove="formal-verification/**" />
     <None Remove="formal-verification/**" />
-
-    <!-- litmus/ is its own executable project, referenced below. -->
-    <Compile Remove="litmus/**" />
-    <None Remove="litmus/**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,7 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\core\Tsavorite.core.csproj" />
-    <ProjectReference Include="litmus\Garnet.LightEpoch.litmus.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\playground\LightEpochLitmus\LightEpochLitmus.csproj" />
   </ItemGroup>
 
 </Project>

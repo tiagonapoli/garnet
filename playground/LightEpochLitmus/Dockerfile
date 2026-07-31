@@ -3,7 +3,7 @@
 # The build context is the repository root, because the tool builds against the real
 # Garnet.LightEpoch project rather than a copy:
 #
-#   docker build -f libs/storage/Tsavorite/cs/test/epoch/litmus/Dockerfile -t garnet-lightepoch-litmus .
+#   docker build -f playground/LightEpochLitmus/Dockerfile -t garnet-lightepoch-litmus .
 #
 # Run the default check (forced-failure control, then a 30 s soak):
 #
@@ -35,15 +35,14 @@ ARG TFM
 WORKDIR /src
 
 COPY Directory.Build.props Directory.Packages.props Version.props Garnet.snk ./
-COPY libs/storage/Tsavorite/cs/test/Directory.Build.props libs/storage/Tsavorite/cs/test/
 COPY libs/storage/Tsavorite/cs/src/epoch/ libs/storage/Tsavorite/cs/src/epoch/
-COPY libs/storage/Tsavorite/cs/test/epoch/litmus/ libs/storage/Tsavorite/cs/test/epoch/litmus/
+COPY playground/LightEpochLitmus/ playground/LightEpochLitmus/
 
-RUN dotnet publish libs/storage/Tsavorite/cs/test/epoch/litmus/Garnet.LightEpoch.litmus.csproj \
+RUN dotnet publish playground/LightEpochLitmus/LightEpochLitmus.csproj \
         -c Release -f ${TFM} -o /app
 
 FROM mcr.microsoft.com/dotnet/runtime:${DOTNET_RUNTIME_TAG}
 WORKDIR /app
 COPY --from=build /app .
 
-ENTRYPOINT ["dotnet", "/app/Garnet.LightEpoch.litmus.dll"]
+ENTRYPOINT ["dotnet", "/app/LightEpochLitmus.dll"]
