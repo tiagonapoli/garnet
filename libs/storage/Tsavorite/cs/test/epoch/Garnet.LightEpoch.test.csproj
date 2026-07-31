@@ -11,6 +11,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- litmus/ is its own executable project, referenced below. -->
+    <Compile Remove="litmus/**" />
+    <None Remove="litmus/**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="NUnit" />
     <PackageReference Include="NUnit3TestAdapter">
@@ -21,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\core\Tsavorite.core.csproj" />
+    <ProjectReference Include="litmus\Garnet.LightEpoch.litmus.csproj" />
   </ItemGroup>
 
 </Project>

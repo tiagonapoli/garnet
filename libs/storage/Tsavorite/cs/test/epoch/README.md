@@ -1,7 +1,7 @@
 # Garnet.LightEpoch tests
 
 Unit tests for `LightEpoch` plus a hardware litmus soak harness that runs the
-real use-after-free race.
+real use-after-free race, which also ships as a standalone tool.
 
 ## Unit tests
 
@@ -11,7 +11,7 @@ dotnet test libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj
 
 ## Litmus tests
 
-`Litmus/` holds a hardware stress harness that runs the real race: a reader
+`litmus/` holds a hardware stress harness that runs the real race: a reader
 announces its epoch and dereferences a page while a reclaimer retires that same
 page. `LitmusTests` drives it for 30 s, under the `Litmus`
 category so a fast suite can skip it:
@@ -33,6 +33,56 @@ Two things make a green run mean something, and both are asserted:
 - **Self-test control.** A paired test forces the failure and
   asserts it *is* detected. If the control ever passes silently, the detector is blind
   and the clean verdict beside it is void.
+
+### Running it as a tool
+
+`litmus/` is its own executable, `Garnet.LightEpoch.litmus`, and the NUnit tests
+above are a thin wrapper over it. Use the executable when you want a soak longer
+than a test run should take, a machine-readable result, or a run on a machine that
+has no SDK on it:
+
+```
+dotnet run --project libs/storage/Tsavorite/cs/test/epoch/litmus -f net8.0 -- --seconds 600 --json result.json
+```
+
+It runs the forced-failure control first and refuses to continue unless the
+detector reports it, then soaks. `--help` lists every option. The exit code is the
+result: `0` pass, `1` violation, `2` inconclusive (blind detector, nothing sampled,
+nothing reclaimed, or emulation), `3` unsupported host, `64` bad arguments. The
+distinction between `0` and `2` is the point — an inconclusive run is not a pass.
+
+In Docker, with the repository root as the build context:
+
+```
+docker build -f libs/storage/Tsavorite/cs/test/epoch/litmus/Dockerfile -t garnet-lightepoch-litmus .
+docker run --rm garnet-lightepoch-litmus --seconds 3600 --iterations 8 --json -
+```
+
+The container needs at least 4 logical processors and pins threads with
+`sched_setaffinity`, so do not restrict it below that with `--cpuset-cpus`.
+
+### Do not run this under emulation
+
+Building the image with `--platform linux/arm64` on an x86 host runs it under QEMU,
+and an emulator does not reproduce the emulated architecture's memory ordering: the
+reorderings this harness exists to catch cannot occur, so the run comes back clean
+whatever the code does. This was verified, not assumed — before the guard below
+existed, an `arm64` image on an x86-64 host reported `PASS` and exit `0`.
+
+The self-test control does **not** protect you here. It recycles pages
+unconditionally rather than relying on a reordering, so it fires under emulation
+exactly as it does on real hardware; in that same run it reported 1,156 violations
+while the soak reported none.
+
+So the tool detects emulation directly and downgrades a pass to inconclusive.
+Detection is heuristic and one-sided — a positive is reliable, a negative is not a
+guarantee. The signal that catches the Docker case is the MIDR: every real AArch64
+implementer is registered and non-zero (`0x41` ARM, `0x50` Ampere, `0x51` Qualcomm,
+`0x61` Apple), while QEMU's TCG synthesises `0x00`. `--allow-emulation` overrides
+it, and is only ever appropriate for exercising the harness itself.
+
+**For an architecture other than the host's, build and run on a native machine of
+that architecture.** Nothing else produces evidence.
 
 ### Measured power, and its limits
 
