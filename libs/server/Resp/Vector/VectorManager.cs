@@ -367,7 +367,11 @@ namespace Garnet.server
             }
 
             // Resume any cleanups we didn't complete before recovery
-            _ = cleanupTaskChannel.Writer.TryWrite(null);
+            cleanupTracker.RegisterCleanup();
+            if (!cleanupTaskChannel.Writer.TryWrite(null))
+            {
+                cleanupTracker.OnCleanupComplete();
+            }
         }
 
         /// <summary>
@@ -633,8 +637,10 @@ namespace Garnet.server
 
             var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+            cleanupTracker.RegisterCleanup();
             if (!requestCleanupTaskChannel.Writer.TryWrite((context, tcs)))
             {
+                cleanupTracker.OnCleanupComplete();
                 throw new GarnetException("Could not submit request for Vector Set cleanup, aborting delete");
             }
 
@@ -676,8 +682,13 @@ namespace Garnet.server
             // It's possible for an index to be recovered from disk but never initialized, which means we need no drop
             if (indexPtr != 0)
             {
+                // Registered before the drop becomes visible, so a concurrent drain cannot observe an
+                // empty pipeline in the window between the add and the wake.
+                cleanupTracker.RegisterCleanup();
+
                 if (!requestedDrops.TryAdd(key.ToArray(), (context, indexPtr)))
                 {
+                    cleanupTracker.OnCleanupComplete();
                     throw new GarnetException($"Drop triggered multiple times for same index: {SpanByte.ToShortString(key)}");
                 }
 

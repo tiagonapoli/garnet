@@ -95,13 +95,13 @@ namespace Garnet.server
         private readonly ConcurrentDictionary<byte[], (ulong Context, nint IndexPtr)>.AlternateLookup<ReadOnlySpan<byte>> requestedDropsLookup;
 #endif
         private readonly ConcurrentDictionary<ulong, byte[]> potentiallyDeleted;
+        private readonly VectorSetCleanupTracker cleanupTracker = new();
         private readonly Task cleanupTask;
         private readonly Task requestCleanupTask;
         private readonly Task requestDropTask;
         private readonly Func<IMessageConsumer> getTempSession;
 
         private bool requestCleanupTaskRunning;
-        private bool cleanupTaskRunning;
         private int postCheckpointTasksRunning;
 
         // Pause / resume coordination for the cleanup task vs concurrent Reset.
@@ -141,21 +141,13 @@ namespace Garnet.server
         {
             while (await requestDropTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Drain all wake up signals, collecting any drain-barrier sentinels so we can
-                // signal them once this pass over requestedDrops has completed.
-                List<TaskCompletionSource> sentinels = null;
-                while (requestDropTaskChannel.Reader.TryRead(out var item))
+                // Wakes are only nudges — the work itself is tracked by requestedDrops, whose entries
+                // are registered with cleanupTracker before they are added and completed as they are
+                // removed. So a wake carries no obligation and can simply be drained.
+                while (requestDropTaskChannel.Reader.TryRead(out _))
                 {
-                    if (item is TaskCompletionSource sentinel)
-                    {
-                        (sentinels ??= []).Add(sentinel);
-                    }
                 }
 
-                // Everything from here on must run under a try that signals the collected sentinels:
-                // they have already been removed from the channel, so any escape without completing
-                // them would hang every caller of WaitForCleanupCompleteAsync forever.
-                Exception failure = null;
                 try
                 {
                     // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
@@ -169,8 +161,7 @@ namespace Garnet.server
 
                     // Test seam: when drops are pending, hold this pass in flight so a store-empty
                     // boundary can be crossed while native drops are still outstanding — proving the
-                    // sync-path drain barrier is what waits for them. Guarded on non-empty drops so the
-                    // drain's own sentinel round-trips (which carry no drops) never re-park here.
+                    // sync-path drain barrier is what waits for them.
                     if (!requestedDrops.IsEmpty)
                         await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop).ConfigureAwait(false);
 
@@ -195,7 +186,11 @@ namespace Garnet.server
                         finally
                         {
                             vectorSetLocks.ReleaseLock(lockToken);
-                            if (!requestedDrops.TryRemove(k, out _))
+                            if (requestedDrops.TryRemove(k, out _))
+                            {
+                                cleanupTracker.OnCleanupComplete();
+                            }
+                            else
                             {
                                 logger?.LogCritical("Drop for {key} raced with some other cleanup, this should never happen", SpanByte.ToShortString(k));
                             }
@@ -204,27 +199,11 @@ namespace Garnet.server
                 }
                 catch (Exception e)
                 {
-                    failure = e;
                     logger?.LogError(e, "Failure during background drop of Vector Set indexes, implies storage leak");
                 }
                 finally
                 {
                     ActiveThreadSession = null;
-
-                    if (sentinels != null)
-                    {
-                        foreach (var sentinel in sentinels)
-                        {
-                            if (failure == null)
-                            {
-                                _ = sentinel.TrySetResult();
-                            }
-                            else
-                            {
-                                _ = sentinel.TrySetException(failure);
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -250,6 +229,10 @@ namespace Garnet.server
 
                 var completions = new List<TaskCompletionSource>();
 
+                // Every item read below was registered by its producer, so this pass owns exactly that
+                // many registrations and must complete them all before it loops.
+                var owned = 0;
+
                 try
                 {
                     // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
@@ -267,6 +250,8 @@ namespace Garnet.server
                         // Read all pending requests so we can do one update
                         while (requestCleanupTaskChannel.Reader.TryRead(out var t))
                         {
+                            owned++;
+
                             if (t.MarkCompleted != null)
                             {
                                 completions.Add(t.MarkCompleted);
@@ -303,8 +288,14 @@ namespace Garnet.server
                         }
                     }
 
-                    // Pump the cleanup task once we're done
-                    _ = cleanupTaskChannel.Writer.TryWrite(null);
+                    // Pump the cleanup task once we're done. Registered here, before this pass releases
+                    // its own registrations below, so the tracked count never dips to zero across the
+                    // hand-off from marking to scanning.
+                    cleanupTracker.RegisterCleanup();
+                    if (!cleanupTaskChannel.Writer.TryWrite(null))
+                    {
+                        cleanupTracker.OnCleanupComplete();
+                    }
                 }
                 catch (Exception e)
                 {
@@ -323,6 +314,11 @@ namespace Garnet.server
                 }
                 finally
                 {
+                    for (var i = 0; i < owned; i++)
+                    {
+                        cleanupTracker.OnCleanupComplete();
+                    }
+
                     Volatile.Write(ref requestCleanupTaskRunning, false);
                 }
             }
@@ -337,114 +333,103 @@ namespace Garnet.server
         {
             while (await cleanupTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Flagged while the signal is still sitting in the channel, so a concurrent drain
-                // barrier either peeks the item or observes this flag — it can never see an empty
-                // channel while a scan is in flight.
-                Volatile.Write(ref cleanupTaskRunning, true);
-                try
+                // Each drop index will queue a null object here
+                // We'll handle multiple at once if possible, but using a channel simplifies cancellation and dispose
+                while (cleanupTaskChannel.Reader.TryRead(out _))
                 {
-                    // Each drop index will queue a null object here
-                    // We'll handle multiple at once if possible, but using a channel simplifies cancellation and dispose
-                    while (cleanupTaskChannel.Reader.TryRead(out var signal))
+                    try
                     {
-                        // A drain barrier (WaitForCleanupComplete) enqueues a TaskCompletionSource sentinel. The
-                        // channel is FIFO with a single reader, so reaching the sentinel means every cleanup
-                        // pumped before it has already finished — just signal and move on without re-scanning.
-                        if (signal is TaskCompletionSource sentinel)
+                        await cleanupGate.WaitAsync().ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        cleanupTracker.OnCleanupComplete();
+                        throw;
+                    }
+
+                    try
+                    {
+                        // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
+                        using var cleanupSession = (RespServerSession)getTempSession();
+                        if (cleanupSession.activeDbId != dbId && !cleanupSession.TrySwitchActiveDatabaseSession(dbId))
                         {
-                            _ = sentinel.TrySetResult();
-                            continue;
+                            throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
                         }
 
-                        await cleanupGate.WaitAsync().ConfigureAwait(false);
+                        // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
+                        //
+                        // So we use to different contexts, one to scan (strings) and one to delete (vectors)
+                        // The ref locals are (re)taken after the pause seam below so they don't cross an await.
 
-                        try
+                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
+
+                        HashSet<ulong> needCleanup = null;
+                        lock (this)
                         {
-                            // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
-                            using var cleanupSession = (RespServerSession)getTempSession();
-                            if (cleanupSession.activeDbId != dbId && !cleanupSession.TrySwitchActiveDatabaseSession(dbId))
+                            for (var i = 0; i < contextMetadatas.Length; i++)
                             {
-                                throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
-                            }
-
-                            // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
-                            //
-                            // So we use to different contexts, one to scan (strings) and one to delete (vectors)
-                            // The ref locals are (re)taken after the pause seam below so they don't cross an await.
-
-                            ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
-
-                            HashSet<ulong> needCleanup = null;
-                            lock (this)
-                            {
-                                for (var i = 0; i < contextMetadatas.Length; i++)
+                                var subCleanup = contextMetadatas[i].GetNeedCleanup();
+                                if (subCleanup != null)
                                 {
-                                    var subCleanup = contextMetadatas[i].GetNeedCleanup();
-                                    if (subCleanup != null)
-                                    {
-                                        var offset = ContextMetadata.OffsetForContextMetadata(i);
+                                    var offset = ContextMetadata.OffsetForContextMetadata(i);
 
-                                        needCleanup ??= [];
-                                        foreach (var item in subCleanup)
-                                        {
-                                            _ = needCleanup.Add(offset + item);
-                                        }
+                                    needCleanup ??= [];
+                                    foreach (var item in subCleanup)
+                                    {
+                                        _ = needCleanup.Add(offset + item);
                                     }
                                 }
                             }
-
-                            if (needCleanup == null)
-                            {
-                                // Previous run already got here, so bail
-                                continue;
-                            }
-
-                            // Test seam: park here with the needCleanup snapshot built but before the delete-scan,
-                            // so a test can stream a record into one of those namespaces (mimicking diskless as-is
-                            // streaming) and prove the scan below then deletes it.
-                            await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
-
-                            // Take the scan/delete contexts after the pause so no ref local crosses the await.
-                            ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
-
-                            PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
-
-                            // Scan whole keyspace and remove any associated data using a snapshot
-                            // lookup-based push iterator. This avoids building a parallel tempKv (which
-                            // would cost memory proportional to the keyspace) — IterateLookupSnapshot
-                            // walks the log and uses hash-chain liveness checks bounded to the snapshot's
-                            // TailAddress, so concurrent RCUs don't drop records.
-                            _ = scanCtx.Session.IterateLookupSnapshot(ref callbacks);
-
-                            ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_2);
-
-                            lock (this)
-                            {
-                                foreach (var cleanedUp in needCleanup)
-                                {
-                                    var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(cleanedUp);
-                                    contextMetadatas[contextIndex].FinishedCleaningUp(contextIndex != 0, contextValue);
-
-                                    _ = dirtyContextMetadatas.Add(contextIndex);
-                                }
-                            }
-
-                            ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
-                            UpdateContextMetadata(ref delCtx);
                         }
-                        catch (Exception e)
+
+                        if (needCleanup == null)
                         {
-                            logger?.LogError(e, "Failure during background cleanup of deleted vector sets, implies storage leak");
+                            // Previous run already got here, so bail
+                            continue;
                         }
-                        finally
+
+                        // Test seam: park here with the needCleanup snapshot built but before the delete-scan,
+                        // so a test can stream a record into one of those namespaces (mimicking diskless as-is
+                        // streaming) and prove the scan below then deletes it.
+                        await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
+
+                        // Take the scan/delete contexts after the pause so no ref local crosses the await.
+                        ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
+
+                        PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
+
+                        // Scan whole keyspace and remove any associated data using a snapshot
+                        // lookup-based push iterator. This avoids building a parallel tempKv (which
+                        // would cost memory proportional to the keyspace) — IterateLookupSnapshot
+                        // walks the log and uses hash-chain liveness checks bounded to the snapshot's
+                        // TailAddress, so concurrent RCUs don't drop records.
+                        _ = scanCtx.Session.IterateLookupSnapshot(ref callbacks);
+
+                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_2);
+
+                        lock (this)
                         {
-                            _ = cleanupGate.Release();
+                            foreach (var cleanedUp in needCleanup)
+                            {
+                                var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(cleanedUp);
+                                contextMetadatas[contextIndex].FinishedCleaningUp(contextIndex != 0, contextValue);
+
+                                _ = dirtyContextMetadatas.Add(contextIndex);
+                            }
                         }
+
+                        ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
+                        UpdateContextMetadata(ref delCtx);
                     }
-                }
-                finally
-                {
-                    Volatile.Write(ref cleanupTaskRunning, false);
+                    catch (Exception e)
+                    {
+                        logger?.LogError(e, "Failure during background cleanup of deleted vector sets, implies storage leak");
+                    }
+                    finally
+                    {
+                        _ = cleanupGate.Release();
+                        cleanupTracker.OnCleanupComplete();
+                    }
                 }
             }
         }
@@ -530,72 +515,9 @@ namespace Garnet.server
         /// has been emptied, so the eviction-driven drops enqueued by emptying the store are included.
         ///
         /// The cleanup task must NOT be paused (via <see cref="PauseCleanupAsync"/>) when this is
-        /// called, otherwise the cleanup-scan sentinel can never be processed and the wait will hang.
+        /// called, otherwise the queued cleanup scans can never run and the wait will hang.
         /// </summary>
-        public async Task WaitForCleanupCompleteAsync()
-        {
-            // The pipeline is acyclic: checkpoint discovery -> request-cleanup marking -> cleanup scan;
-            // native drops are independent. Drain in that order, then re-verify; repeat only if a
-            // concurrent checkpoint completion re-primed the chain.
-            while (true)
-            {
-                // Stage: checkpoint-driven discovery. While a QueueCleanups pass is running it keeps
-                // feeding the request-cleanup channel, so wait for it to finish first.
-                while (Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) != 0)
-                {
-                    await Task.Yield();
-                }
-
-                // Stage: request-cleanup marking. This pumps the cleanup scan, so drain it before the
-                // scan sentinel below.
-                while (requestCleanupTaskChannel.Reader.TryPeek(out _) || Volatile.Read(ref requestCleanupTaskRunning))
-                {
-                    await Task.Yield();
-                }
-
-                // Stage: cleanup scan. FIFO single-reader guarantees every pump enqueued above has been
-                // processed once our sentinel comes back.
-                //
-                // The sentinel alone is not sufficient for the final verdict: the stage above is checked
-                // once and then released, so a deletion arriving between that check and the write below
-                // lands its pump AFTER our sentinel. cleanupTaskRunning covers that window in the
-                // re-verify — without it the drain can return while a scan is still deleting records.
-                await RoundTripAsync(cleanupTaskChannel).ConfigureAwait(false);
-
-                // Stage: native drops. Round-trip a sentinel, then confirm the pending-drop set drained.
-                await RoundTripAsync(requestDropTaskChannel).ConfigureAwait(false);
-                while (!requestedDrops.IsEmpty)
-                {
-                    await RoundTripAsync(requestDropTaskChannel).ConfigureAwait(false);
-                }
-
-                if (Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) == 0
-                    && !requestCleanupTaskChannel.Reader.TryPeek(out _)
-                    && !Volatile.Read(ref requestCleanupTaskRunning)
-                    && !cleanupTaskChannel.Reader.TryPeek(out _)
-                    && !Volatile.Read(ref cleanupTaskRunning)
-                    && !requestDropTaskChannel.Reader.TryPeek(out _)
-                    && requestedDrops.IsEmpty)
-                {
-                    return;
-                }
-            }
-
-            // Enqueue a sentinel onto a background-task channel and wait for that task to process it.
-            // Because each channel has a single FIFO reader, completion of the sentinel proves every
-            // item enqueued before it has been fully handled.
-            static async Task RoundTripAsync(Channel<object> channel)
-            {
-                var sentinel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                if (!channel.Writer.TryWrite(sentinel))
-                {
-                    // Channel completed (Dispose in progress) — nothing left to drain.
-                    return;
-                }
-
-                await sentinel.Task.ConfigureAwait(false);
-            }
-        }
+        public Task WaitForCleanupCompleteAsync() => cleanupTracker.WaitAllCleanupsAsync();
 
         /// <summary>
         /// Synchronous wrapper over <see cref="WaitForCleanupCompleteAsync"/>.
@@ -632,6 +554,10 @@ namespace Garnet.server
         public unsafe void CheckpointCompleted()
         {
             _ = Interlocked.Increment(ref postCheckpointTasksRunning);
+
+            // The discovery pass itself is cleanup work: it can still be enumerating potentiallyDeleted
+            // and feeding the request-cleanup channel, so it must be visible to a drain until it ends.
+            cleanupTracker.RegisterCleanup();
             _ = Task.Run(() => QueueCleanups(this));
 
             static void QueueCleanups(VectorManager self)
@@ -678,9 +604,13 @@ namespace Garnet.server
 
                                 if (needsDelete)
                                 {
-                                    // No need to wait for marking, since the record is already "deleted"
+                                    // No need to wait for marking, since the record is already "deleted".
+                                    // Registered before the write and before this pass releases its own
+                                    // registration, so the hand-off never lets the count reach zero.
+                                    self.cleanupTracker.RegisterCleanup();
                                     if (!self.requestCleanupTaskChannel.Writer.TryWrite((context, null)))
                                     {
+                                        self.cleanupTracker.OnCleanupComplete();
                                         self.logger?.LogWarning("Could not request delete of abandoned Vector Set {key}", SpanByte.ToShortString(key));
                                     }
                                 }
@@ -696,6 +626,7 @@ namespace Garnet.server
                 }
                 finally
                 {
+                    self.cleanupTracker.OnCleanupComplete();
                     _ = Interlocked.Decrement(ref self.postCheckpointTasksRunning);
                 }
             }
