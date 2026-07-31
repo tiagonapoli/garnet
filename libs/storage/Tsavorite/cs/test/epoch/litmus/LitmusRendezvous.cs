@@ -5,7 +5,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace Tsavorite.test.epoch
+namespace Tsavorite.epoch.litmus
 {
     /// <summary>
     /// Two-thread lockstep barrier for the litmus harnesses, plus the shared shutdown

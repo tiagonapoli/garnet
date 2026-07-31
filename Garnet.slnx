@@ -78,6 +78,7 @@
   </Folder>
   <Folder Name="/test/">
     <Project Path="libs/storage/Tsavorite/cs/test/epoch/Garnet.LightEpoch.test.csproj" />
+    <Project Path="libs/storage/Tsavorite/cs/test/epoch/litmus/Garnet.LightEpoch.litmus.csproj" />
     <Project Path="test/Garnet.fuzz/Garnet.fuzz.csproj" />
     <Project Path="test/standalone/BfTreeInterop.test/BfTreeInterop.test.csproj" />
     <Project Path="test/standalone/Garnet.test/Garnet.test.csproj" />

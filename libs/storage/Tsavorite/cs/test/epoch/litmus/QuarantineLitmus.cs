@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using Tsavorite.core;
 
-namespace Tsavorite.test.epoch
+namespace Tsavorite.epoch.litmus
 {
     /// <summary>Outcome of a <see cref="QuarantineLitmus"/> run.</summary>
     internal sealed class QuarantineLitmusResult

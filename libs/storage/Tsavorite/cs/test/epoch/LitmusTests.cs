@@ -3,6 +3,7 @@
 
 using System;
 using NUnit.Framework;
+using Tsavorite.epoch.litmus;
 
 namespace Tsavorite.test.epoch
 {

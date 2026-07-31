@@ -5,7 +5,7 @@ using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace Tsavorite.test.epoch
+namespace Tsavorite.epoch.litmus
 {
     /// <summary>
     /// The two OS primitives the litmus tests need: whole-page allocation that can be truly
