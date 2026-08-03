@@ -35,7 +35,7 @@ namespace Tsavorite.epoch.litmus
                 return ExitUnsupported;
             }
 
-            if (!CoreLayout.TrySelect(out var cores))
+            if (!CoreLayout.TrySelect(options.Disturbers, out var cores))
             {
                 Console.Error.WriteLine($"unsupported: the harness needs at least 4 logical processors to separate the reader from the reclaimer; this machine has {Environment.ProcessorCount}");
                 return ExitUnsupported;
@@ -175,6 +175,9 @@ namespace Tsavorite.epoch.litmus
                     case "--iterations":
                         if (!TryInt(args, ref i, out options.Iterations, out error)) return false;
                         break;
+                    case "--disturbers":
+                        if (!TryInt(args, ref i, out options.Disturbers, out error)) return false;
+                        break;
                     case "--json":
                         if (++i >= args.Length) { error = "--json needs a path, or - for stdout"; return false; }
                         options.JsonPath = args[i];
@@ -203,6 +206,7 @@ namespace Tsavorite.epoch.litmus
             if (options.Seconds <= 0 || options.ControlSeconds <= 0) { error = "durations must be positive"; return false; }
             if (options.Deref <= 0) { error = "--deref must be positive"; return false; }
             if (options.Iterations <= 0) { error = "--iterations must be positive"; return false; }
+            if (options.Disturbers < 0) { error = "--disturbers cannot be negative"; return false; }
             if (options.SelfTestOnly && options.NoControl) { error = "--self-test and --no-control cancel each other out"; return false; }
 
             return true;
@@ -232,6 +236,9 @@ namespace Tsavorite.epoch.litmus
               --seconds N          main stress run duration, per iteration (default 30)
               --iterations N       repeat the stress run N times (default 1)
               --deref N            words the reader walks per protected region (default 20000)
+              --disturbers N       threads that keep the epoch table's cache lines shared, which is
+                                   what pins an announce in the store buffer long enough to matter
+                                   (default 6, 0 to disable)
               --control-seconds N  duration of the forced-failure control (default 5)
               --self-test          run only the control, to check the detector fires here
               --no-control         skip the control (a clean result then proves much less)
@@ -259,6 +266,7 @@ namespace Tsavorite.epoch.litmus
             internal int ControlSeconds = 5;
             internal int Deref = 20_000;
             internal int Iterations = 1;
+            internal int Disturbers = 6;
             internal bool SelfTestOnly;
             internal bool NoControl;
             internal bool AllowEmulation;
