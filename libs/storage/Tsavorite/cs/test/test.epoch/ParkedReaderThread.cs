@@ -12,9 +12,8 @@ namespace Tsavorite.test.epoch
     /// an epoch pinned open by somebody other than the test thread, because that is the only way to
     /// stop <see cref="LightEpoch.SafeToReclaimEpoch"/> from advancing and drain actions from firing.
     /// </summary>
-    sealed class ParkedReaderThread : IDisposable
+    internal sealed class ParkedReaderThread : IDisposable
     {
-
         readonly Thread thread;
         readonly ManualResetEventSlim release = new();
         long announcedEpoch;
@@ -50,8 +49,7 @@ namespace Tsavorite.test.epoch
 
         public void Dispose()
         {
-            release.Set();
-            _ = thread.Join(EpochTestBase.Timeout);
+            LeaveAndJoin();
             release.Dispose();
         }
     }
