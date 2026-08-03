@@ -4,9 +4,13 @@ A hardware stress harness that runs the real `LightEpoch` use-after-free race: a
 reader announces its epoch and dereferences a page while a reclaimer retires that
 same page. It ships as a standalone executable, `LightEpochLitmus`.
 
-It lives in `playground/` rather than under `test/` because it is a tool, not part
-of the test gate: it pins threads to specific logical processors and saturates them
-for minutes at a time, which no shared CI machine should be asked to absorb.
+*Litmus test* is the term from the memory-model literature (Alglave & Maranget's
+`herd7`, ARM's and Intel's architecture documents) for a minimal program built to
+expose one specific instruction reordering. Everything the outcome does not depend
+on is stripped away, so a single observed result is attributable to one hardware
+behaviour and nothing else. This harness is the runtime counterpart of the `herd7`
+tests in the companion repo: same reduced shape, run on real silicon instead of a
+model.
 
 ## What it asserts
 
@@ -21,6 +25,18 @@ Two things make a green run mean something, and both are asserted:
 - **Self-test control.** A forced failure that must be detected. If the control ever
   passes silently, the detector is blind and the clean verdict beside it is void.
 
+## The pieces
+
+- **`QuarantineLitmus`** — the race itself: the reader/reclaimer loop, the page pool,
+  the poison stamp, and the violation counter. Generic over the epoch so the JIT
+  specialises it and the reader keeps direct calls; an indirection inside the race
+  window could hide the reordering being hunted.
+- **`LitmusRendezvous`** — the two-thread barrier that lines the reader and reclaimer
+  up at the top of every pass. Without it they drift apart and stop overlapping, so
+  the window is never sampled.
+- **`LitmusEpoch`** — the `ILitmusEpoch` seam plus the `FixedEpoch` and `BuggyEpoch`
+  struct adapters, which is what lets one binary run either algorithm.
+
 ## Comparing against the unfixed algorithm
 
 `BuggyLightEpoch.cs` is a frozen copy of `LightEpoch` as it stood before this PR, used
@@ -30,7 +46,7 @@ source and rebuilding:
 
 ```
 dotnet run -c Release --project playground/LightEpochLitmus -- --buggy --seconds 30
-dotnet run -c Release --project playground/LightEpochLitmus -- --seconds 20
+dotnet run -c Release --project playground/LightEpochLitmus -- --seconds 30
 ```
 
 The first is expected to exit `1` with a non-zero violation count, the second to exit
@@ -108,5 +124,6 @@ difference between detecting the bug and detecting nothing at all, or close to i
   sharing a line, the same runs reported 10, 16, 22 and 22 — roughly a third of the
   detection power. The contended line delays the reader into exactly the "arriving
   late" regime described above.
+
 
 
