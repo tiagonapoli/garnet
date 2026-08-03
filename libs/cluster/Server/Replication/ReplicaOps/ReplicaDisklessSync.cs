@@ -119,11 +119,7 @@ namespace Garnet.cluster
                             vectorManager?.ResumeCleanup();
                         }
 
-                        // For replica sync the primary issues a FLUSHALL just before this command and expects
-                        // the replica to be empty. If we don't wait for all Vector Sets to be cleaned up, the
-                        // streamed namespaced keys will possibly race with a cleanup task deleting a namespace.
-                        // Awaited after ResumeCleanup, since a paused cleanup task can never process the drain
-                        // sentinel.
+                        // Drain Vector Set cleanup before streaming, or it can delete a namespace the stream writes into.
                         if (vectorManager != null)
                             await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
                     }
@@ -246,12 +242,7 @@ namespace Garnet.cluster
                 // Before advertising updated replication offset, wait for Vector Set ops to finish
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForVectorOperationsToComplete();
 
-                // Wait for the Vector Set cleanup pipeline to drain before advertising the offset and
-                // resuming serving. Streamed records carry the primary's namespaces as-is, so any
-                // cleanup task still draining on this replica could delete a namespace that the stream
-                // just wrote into. This is unconditional: a full sync empties the store via the
-                // primary-driven CLUSTER FLUSHALL (queueing eviction-driven native drops), and a
-                // partial sync streams into a store where ordinary cleanup may already be in flight.
+                // Drain Vector Set cleanup before advertising the offset, or it can delete a streamed namespace.
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForCleanupComplete();
 
                 this.replicationOffset = _replicationOffset;
