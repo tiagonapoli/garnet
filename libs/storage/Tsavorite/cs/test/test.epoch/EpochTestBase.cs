@@ -11,10 +11,22 @@ namespace Tsavorite.test.epoch
 {
     /// <summary>
     /// Base for every fixture here: the running-test tracking from <see cref="Garnet.test.TestBase"/>,
-    /// plus the timeouts and join helpers these tests share.
+    /// a fresh <see cref="LightEpoch"/> per test, and the timeouts and join helpers they share.
     /// </summary>
     public abstract class EpochTestBase : Garnet.test.TestBase
     {
+        protected LightEpoch epoch;
+
+        [SetUp]
+        public virtual void CreateEpoch() => epoch = new LightEpoch();
+
+        [TearDown]
+        public virtual void DisposeEpoch()
+        {
+            epoch?.Dispose();
+            epoch = null;
+        }
+
         /// <summary>Long enough that only a genuine hang trips it, not a slow machine.</summary>
         internal static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
@@ -39,26 +51,6 @@ namespace Tsavorite.test.epoch
         {
             foreach (var thread in threads)
                 _ = thread.Join(Timeout);
-        }
-    }
-
-    /// <summary>
-    /// Base for the fixtures that test a single epoch instance, which is most of them.
-    /// <see cref="InstanceTests"/> derives from <see cref="EpochTestBase"/> directly because it
-    /// asserts exact <see cref="LightEpoch.ActiveInstanceCount"/> deltas.
-    /// </summary>
-    public abstract class SingleEpochTestBase : EpochTestBase
-    {
-        protected LightEpoch epoch;
-
-        [SetUp]
-        public virtual void CreateEpoch() => epoch = new LightEpoch();
-
-        [TearDown]
-        public virtual void DisposeEpoch()
-        {
-            epoch?.Dispose();
-            epoch = null;
         }
     }
 }

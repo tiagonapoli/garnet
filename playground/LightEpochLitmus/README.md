@@ -4,12 +4,12 @@ A hardware stress harness that runs the real `LightEpoch` use-after-free race: a
 reader announces its epoch and dereferences a page while a reclaimer retires that
 same page. Ships as a standalone executable, `LightEpochLitmus`.
 
-*Litmus test* is the memory-model term (Alglave & Maranget's `herd7`, the ARM and
-Intel architecture manuals) for a minimal program built to expose one specific
-reordering — everything the outcome does not depend on is stripped away, so a result
-is attributable to one hardware behaviour and nothing else. This is the runtime
-counterpart of the `herd7` tests in the companion repo: same shape, run on silicon
-instead of a model.
+> *Litmus test* is the memory-model term (Alglave & Maranget's `herd7`, the ARM and
+> Intel architecture manuals) for a minimal program built to expose one specific
+> reordering — everything the outcome does not depend on is stripped away, so a result
+> is attributable to one hardware behaviour and nothing else. This is the runtime
+> counterpart of the `herd7` tests in the companion repo: same shape, run on silicon
+> instead of a model.
 
 ## What it asserts
 
@@ -56,7 +56,7 @@ dotnet run --project playground/LightEpochLitmus -- --seconds 600 --json result.
 ```
 
 It runs the forced-failure control first and refuses to continue unless the detector
-reports it, then soaks. `--help` lists every option. Exit codes: `0` pass, `1`
+reports it, then runs the stress loop. `--help` lists every option. Exit codes: `0` pass, `1`
 violation, `2` inconclusive (blind detector, nothing sampled, nothing reclaimed, or
 emulation), `3` unsupported host, `64` bad arguments. The distinction between `0` and
 `2` is the point — an inconclusive run is not a pass.
@@ -83,7 +83,7 @@ an x86-64 host reported `PASS` and exit `0`.
 
 The self-test control does **not** protect you here: it recycles pages
 unconditionally rather than relying on a reordering, so it fires under emulation just
-as on real hardware. In that same run it reported 1,156 violations while the soak
+as on real hardware. In that same run it reported 1,156 violations while the stress run
 reported none.
 
 So the tool detects emulation directly and downgrades a pass to inconclusive.
@@ -98,7 +98,7 @@ that architecture.** Nothing else produces evidence.
 
 ## Measured power, and its limits
 
-These are soak tests, not deterministic gates. Against a deliberately unfixed epoch
+These are stress tests, not deterministic gates. Against a deliberately unfixed epoch
 on a 20-logical-processor x86-64 host, successive 30 s runs reported 44, 33, 52, 111
 and 36 violations; with the CAS-carried announce every run reports 0. So a single
 30 s run reliably catches this regression here, but the counts are small enough that

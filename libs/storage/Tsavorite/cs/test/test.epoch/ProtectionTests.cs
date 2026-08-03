@@ -12,7 +12,7 @@ namespace Tsavorite.test.epoch
     /// and the refresh path leave behind in the epoch table.
     /// </summary>
     [TestFixture]
-    public class ProtectionTests : SingleEpochTestBase
+    public class ProtectionTests : EpochTestBase
     {
         [Test]
         public void UnprotectedThreadHoldsNoSlot()

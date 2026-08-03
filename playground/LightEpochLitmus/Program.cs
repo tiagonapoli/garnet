@@ -10,13 +10,6 @@ using System.Text.Json;
 
 namespace Tsavorite.epoch.litmus
 {
-    /// <summary>
-    /// Console driver for the Store-Buffer quarantine litmus over
-    /// <see cref="Tsavorite.core.LightEpoch"/>, with the run parameters exposed as arguments so a
-    /// soak can be pointed at real hardware for hours. <c>--buggy</c> swaps in
-    /// <see cref="BuggyLightEpoch"/>, the pre-fix version of the algorithm, so the violation counts of
-    /// the two can be compared on the same machine in the same session.
-    /// </summary>
     internal static class Program
     {
         const int ExitPass = 0;
@@ -51,6 +44,14 @@ namespace Tsavorite.epoch.litmus
             var emulated = Emulation.Detect();
             WriteHeader(options, cores, emulated);
 
+            if (emulated.IsEmulated && !options.AllowEmulation)
+            {
+                Console.Error.WriteLine($"unsupported: this process appears to be running under emulation ({emulated.Evidence}).");
+                Console.Error.WriteLine("An emulator does not reproduce the host's memory ordering, so no result here says anything about the architecture being emulated.");
+                Console.Error.WriteLine("Run on native hardware, or pass --allow-emulation if you understand the result is not evidence.");
+                return ExitUnsupported;
+            }
+
             // The epoch under test is a generic type argument rather than an interface reference so
             // the harness JITs down to direct calls; picking it here keeps that choice in one place.
             QuarantineLitmusResult Run(int seconds, bool selfTest) => options.Buggy
@@ -83,13 +84,13 @@ namespace Tsavorite.epoch.litmus
 
             if (options.SelfTestOnly)
             {
-                Console.WriteLine("PASS: control only, main soak skipped");
+                Console.WriteLine("PASS: control only, main stress run skipped");
                 return Finish(options, report, ExitPass, "control-only");
             }
 
             for (var i = 1; i <= options.Iterations; i++)
             {
-                var label = options.Iterations == 1 ? "-- soak" : $"-- soak {i}/{options.Iterations}";
+                var label = options.Iterations == 1 ? "-- stress" : $"-- stress {i}/{options.Iterations}";
                 Console.WriteLine($"{label}: {options.Seconds}s, deref={options.Deref} words");
 
                 var result = Run(options.Seconds, selfTest: false);
@@ -115,14 +116,6 @@ namespace Tsavorite.epoch.litmus
             {
                 Console.Error.WriteLine("INCONCLUSIVE: the epoch never decided any page was safe to recycle, so this run could not have failed regardless of correctness");
                 return Finish(options, report, ExitInconclusive, "never-reclaimed");
-            }
-
-            if (emulated.IsEmulated && !options.AllowEmulation)
-            {
-                Console.Error.WriteLine($"INCONCLUSIVE: this process appears to be running under emulation ({emulated.Evidence}).");
-                Console.Error.WriteLine("An emulator does not reproduce the host's memory ordering, so a clean result here says nothing about the architecture being emulated.");
-                Console.Error.WriteLine("Run on native hardware, or pass --allow-emulation if you understand the result is not evidence.");
-                return Finish(options, report, ExitInconclusive, "emulated");
             }
 
             Console.WriteLine($"PASS: no violation in {totals.ElapsedSeconds:F1}s across {totals.SampledRounds:N0} sampled rounds and {totals.Quarantines:N0} reclamations");
@@ -152,7 +145,7 @@ namespace Tsavorite.epoch.litmus
             Console.WriteLine($"  os        {RuntimeInformation.OSDescription}");
             Console.WriteLine($"  arch      {RuntimeInformation.ProcessArchitecture} ({Environment.ProcessorCount} logical processors)");
             Console.WriteLine($"  cores     {cores}");
-            Console.WriteLine($"  soak      {options.Seconds}s x {options.Iterations}, deref={options.Deref}");
+            Console.WriteLine($"  stress    {options.Seconds}s x {options.Iterations}, deref={options.Deref}");
             Console.WriteLine($"  epoch     {(options.Buggy ? "BuggyLightEpoch (pre-fix - expected to FAIL)" : "LightEpoch (fixed)")}");
 
             if (emulated.IsEmulated)
@@ -236,8 +229,8 @@ namespace Tsavorite.epoch.litmus
 
             usage: LightEpochLitmus [options]
 
-              --seconds N          main soak duration, per iteration (default 30)
-              --iterations N       repeat the soak N times (default 1)
+              --seconds N          main stress run duration, per iteration (default 30)
+              --iterations N       repeat the stress run N times (default 1)
               --deref N            words the reader walks per protected region (default 20000)
               --control-seconds N  duration of the forced-failure control (default 5)
               --self-test          run only the control, to check the detector fires here
@@ -249,7 +242,7 @@ namespace Tsavorite.epoch.litmus
               -h, --help           this message
 
             By default the control runs first: it forces the failure and the run aborts unless the
-            detector reports it. Without that, a clean soak cannot be distinguished from a soak
+            detector reports it. Without that, a clean run cannot be distinguished from a run
             that was never capable of failing.
 
             exit codes:

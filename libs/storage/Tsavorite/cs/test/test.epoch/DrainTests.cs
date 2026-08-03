@@ -15,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// becomes safe to reclaim, and not one moment sooner.
     /// </summary>
     [TestFixture]
-    public class DrainTests : SingleEpochTestBase
+    public class DrainTests : EpochTestBase
     {
         [Test]
         public void ActionRunsImmediatelyWhenNobodyElseIsProtected()

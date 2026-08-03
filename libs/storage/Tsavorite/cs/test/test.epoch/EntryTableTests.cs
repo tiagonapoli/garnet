@@ -14,7 +14,7 @@ namespace Tsavorite.test.epoch
     /// slot is occupied.
     /// </summary>
     [TestFixture]
-    public class EntryTableTests : SingleEpochTestBase
+    public class EntryTableTests : EpochTestBase
     {
         [Test]
         public void EntryCountIsAtLeastTheMinimumTableSize()
@@ -69,29 +69,12 @@ namespace Tsavorite.test.epoch
         public void AFullTableParksTheNextThreadUntilASlotIsFreed()
         {
             var capacity = epoch.EntryCount;
-
-            using var allIn = new CountdownEvent(capacity);
-            using var releaseFirst = new ManualResetEventSlim();
-            using var releaseRest = new ManualResetEventSlim();
-
-            var holders = new Thread[capacity];
-            for (var i = 0; i < capacity; i++)
-            {
-                var isFirst = i == 0;
-                holders[i] = new Thread(() =>
-                {
-                    epoch.Resume();
-                    _ = allIn.Signal();
-                    (isFirst ? releaseFirst : releaseRest).Wait();
-                    epoch.Suspend();
-                })
-                { IsBackground = true };
-                holders[i].Start();
-            }
+            var holders = new ParkedReaderThread[capacity];
 
             try
             {
-                Assert.That(allIn.Wait(Timeout), Is.True, "could not fill the epoch table");
+                for (var i = 0; i < capacity; i++)
+                    holders[i] = new ParkedReaderThread(epoch);
 
                 using var acquired = new ManualResetEventSlim();
                 var latecomer = new Thread(() =>
@@ -108,16 +91,15 @@ namespace Tsavorite.test.epoch
                 _ = SpinWait.SpinUntil(() => epoch.TestHookWaiterCount > 0, Timeout);
                 Assert.That(epoch.TestHookWaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
 
-                releaseFirst.Set();
+                holders[0].LeaveAndJoin();
 
                 Assert.That(acquired.Wait(Timeout), Is.True, "freeing a slot did not wake the waiter");
                 Assert.That(latecomer.Join(Timeout), Is.True);
             }
             finally
             {
-                releaseFirst.Set();
-                releaseRest.Set();
-                TryJoinAll(holders);
+                foreach (var holder in holders)
+                    holder?.Dispose();
             }
 
             Assert.That(epoch.TestHookWaiterCount, Is.Zero);
@@ -132,27 +114,12 @@ namespace Tsavorite.test.epoch
         {
             var disposable = new LightEpoch();
             var capacity = disposable.EntryCount;
-
-            using var allIn = new CountdownEvent(capacity);
-            using var release = new ManualResetEventSlim();
-
-            var holders = new Thread[capacity];
-            for (var i = 0; i < capacity; i++)
-            {
-                holders[i] = new Thread(() =>
-                {
-                    disposable.Resume();
-                    _ = allIn.Signal();
-                    release.Wait();
-                    disposable.Suspend();
-                })
-                { IsBackground = true };
-                holders[i].Start();
-            }
+            var holders = new ParkedReaderThread[capacity];
 
             try
             {
-                Assert.That(allIn.Wait(Timeout), Is.True, "could not fill the epoch table");
+                for (var i = 0; i < capacity; i++)
+                    holders[i] = new ParkedReaderThread(disposable);
 
                 Exception caught = null;
                 var waiter = new Thread(() =>
@@ -180,8 +147,8 @@ namespace Tsavorite.test.epoch
             }
             finally
             {
-                release.Set();
-                TryJoinAll(holders);
+                foreach (var holder in holders)
+                    holder?.Dispose();
             }
         }
 

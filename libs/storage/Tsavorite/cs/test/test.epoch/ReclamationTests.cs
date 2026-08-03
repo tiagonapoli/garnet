@@ -15,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// statement about it never overtaking a thread that is still inside a protected region.
     /// </summary>
     [TestFixture]
-    public class ReclamationTests : SingleEpochTestBase
+    public class ReclamationTests : EpochTestBase
     {
         [Test]
         public void ProtectingLowersTheAnnouncedMinimum()

@@ -59,10 +59,5 @@ namespace Tsavorite.core
         /// Capacity of the drain list.
         /// </summary>
         internal static int TestHookDrainListCapacity => kDrainListSize;
-
-        /// <summary>
-        /// Maximum number of concurrent <see cref="LightEpoch"/> instances.
-        /// </summary>
-        internal static int TestHookMaxInstanceCount => InstanceIndexBuffer.MaxInstances;
     }
 }
