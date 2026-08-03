@@ -543,8 +543,11 @@ namespace Tsavorite.core
             // Clear "ThisInstanceProtected()" (non-static epoch table)
             (*(tableAligned + entry)).threadId = 0;
 
-            // Publishes the slot as free. Release semantics: the threadId clear above must not sink
-            // below it, or the next owner's threadId is wiped by this thread's trailing store.
+            // Zeroing localCurrentEpoch is what publishes the slot as free, so it must be the last store
+            // of the two. A release store guarantees that: the threadId clear cannot be reordered after
+            // it. Were the order to flip, another thread could claim the slot and write its own threadId
+            // in the gap, and this thread's clear would then land on top and wipe it — leaving the new
+            // owner holding a slot that ThisInstanceProtected() reports as unprotected.
             Volatile.Write(ref EntryAt(entry).localCurrentEpoch, 0);
 
             entry = kInvalidIndex;
