@@ -37,20 +37,10 @@ namespace Tsavorite.test.epoch
         internal static readonly TimeSpan SettleDelay = TimeSpan.FromMilliseconds(100);
 
         /// <summary>Wait for every thread, failing the test if any of them does not finish in time.</summary>
-        protected static void JoinAll(IEnumerable<Thread> threads, string message = "a thread did not finish") => JoinAll(threads, Timeout, message);
-
-        /// <inheritdoc cref="JoinAll(IEnumerable{Thread}, string)"/>
-        protected static void JoinAll(IEnumerable<Thread> threads, TimeSpan timeout, string message = "a thread did not finish")
+        protected static void JoinAll(IEnumerable<Thread> threads, string message = "a thread did not finish")
         {
             foreach (var thread in threads)
-                Assert.That(thread.Join(timeout), Is.True, message);
-        }
-
-        /// <summary>Wait for every thread without asserting, so cleanup cannot mask the real failure.</summary>
-        protected static void TryJoinAll(IEnumerable<Thread> threads)
-        {
-            foreach (var thread in threads)
-                _ = thread.Join(Timeout);
+                Assert.That(thread.Join(Timeout), Is.True, message);
         }
     }
 }
