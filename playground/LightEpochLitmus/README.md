@@ -4,15 +4,11 @@ Runs the real `LightEpoch` use-after-free race on hardware: a reader announces i
 epoch and dereferences a page while a reclaimer retires that same page. Standalone
 executable, `LightEpochLitmus`.
 
-> A *litmus test* is a minimal program built to expose one specific reordering.
-> Everything the outcome does not depend on is stripped away, so a result is
-> attributable to one hardware behaviour and nothing else.
+## Workload
 
-## What it asserts
-
-No syscall in the race loop: pages come from a pool allocated once, and "freeing"
-stamps a poison sentinel. A reader that sees poison in a page it was protecting is a
-use-after-free.
+A buffer pool is allocated in userspace up front and pages are handed out from it. A
+page is never returned to the OS; "freeing" one stamps a poison sentinel over it. A
+reader that sees poison in a page it was protecting is a use-after-free.
 
 A green run only means something because of two checks:
 
@@ -35,7 +31,6 @@ reordering. Everything else lives in `helpers/`:
 - **`BuggyLightEpoch`** — the frozen pre-fix copy of `LightEpoch` that `BuggyEpoch` drives.
 - **`CoreLayout`** — which processor each thread is pinned to.
 - **`Platform`** — page allocation and thread-to-core pinning.
-- **`Emulation`** — the emulator check described below.
 
 ## Running it
 
@@ -61,7 +56,7 @@ the same processors and contend — do not run copies side by side.
 
 ## Comparing against the unfixed algorithm
 
-`helpers/BuggyLightEpoch.cs` is a frozen copy of `LightEpoch` as it stood before this PR.
+`helpers/BuggyLightEpoch.cs` is a frozen copy of `LightEpoch`.
 `--buggy` runs against it, so both algorithms can be compared on the same machine in
 the same session:
 
@@ -77,20 +72,9 @@ clean result beside it proves nothing.
 ## Do not run this under emulation
 
 QEMU — `--platform linux/arm64` on an x86 host, say — does not reproduce the emulated
-architecture's memory ordering, so the run comes back clean whatever the code does.
-Verified, not assumed: before the guard existed, an `arm64` image on an x86-64 host
-reported `PASS` and exit `0`.
-
-The control does not protect you here. It recycles pages unconditionally rather than
-relying on a reordering, so it fires under emulation just as on real hardware — in
-that same run it reported 1,156 violations while the stress run reported none.
-
-So the tool detects emulation and downgrades a pass to inconclusive. Detection is
-one-sided: a positive is reliable, a negative is not. The signal is the MIDR — every
-real AArch64 implementer is registered and non-zero (`0x41` ARM, `0x50` Ampere, `0x51`
-Qualcomm, `0x61` Apple), while QEMU's TCG synthesises `0x00`. `--allow-emulation`
-overrides it, and is only appropriate for exercising the harness itself. For an
-architecture other than the host's, build and run on a native machine.
+architecture's memory ordering, so the run comes back clean whatever the code does. The
+harness checks for emulation at startup and downgrades a pass to inconclusive;
+`--allow-emulation` overrides it.
 
 ## Measured power, and its limits
 
@@ -100,7 +84,7 @@ and 36 violations; with the CAS-carried announce every run reports 0. So a singl
 run reliably catches this regression here, but the counts are small enough that it
 remains a probabilistic signal — raise `--seconds` when that matters.
 
-Three settings were each measured to be the difference between detecting the bug and
+Two settings were each measured to be the difference between detecting the bug and
 detecting nothing:
 
 - **`DerefWords`.** The reclaimer only stamps the page from the drain callback,
@@ -108,5 +92,3 @@ detecting nothing:
   left the page by then.
 - **Nothing between the barrier and `Resume()`.** One extra volatile load in the
   reader loop delays it past the window.
-- **Counters on separate cache lines.** Sharing a line, the same runs reported 10,
-  16, 22 and 22 — about a third of the detection power.
