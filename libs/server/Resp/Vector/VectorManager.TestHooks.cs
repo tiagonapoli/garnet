@@ -1,14 +1,14 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System.Threading.Tasks;
 #if DEBUG
-
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using System.Threading.Tasks;
 using Garnet.common;
 using Tsavorite.core;
+#endif
 
 namespace Garnet.server
 {
@@ -17,6 +17,24 @@ namespace Garnet.server
     /// </summary>
     public sealed partial class VectorManager
     {
+        /// <summary>
+        /// When drops are pending, hold the drop pass in flight so a store-empty boundary can be crossed
+        /// while native drops are still outstanding — proving the sync-path drain barrier waits for them.
+        /// No-op outside DEBUG, so production call sites need no conditional compilation of their own.
+        /// </summary>
+        internal Task TestHookPauseInNativeDropAsync()
+        {
+#if DEBUG
+            return requestedDrops.IsEmpty
+                ? Task.CompletedTask
+                : ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
+#else
+            return Task.CompletedTask;
+#endif
+        }
+
+#if DEBUG
+
         /// <summary>
         /// Counts element records whose namespace maps to a single context block.
         /// </summary>
@@ -71,15 +89,6 @@ namespace Garnet.server
                 into.Add(offset + ((ulong)bit * ContextStep));
             }
         }
-
-        /// <summary>
-        /// When drops are pending, hold the drop pass in flight so a store-empty boundary can be crossed
-        /// while native drops are still outstanding — proving the sync-path drain barrier waits for them.
-        /// </summary>
-        internal Task TestHookPauseInNativeDropAsync()
-            => requestedDrops.IsEmpty
-                ? Task.CompletedTask
-                : ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
 
         /// <summary>
         /// Number of Vector Set contexts still reserved across every <see cref="ContextMetadata"/> block.
@@ -175,7 +184,7 @@ namespace Garnet.server
 
             return counter.Count;
         }
-    }
-}
 
 #endif
+    }
+}

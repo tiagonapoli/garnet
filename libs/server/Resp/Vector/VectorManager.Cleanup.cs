@@ -162,9 +162,7 @@ namespace Garnet.server
 
                     ActiveThreadSession = dropSession.storageSession;
 
-#if DEBUG
                     await TestHookPauseInNativeDropAsync().ConfigureAwait(false);
-#endif
 
                     // Process all pending drops
                     foreach (var (k, (context, indexPtr)) in requestedDrops)
@@ -489,13 +487,8 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Block until the whole cleanup pipeline has quiesced: marking, checkpoint discovery, the
-        /// cleanup scan and native DiskANN drops. <see cref="WaitForCleanupRequests"/> only covers the
-        /// first two.
-        ///
-        /// Call at store-emptying boundaries (FLUSH, replica full sync) AFTER the store is emptied, so
-        /// the drops that emptying enqueues are included. The cleanup task must not be paused (see
-        /// <see cref="PauseCleanupAsync"/>) or the queued scans can never run and this hangs.
+        /// Block until the whole cleanup pipeline has quiesced. Call at store-emptying boundaries (FLUSH,
+        /// replica full sync) AFTER the store is emptied, and never while cleanup is paused.
         /// </summary>
         public Task WaitForCleanupCompleteAsync() => cleanupTracker.WaitAllCleanupsAsync();
 

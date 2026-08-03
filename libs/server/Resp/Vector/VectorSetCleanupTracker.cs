@@ -34,23 +34,17 @@ namespace Garnet.server
         private int inFlight;
 
         /// <summary>
-        /// Non-null only while <see cref="inFlight"/> is greater than zero and somebody is waiting.
+        /// Handed to waiters and completed when <see cref="inFlight"/> falls to zero. Null when nobody
+        /// is waiting.
         /// </summary>
-        private TaskCompletionSource idle;
+        private TaskCompletionSource allCleanupsComplete;
 
         /// <summary>
-        /// Count of <see cref="OnCleanupComplete"/> calls that had no matching
-        /// <see cref="RegisterCleanup"/>. Always zero in a correct pipeline.
-        ///
-        /// Such a call is ignored rather than allowed to drive the count negative: a negative count
-        /// could never return to zero, so it would hang every future <see cref="WaitAllCleanupsAsync"/>
-        /// — turning a bookkeeping bug into a permanently wedged FLUSH and replica sync. Callers that
-        /// want to detect the bug assert on this instead.
+        /// Count of <see cref="OnCleanupComplete"/> calls with no matching <see cref="RegisterCleanup"/>.
+        /// Always zero in a correct pipeline; such a call is ignored rather than driving the count
+        /// negative, since a negative count would hang every future <see cref="WaitAllCleanupsAsync"/>.
         /// </summary>
-        internal int UnbalancedCompletions
-        {
-            get { lock (sync) { return unbalancedCompletions; } }
-        }
+        internal int UnbalancedCompletions { get { lock (sync) { return unbalancedCompletions; } } }
 
         private int unbalancedCompletions;
 
@@ -58,10 +52,7 @@ namespace Garnet.server
         /// Units of cleanup work currently in flight. Diagnostic and test use only — a caller that
         /// wants to wait must use <see cref="WaitAllCleanupsAsync"/>, which cannot miss a transition.
         /// </summary>
-        internal int InFlight
-        {
-            get { lock (sync) { return inFlight; } }
-        }
+        internal int InFlight { get { lock (sync) { return inFlight; } } }
 
         /// <summary>
         /// Record that a unit of cleanup work now exists.
@@ -98,14 +89,14 @@ namespace Garnet.server
                 inFlight--;
                 if (inFlight == 0)
                 {
-                    toSignal = idle;
-                    idle = null;
+                    toSignal = allCleanupsComplete;
+                    allCleanupsComplete = null;
                 }
             }
 
             // Signalled outside the lock, and with RunContinuationsAsynchronously, so a waiter's
-            // continuation can never run inline on a background cleanup thread while it still owns
-            // pipeline state.
+            // continuation can never run inline on a cleanup thread that is still mid-pass — holding
+            // lock (VectorManager) or a channel lease it has not released yet.
             _ = toSignal?.TrySetResult();
         }
 
@@ -153,9 +144,9 @@ namespace Garnet.server
                     return Task.CompletedTask;
                 }
 
-                idle ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                allCleanupsComplete ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                return idle.Task;
+                return allCleanupsComplete.Task;
             }
         }
     }
