@@ -19,10 +19,8 @@ namespace Tsavorite.test.epoch
         internal static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
         /// <summary>
-        /// How long to wait before concluding that something which must *not* happen has not
-        /// happened. Every use is a negative assertion, so unlike <see cref="Timeout"/> this is
-        /// paid in full on every passing run -- long enough to be meaningful, short enough not to
-        /// dominate the suite.
+        /// How long to wait before concluding that something which must *not* happen has not.
+        /// Paid in full on every passing run, unlike <see cref="Timeout"/>.
         /// </summary>
         internal static readonly TimeSpan SettleDelay = TimeSpan.FromMilliseconds(100);
 
@@ -36,10 +34,7 @@ namespace Tsavorite.test.epoch
                 Assert.That(thread.Join(timeout), Is.True, message);
         }
 
-        /// <summary>
-        /// Wait for every thread without asserting. For cleanup paths that must not mask the failure
-        /// that got them there.
-        /// </summary>
+        /// <summary>Wait for every thread without asserting, so cleanup cannot mask the real failure.</summary>
         protected static void TryJoinAll(IEnumerable<Thread> threads)
         {
             foreach (var thread in threads)
@@ -49,10 +44,8 @@ namespace Tsavorite.test.epoch
 
     /// <summary>
     /// Base for the fixtures that test a single epoch instance, which is most of them.
-    ///
-    /// <see cref="InstanceTests"/> derives from <see cref="EpochTestBase"/> directly instead: it
-    /// asserts exact <see cref="LightEpoch.ActiveInstanceCount"/> deltas, so a fixture-owned
-    /// instance would show up in its results.
+    /// <see cref="InstanceTests"/> derives from <see cref="EpochTestBase"/> directly because it
+    /// asserts exact <see cref="LightEpoch.ActiveInstanceCount"/> deltas.
     /// </summary>
     public abstract class SingleEpochTestBase : EpochTestBase
     {
