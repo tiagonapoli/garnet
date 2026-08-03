@@ -426,8 +426,7 @@ namespace Garnet.server
                 this.manager = manager;
 
                 // Quiesce the background cleanup scan first, before any other lock: it holds cleanupGate for
-                // its whole iteration, so taking the gate both waits out an in-flight scan and blocks a new
-                // one from applying FinishedCleaningUp to the array we wipe below.
+                // its whole iteration, so this both waits out an in-flight scan and blocks a new one.
                 this.manager.cleanupGate.Wait();
 
                 // Stop other Vector Set operations
@@ -446,9 +445,8 @@ namespace Garnet.server
                     return;
                 }
 
-                // Clear out all context data. dirtyContextMetadatas must be cleared too: it indexes
-                // into contextMetadatas, so stale entries would fault the next UpdateContextMetadata
-                // once the array is replaced with a single empty block.
+                // Clear out all context data. dirtyContextMetadatas indexes into contextMetadatas, so stale
+                // entries would fault the next UpdateContextMetadata.
                 manager.contextMetadatas = new ContextMetadata[1];
                 manager.dirtyContextMetadatas.Clear();
 

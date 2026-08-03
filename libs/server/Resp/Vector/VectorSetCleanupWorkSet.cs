@@ -10,10 +10,9 @@ namespace Garnet.server
 {
     /// <summary>
     /// A keyed set of outstanding cleanup work whose membership <em>is</em> its
-    /// <see cref="VectorSetCleanupTracker"/> registration: adding an entry registers it, and completing the
-    /// entry both removes it and releases the registration. Because the two move together, "the key is
-    /// present" and "a registration is outstanding" cannot disagree, so a drain cannot return while an entry
-    /// is still visible to callers polling for it.
+    /// <see cref="VectorSetCleanupTracker"/> registration: adding registers, and completing both removes the
+    /// entry and releases the registration. The two moving together stops a drain returning while an entry is
+    /// still visible to callers polling for it.
     /// </summary>
     internal sealed class VectorSetCleanupWorkSet<TValue>
     {
@@ -34,7 +33,7 @@ namespace Garnet.server
 
         /// <summary>
         /// Whether any work is pending. Diagnostic only - to wait for quiescence use
-        /// <see cref="VectorSetCleanupTracker.WaitAllCleanupsAsync"/>, which cannot miss a transition.
+        /// <see cref="VectorSetCleanupTracker.WaitAllCleanupsAsync"/>.
         /// </summary>
         public bool IsEmpty => entries.IsEmpty;
 
@@ -53,8 +52,8 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Block until no work is pending for <paramref name="key"/>. The entry is only removed once the work
-        /// has been performed, so this returning implies completion, not merely dequeue.
+        /// Block until no work is pending for <paramref name="key"/>. Entries are removed only once the work
+        /// has been performed, so returning implies completion, not merely dequeue.
         ///
         /// Do not call this while holding any Vector Set related locks, we will deadlock.
         /// </summary>
@@ -74,12 +73,10 @@ namespace Garnet.server
             => tracker.RegisterAndPublish((entries, key, value), static s => s.entries.TryAdd(s.key, s.value));
 
         /// <summary>
-        /// Remove the entry and release its registration. Returns false if it was not present, in which case
-        /// nothing was released.
+        /// Remove the entry and release its registration. False if it was not present.
         ///
-        /// The entry is removed before the registration is released: between the two the count is still
-        /// non-zero, so a drain keeps waiting. Releasing first would let the count reach zero while
-        /// <see cref="Contains"/> still reports the work as pending.
+        /// Removed before released: between the two the count is still non-zero so a drain keeps waiting.
+        /// Releasing first would let the count reach zero while <see cref="Contains"/> still reports pending.
         /// </summary>
         public bool TryComplete(byte[] key, out TValue value)
         {

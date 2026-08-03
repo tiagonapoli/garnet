@@ -91,8 +91,8 @@ namespace Garnet.server
         private readonly VectorSetCleanupChannel<object> cleanupTaskChannel;
         private readonly VectorSetCleanupChannel<(ulong Context, TaskCompletionSource MarkCompleted)> requestCleanupTaskChannel;
 
-        // Pure nudge: the drop work itself lives in requestedDrops, whose entries carry the tracker
-        // registrations, so a wake here has no obligation attached and needs no lease.
+        // Pure nudge: the drop work lives in requestedDrops, which carries the tracker registrations, so a
+        // wake has no obligation attached and needs no lease.
         private readonly Channel<object> requestDropTaskChannel;
         private readonly VectorSetCleanupWorkSet<(ulong Context, nint IndexPtr)> requestedDrops;
         private readonly ConcurrentDictionary<ulong, byte[]> potentiallyDeleted;
@@ -141,9 +141,8 @@ namespace Garnet.server
         {
             while (await requestDropTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Wakes are only nudges — the work itself is tracked by requestedDrops, whose entries
-                // are registered with cleanupTracker before they are added and completed as they are
-                // removed. So a wake carries no obligation and can simply be drained.
+                // Wakes are only nudges - the work is tracked by requestedDrops, so a wake carries no
+                // obligation and can simply be drained.
                 while (requestDropTaskChannel.Reader.TryRead(out _))
                 {
                 }
@@ -219,8 +218,8 @@ namespace Garnet.server
                 //
                 // The fact that we're in an OnDispose means Reset() isn't running.
 
-                // Disposed after the try/finally below, so the successor queued in the finally is always
-                // registered before this pass releases the registrations it owns.
+                // Disposed after the try/finally below, so a successor is always registered before this pass
+                // releases the registrations it owns.
                 using var batch = requestCleanupTaskChannel.ReadAllAvailable();
 
                 try
@@ -260,9 +259,9 @@ namespace Garnet.server
 
                     ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_3);
 
-                    // Only queued on the success path. A pass that throws after marking contexts leaves them
-                    // cleaningUp with no scan queued, which is what keeps the Vector Set recoverable via a
-                    // re-executed DEL; WaitForCleanupCompleteAsync schedules the scan those marks still owe.
+                    // Success path only: a pass that throws leaves its contexts marked with no scan queued,
+                    // which is what keeps the Vector Set recoverable via a re-executed DEL.
+                    // WaitForCleanupCompleteAsync schedules the scan those marks owe.
                     _ = cleanupTaskChannel.TryPublish(null);
 
                     CompleteMarkRequests(batch.Items, error: null);
@@ -279,9 +278,9 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Settle every <c>VectorSetDeleted</c> waiter in a marking pass, driven off the items the pass owns
-        /// rather than off what it managed to process. A waiter blocks a RESP thread, so a pass that throws
-        /// before reaching a given item must still fault it or that thread hangs forever.
+        /// Settle every <c>VectorSetDeleted</c> waiter, driven off the items the pass owns rather than what
+        /// it managed to process. A waiter blocks a RESP thread, so an item the pass never reached must
+        /// still be faulted or that thread hangs forever.
         /// </summary>
         private void CompleteMarkRequests(List<(ulong Context, TaskCompletionSource MarkCompleted)> items, Exception error)
         {
@@ -305,34 +304,6 @@ namespace Garnet.server
                     logger?.LogError(e, "While completing Vector Set cleanup request");
                 }
             }
-        }
-
-        /// <summary>
-        /// Every context currently flagged as needing cleanup, or null if there is none.
-        /// </summary>
-        private HashSet<ulong> SnapshotContextsNeedingCleanup()
-        {
-            HashSet<ulong> needCleanup = null;
-
-            lock (this)
-            {
-                for (var i = 0; i < contextMetadatas.Length; i++)
-                {
-                    var subCleanup = contextMetadatas[i].GetNeedCleanup();
-                    if (subCleanup != null)
-                    {
-                        var offset = ContextMetadata.OffsetForContextMetadata(i);
-
-                        needCleanup ??= [];
-                        foreach (var item in subCleanup)
-                        {
-                            _ = needCleanup.Add(offset + item);
-                        }
-                    }
-                }
-            }
-
-            return needCleanup;
         }
 
         /// <summary>
@@ -367,7 +338,24 @@ namespace Garnet.server
 
                             ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
 
-                            var needCleanup = SnapshotContextsNeedingCleanup();
+                            HashSet<ulong> needCleanup = null;
+                            lock (this)
+                            {
+                                for (var i = 0; i < contextMetadatas.Length; i++)
+                                {
+                                    var subCleanup = contextMetadatas[i].GetNeedCleanup();
+                                    if (subCleanup != null)
+                                    {
+                                        var offset = ContextMetadata.OffsetForContextMetadata(i);
+
+                                        needCleanup ??= [];
+                                        foreach (var item in subCleanup)
+                                        {
+                                            _ = needCleanup.Add(offset + item);
+                                        }
+                                    }
+                                }
+                            }
 
                             if (needCleanup == null)
                             {
@@ -383,6 +371,13 @@ namespace Garnet.server
                             ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
 
                             PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
+
+                            // TODO: this sweeps purely off the cleaningUp bit, with no check that the context
+                            // is dead. A DEL that faults after durably marking leaves the index key live, so
+                            // the Vector Set is "partially deleted - re-execute DEL" - but any later scan
+                            // empties it, since needCleanup is rebuilt from every marked context rather than
+                            // the ones this scan was queued for. Skipping contexts a live index record points
+                            // at (as the post-checkpoint discovery pass does) would fix this. Pre-existing.
 
                             // Scan whole keyspace and remove any associated data using a snapshot
                             // lookup-based push iterator. This avoids building a parallel tempKv (which
@@ -411,9 +406,9 @@ namespace Garnet.server
                         {
                             logger?.LogError(e, "Failure during background cleanup of deleted vector sets, implies storage leak");
 
-                            // The contexts this pass was going to clear are still marked cleaningUp, and
-                            // nothing else re-queues them. Requeue before the lease is released, or the
-                            // count reaches zero with the scan still owed and a drain returns early.
+                            // The contexts this pass would have cleared are still marked and nothing else
+                            // re-queues them. Requeue before the lease is released, or the count reaches zero
+                            // with the scan still owed and a drain returns early.
                             _ = cleanupTaskChannel.TryPublish(null);
                         }
                         finally
@@ -479,37 +474,18 @@ namespace Garnet.server
         /// Block until the whole cleanup pipeline has finished. Call at store-emptying boundaries (FLUSH,
         /// replica full sync) AFTER the store is emptied, and never while cleanup is paused.
         /// </summary>
-        public async Task WaitForCleanupCompleteAsync()
+        public Task WaitForCleanupCompleteAsync()
         {
-            // A marking pass that faults after durably marking its contexts leaves those marks with no scan
-            // queued, which is what keeps the Vector Set recoverable via a re-executed DEL. The caller has
-            // already emptied the store, so scheduling a scan here retires those stranded marks without any
-            // live key to lose. Looping covers a pass that was still in flight when the barrier started and
-            // marked its contexts after the first scan was queued.
-            HashSet<ulong> previouslyOwed = null;
+            // A marking pass that faults leaves its contexts marked with no scan queued. The caller has
+            // already emptied the store, so scheduling a scan here retires those stranded marks with no
+            // live key to lose.
+            //
+            // TODO: a pass still in flight can mark contexts after this scan was queued and then fault,
+            // leaving marks with no scan and the barrier returning with cleanup still owed. Re-checking
+            // for marks after the wait and repeating would close this.
+            _ = cleanupTaskChannel.TryPublish(null);
 
-            while (true)
-            {
-                _ = cleanupTaskChannel.TryPublish(null);
-
-                await cleanupTracker.WaitAllCleanupsAsync().ConfigureAwait(false);
-
-                var stillOwed = SnapshotContextsNeedingCleanup();
-                if (stillOwed == null)
-                {
-                    return;
-                }
-
-                if (previouslyOwed != null && previouslyOwed.SetEquals(stillOwed))
-                {
-                    // No progress across a full pass. Returning leaves trash behind, but blocking here
-                    // would hang the flush or sync that is waiting on this barrier.
-                    logger?.LogError("Vector Set cleanup could not retire {count} context(s) during drain", stillOwed.Count);
-                    return;
-                }
-
-                previouslyOwed = stillOwed;
-            }
+            return cleanupTracker.WaitAllCleanupsAsync();
         }
 
         /// <summary>

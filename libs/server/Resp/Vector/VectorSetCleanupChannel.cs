@@ -12,9 +12,8 @@ namespace Garnet.server
     /// <summary>
     /// A cleanup work queue whose items are counted by a <see cref="VectorSetCleanupTracker"/>: publishing
     /// registers before the item is visible, and reading hands back a lease that completes the registration
-    /// when disposed, so an early <c>continue</c>, an exception, or a <c>return</c> added later cannot leak
-    /// one. A leaked registration is unrecoverable - every subsequent FLUSH and replica full sync then blocks
-    /// forever. Queues that carry no cleanup obligation should stay a plain <see cref="Channel{T}"/>.
+    /// when disposed. A leaked registration blocks every subsequent FLUSH and replica full sync forever.
+    /// Queues that carry no cleanup obligation should stay a plain <see cref="Channel{T}"/>.
     /// </summary>
     internal sealed class VectorSetCleanupChannel<T>
     {
@@ -28,8 +27,8 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Register the item and publish it. Returns false only once the writer has been completed, that is
-        /// during shutdown, in which case nothing was registered.
+        /// Register the item and publish it. False only once the writer is completed, i.e. during shutdown,
+        /// in which case nothing was registered.
         /// </summary>
         public bool TryPublish(T item) => tracker.RegisterAndPublish((channel.Writer, item), static s => s.Writer.TryWrite(s.item));
 
@@ -70,8 +69,14 @@ namespace Garnet.server
             return new Batch(tracker, items);
         }
 
+        /// <summary>
+        /// Stop accepting new items.
+        /// </summary>
         public void CompleteWriter() => channel.Writer.Complete();
 
+        /// <summary>
+        /// Completes once the writer is completed and the queue is empty.
+        /// </summary>
         public Task Completion => channel.Reader.Completion;
 
         /// <summary>
@@ -106,7 +111,7 @@ namespace Garnet.server
         /// <summary>
         /// Every item available at the time of the call, and the obligation to complete all of their
         /// registrations. Disposing releases the whole batch, so a stage that hands off to a later one must
-        /// publish the successor before this is disposed.
+        /// publish the successor first.
         /// </summary>
         public readonly struct Batch : IDisposable
         {

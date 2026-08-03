@@ -15,27 +15,22 @@ using StackExchange.Redis;
 namespace Garnet.test
 {
     /// <summary>
-    /// Deterministic proof that the cleanup-drain barrier awaited on the replica full-sync paths
-    /// (<c>ReplicaDisklessSync.TryReplicaDisklessRecovery</c> and <c>ReplicaDiskbasedSync</c>) is
-    /// necessary, and that it is sufficient.
-    ///
-    /// Both paths empty the store (primary-driven CLUSTER FLUSHALL / <c>storeWrapper.Reset</c>) and then
-    /// call <c>VectorManager.WaitForCleanupComplete</c> before advertising the offset and serving. Two
-    /// independent hazards are covered:
+    /// Proof that the cleanup-drain barrier awaited on the replica full-sync paths
+    /// (<c>ReplicaDisklessSync.TryReplicaDisklessRecovery</c> and <c>ReplicaDiskbasedSync</c>) is both
+    /// necessary and sufficient. Both empty the store and then call
+    /// <c>VectorManager.WaitForCleanupComplete</c> before advertising the offset. Two hazards are covered:
     ///
     /// <list type="bullet">
     /// <item>Emptying the store queues eviction-driven native DiskANN drops on a background task, so the
     /// boundary can be crossed while a native index is still pending drop.</item>
-    /// <item>A diskless sync streams records back in <b>as-is</b>, bypassing both guards that protect the
-    /// normal command path — context reservation (which skips <c>cleaningUp</c> contexts) and the
-    /// <c>WaitForDiskANNIndexDrop</c> recreate spin — so a streamed element can land in a namespace with
-    /// an in-flight cleanup scan queued against it and be silently deleted.</item>
+    /// <item>A diskless sync streams records back in as-is, bypassing context reservation and the
+    /// <c>WaitForDiskANNIndexDrop</c> recreate spin, so a streamed element can land in a namespace with
+    /// a cleanup scan queued against it and be silently deleted.</item>
     /// </list>
     ///
-    /// The injection seams <see cref="ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop"/> and
-    /// <see cref="ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan"/> hold the respective pipeline
-    /// stage in flight across the boundary, making both races deterministic. Exception injection is only
-    /// compiled into DEBUG builds, so the tests self-ignore in Release via
+    /// The <see cref="ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop"/> and
+    /// <see cref="ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan"/> seams park the respective stage
+    /// across the boundary to make both races deterministic, so the tests self-ignore in Release via
     /// <see cref="TestUtils.IgnoreIfExceptionInjectionDisabled"/>.
     /// </summary>
     [TestFixture]
