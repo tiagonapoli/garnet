@@ -13,7 +13,9 @@ namespace Tsavorite.epoch.litmus
     /// <summary>
     /// Console driver for the Store-Buffer quarantine litmus over
     /// <see cref="Tsavorite.core.LightEpoch"/>, with the run parameters exposed as arguments so a
-    /// soak can be pointed at real hardware for hours.
+    /// soak can be pointed at real hardware for hours. <c>--buggy</c> swaps in
+    /// <see cref="BuggyLightEpoch"/>, main's version of the algorithm, so the violation counts of
+    /// the two can be compared on the same machine in the same session.
     /// </summary>
     internal static class Program
     {
@@ -49,12 +51,18 @@ namespace Tsavorite.epoch.litmus
             var emulated = Emulation.Detect();
             WriteHeader(options, cores, emulated);
 
-            var report = new Report { Cores = cores.ToString(), Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence };
+            // The epoch under test is a generic type argument rather than an interface reference so
+            // the harness JITs down to direct calls; picking it here keeps that choice in one place.
+            QuarantineLitmusResult Run(int seconds, bool selfTest) => options.Buggy
+                ? new QuarantineLitmus<BuggyEpoch>(new BuggyEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run()
+                : new QuarantineLitmus<FixedEpoch>(new FixedEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run();
+
+            var report = new Report { Cores = cores.ToString(), Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence, Epoch = options.Buggy ? "buggy" : "fixed" };
 
             if (!options.NoControl)
             {
                 Console.WriteLine($"-- control: forcing the failure for {options.ControlSeconds}s to prove the detector is live");
-                var control = new QuarantineLitmus(TimeSpan.FromSeconds(options.ControlSeconds), options.Deref, cores, selfTest: true).Run();
+                var control = Run(options.ControlSeconds, selfTest: true);
                 Console.WriteLine($"   {control}");
                 report.Control = Summary.From(control);
 
@@ -84,7 +92,7 @@ namespace Tsavorite.epoch.litmus
                 var label = options.Iterations == 1 ? "-- soak" : $"-- soak {i}/{options.Iterations}";
                 Console.WriteLine($"{label}: {options.Seconds}s, deref={options.Deref} words");
 
-                var result = new QuarantineLitmus(TimeSpan.FromSeconds(options.Seconds), options.Deref, cores).Run();
+                var result = Run(options.Seconds, selfTest: false);
                 Console.WriteLine($"   {result}");
                 report.Runs.Add(Summary.From(result));
 
@@ -145,6 +153,7 @@ namespace Tsavorite.epoch.litmus
             Console.WriteLine($"  arch      {RuntimeInformation.ProcessArchitecture} ({Environment.ProcessorCount} logical processors)");
             Console.WriteLine($"  cores     {cores}");
             Console.WriteLine($"  soak      {options.Seconds}s x {options.Iterations}, deref={options.Deref}");
+            Console.WriteLine($"  epoch     {(options.Buggy ? "BuggyLightEpoch (main - expected to FAIL)" : "LightEpoch (fixed)")}");
 
             if (emulated.IsEmulated)
                 Console.WriteLine($"  EMULATION DETECTED: {emulated.Evidence} - memory-ordering results from this run are not evidence about the emulated architecture");
@@ -176,6 +185,9 @@ namespace Tsavorite.epoch.litmus
                     case "--json":
                         if (++i >= args.Length) { error = "--json needs a path, or - for stdout"; return false; }
                         options.JsonPath = args[i];
+                        break;
+                    case "--buggy":
+                        options.Buggy = true;
                         break;
                     case "--self-test":
                         options.SelfTestOnly = true;
@@ -231,6 +243,8 @@ namespace Tsavorite.epoch.litmus
               --self-test          run only the control, to check the detector fires here
               --no-control         skip the control (a clean result then proves much less)
               --allow-emulation    report a pass even under a detected emulator
+              --buggy              run against BuggyLightEpoch (main's version) instead of the
+                                   fixed one, to confirm the harness still catches the bug here
               --json PATH          write a machine-readable summary ('-' for stdout)
               -h, --help           this message
 
@@ -255,6 +269,7 @@ namespace Tsavorite.epoch.litmus
             internal bool SelfTestOnly;
             internal bool NoControl;
             internal bool AllowEmulation;
+            internal bool Buggy;
             internal string JsonPath;
         }
 
@@ -285,6 +300,7 @@ namespace Tsavorite.epoch.litmus
             internal string Cores { get; init; }
             internal bool Emulated { get; init; }
             internal string EmulationEvidence { get; init; }
+            internal string Epoch { get; init; }
             internal Summary Control { get; set; }
             internal List<Summary> Runs { get; } = [];
             internal string Verdict { get; set; }
@@ -313,6 +329,7 @@ namespace Tsavorite.epoch.litmus
             internal object ToPayload() => new
             {
                 tool = "LightEpochLitmus",
+                epoch = Epoch,
                 verdict = Verdict,
                 exitCode = ExitCode,
                 machine = new

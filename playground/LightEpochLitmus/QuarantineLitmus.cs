@@ -5,11 +5,10 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Tsavorite.core;
 
 namespace Tsavorite.epoch.litmus
 {
-    /// <summary>Outcome of a <see cref="QuarantineLitmus"/> run.</summary>
+    /// <summary>Outcome of a <see cref="QuarantineLitmus{TEpoch}"/> run.</summary>
     internal sealed class QuarantineLitmusResult
     {
         /// <summary>Rounds in which the reader dereferenced a page it had been poisoned under.</summary>
@@ -24,7 +23,7 @@ namespace Tsavorite.epoch.litmus
         /// <summary>Rounds the reclaimer completed.</summary>
         internal long Rounds { get; init; }
 
-        /// <summary>Pages retired via <see cref="LightEpoch.BumpCurrentEpoch(Action)"/>.</summary>
+        /// <summary>Pages retired via <see cref="ILitmusEpoch.BumpCurrentEpoch(Action)"/>.</summary>
         internal long Drains { get; init; }
 
         /// <summary>Pages the epoch actually decided were safe to recycle.</summary>
@@ -38,8 +37,9 @@ namespace Tsavorite.epoch.litmus
     }
 
     /// <summary>
-    /// Store-Buffer litmus over one <see cref="LightEpoch"/> instance, detecting a
-    /// use-after-free logically rather than by hardware fault.
+    /// Store-Buffer litmus over one epoch instance, detecting a use-after-free logically rather
+    /// than by hardware fault. <typeparamref name="TEpoch"/> selects which epoch is under test:
+    /// <see cref="FixedEpoch"/> is expected to pass, <see cref="BuggyEpoch"/> to fail.
     ///
     /// The reader announces its epoch and then loads a shared page pointer; the reclaimer
     /// unlinks that pointer and asks the epoch to retire the page. If the reclaimer's scan
@@ -54,14 +54,14 @@ namespace Tsavorite.epoch.litmus
     /// never appear. Pages come from a pool allocated once and the drain callbacks are pre-built,
     /// so nothing allocates per round.
     /// </summary>
-    internal sealed unsafe class QuarantineLitmus
+    internal sealed unsafe class QuarantineLitmus<TEpoch> where TEpoch : struct, ILitmusEpoch
     {
         const nuint PageSize = 4096;
         const int PoolPages = 1024;
         const int WordsPerPage = (int)(PageSize / sizeof(long));
         const long Poison = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
 
-        readonly LightEpoch epoch = new();
+        readonly TEpoch epoch;
         readonly LitmusRendezvous rendezvous = new();
         readonly TimeSpan duration;
         readonly int deref;
@@ -97,8 +97,9 @@ namespace Tsavorite.epoch.litmus
         ref long Drains => ref *(long*)(counters + (2 * CounterLine));
         ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
 
-        internal QuarantineLitmus(TimeSpan duration, int deref, LitmusCores cores, bool selfTest = false)
+        internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, LitmusCores cores, bool selfTest = false)
         {
+            this.epoch = epoch;
             this.duration = duration;
             this.deref = deref;
             this.cores = cores;
@@ -202,10 +203,13 @@ namespace Tsavorite.epoch.litmus
                 rendezvous.EndBarrier();
 
                 // The shutdown check goes after EndBarrier so it stays out of the window above.
-                // The reclaimer's Shutdown does one final barrier pass, so this thread is never
-                // left waiting on a partner that has gone.
+                // Depart() before returning: the reclaimer's Shutdown may already be waiting in a
+                // barrier pass this thread has now decided not to enter.
                 if (rendezvous.Stop)
+                {
+                    rendezvous.Depart();
                     return;
+                }
             }
         }
 

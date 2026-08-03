@@ -12,6 +12,14 @@ namespace Tsavorite.epoch.litmus
     /// protocol. The reclaimer owns the deadline; when it expires it performs one extra
     /// barrier pass with <see cref="Stop"/> set so the reader is never left blocked
     /// waiting for a partner that has already gone.
+    ///
+    /// That extra pass alone is not enough, because the reader's <see cref="Stop"/> check and
+    /// the reclaimer's <c>stop = true</c> race: if the reader observes Stop as it leaves a pass
+    /// it returns without entering the next one, and the reclaimer waits in <see cref="Shutdown"/>
+    /// for a partner that will never arrive. <see cref="Depart"/> closes that: whichever side
+    /// leaves first marks the rendezvous abandoned, and a wait releases on either the sense flip
+    /// or abandonment. The abandoned check is short-circuited behind the sense read, so the
+    /// iteration that actually releases a waiter does no extra work.
     /// </summary>
     internal sealed class LitmusRendezvous
     {
@@ -20,8 +28,15 @@ namespace Tsavorite.epoch.litmus
         int endCount;
         int endSense;
         volatile bool stop;
+        volatile bool abandoned;
 
         internal bool Stop => stop;
+
+        /// <summary>
+        /// Announce that this thread is leaving the rendezvous for good, releasing a partner
+        /// that is -- or later ends up -- waiting for it.
+        /// </summary>
+        internal void Depart() => abandoned = true;
 
         /// <summary>Release the reader and let it observe <see cref="Stop"/> on its next pass.</summary>
         internal void Shutdown()
@@ -29,6 +44,7 @@ namespace Tsavorite.epoch.litmus
             stop = true;
             StartBarrier();
             EndBarrier();
+            Depart();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -43,7 +59,7 @@ namespace Tsavorite.epoch.litmus
             }
 
             var spinner = new SpinWait();
-            while (Volatile.Read(ref startSense) == sense)
+            while (Volatile.Read(ref startSense) == sense && !abandoned)
                 spinner.SpinOnce(-1);
         }
 
@@ -59,7 +75,7 @@ namespace Tsavorite.epoch.litmus
             }
 
             var spinner = new SpinWait();
-            while (Volatile.Read(ref endSense) == sense)
+            while (Volatile.Read(ref endSense) == sense && !abandoned)
                 spinner.SpinOnce(-1);
         }
     }
