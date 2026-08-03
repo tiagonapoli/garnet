@@ -27,7 +27,7 @@ namespace Tsavorite.epoch.litmus
     /// <summary>The epoch as this branch ships it: the slot claim CAS announces the epoch.</summary>
     internal readonly struct FixedEpoch : IEpochUnderTest
     {
-        readonly LightEpoch epoch = new();
+        private readonly LightEpoch epoch = new();
 
         public FixedEpoch() { }
 
@@ -56,7 +56,7 @@ namespace Tsavorite.epoch.litmus
     /// <summary>The epoch as it stands on main: the announce is a plain store behind the claim CAS.</summary>
     internal readonly struct BuggyEpoch : IEpochUnderTest
     {
-        readonly BuggyLightEpoch epoch = new();
+        private readonly BuggyLightEpoch epoch = new();
 
         public BuggyEpoch() { }
 

@@ -15,12 +15,12 @@ namespace Tsavorite.epoch.litmus
     /// </summary>
     internal sealed class TwoThreadBarrier
     {
-        int startCount;
-        int startSense;
-        int endCount;
-        int endSense;
-        volatile bool stop;
-        volatile bool abandoned;
+        private int startCount;
+        private int startSense;
+        private int endCount;
+        private int endSense;
+        private volatile bool stop;
+        private volatile bool abandoned;
 
         internal bool Stop => stop;
 

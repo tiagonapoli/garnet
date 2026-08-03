@@ -58,20 +58,20 @@ namespace Tsavorite.epoch.litmus
         const int WordsPerPage = (int)(PageSize / sizeof(long));
         const long Poison = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
 
-        readonly TEpoch epoch;
-        readonly TwoThreadBarrier barrier = new();
-        readonly TimeSpan duration;
-        readonly int deref;
-        readonly CoreLayout cores;
-        readonly bool selfTest;
+        private readonly TEpoch epoch;
+        private readonly TwoThreadBarrier barrier = new();
+        private readonly TimeSpan duration;
+        private readonly int deref;
+        private readonly CoreLayout cores;
+        private readonly bool selfTest;
 
         // One cached delegate per pool slot. BumpCurrentEpoch defers the callback until the retired
         // epoch is safe, so it must stay bound to the page that was retired; building them once
         // keeps that binding without allocating in the race loop.
-        readonly Action[] drainCallbacks = new Action[PoolPages];
+        private readonly Action[] drainCallbacks = new Action[PoolPages];
 
-        byte* pool;
-        byte* counters;
+        private byte* pool;
+        private byte* counters;
 
         // Reader and reclaimer counters get separate lines, and curPage -- the reclaimer-to-reader
         // channel the reader loads every round -- gets a third, so no RFO lands on the loop this
@@ -81,14 +81,14 @@ namespace Tsavorite.epoch.litmus
         // One extra page for the counters, page-aligned and outside every page the reclaimer poisons.
         const nuint MappedBytes = (PageSize * PoolPages) + PageSize;
 
-        ref long ObservedPages => ref *(long*)counters;
-        ref long Sink => ref *(long*)(counters + 8);
-        ref long Violations => ref *(long*)(counters + 16);
+        private ref long ObservedPages => ref *(long*)counters;
+        private ref long Sink => ref *(long*)(counters + 8);
+        private ref long Violations => ref *(long*)(counters + 16);
 
-        ref long CurPage => ref *(long*)(counters + CounterLine);
+        private ref long CurPage => ref *(long*)(counters + CounterLine);
 
-        ref long Drains => ref *(long*)(counters + (2 * CounterLine));
-        ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
+        private ref long Drains => ref *(long*)(counters + (2 * CounterLine));
+        private ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
 
         internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, CoreLayout cores, bool selfTest = false)
         {
