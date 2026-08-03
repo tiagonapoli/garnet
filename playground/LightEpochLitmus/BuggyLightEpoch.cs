@@ -2,12 +2,10 @@
 // Licensed under the MIT license.
 
 // ---------------------------------------------------------------------------------------------
-// GENERATED - do not edit. Produced by regen-buggy-epoch.ps1 from libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs on origin/main.
-//
-// A copy of LightEpoch as it stands on main, kept here so the litmus harness can be pointed at
-// the unfixed algorithm and the violation counts compared side by side. It is a control, not a
-// second implementation: nothing outside this playground references it, and it is expected to
-// FAIL the soak on x86-64.
+// A frozen copy of LightEpoch as it stood before this PR, kept here so the litmus harness can be
+// pointed at the unfixed algorithm and the violation counts compared side by side. It is a
+// control, not a second implementation: nothing outside this playground references it, and it is
+// expected to FAIL the soak on x86-64.
 //
 // The two differences that matter, both in the slot-claim/announce path:
 //   * the slot is claimed by CAS-ing threadId, and the epoch is then announced with a plain
@@ -906,6 +904,7 @@ namespace Tsavorite.epoch.litmus
             public override readonly string ToString() => $"epoch = {epoch}, action = {(action is null ? "n/a" : action.Method.ToString())}";
         }
 
+
         /// <summary>
         /// The epoch announced in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// Mirrors the test hook of the same name on the fixed epoch so the harness can drive both.
@@ -913,4 +912,3 @@ namespace Tsavorite.epoch.litmus
         internal long AnnouncedEpochAt(int entry) => (*(tableAligned + entry)).localCurrentEpoch;
     }
 }
-

@@ -14,7 +14,7 @@ namespace Tsavorite.epoch.litmus
     /// Console driver for the Store-Buffer quarantine litmus over
     /// <see cref="Tsavorite.core.LightEpoch"/>, with the run parameters exposed as arguments so a
     /// soak can be pointed at real hardware for hours. <c>--buggy</c> swaps in
-    /// <see cref="BuggyLightEpoch"/>, main's version of the algorithm, so the violation counts of
+    /// <see cref="BuggyLightEpoch"/>, the pre-fix version of the algorithm, so the violation counts of
     /// the two can be compared on the same machine in the same session.
     /// </summary>
     internal static class Program
@@ -153,7 +153,7 @@ namespace Tsavorite.epoch.litmus
             Console.WriteLine($"  arch      {RuntimeInformation.ProcessArchitecture} ({Environment.ProcessorCount} logical processors)");
             Console.WriteLine($"  cores     {cores}");
             Console.WriteLine($"  soak      {options.Seconds}s x {options.Iterations}, deref={options.Deref}");
-            Console.WriteLine($"  epoch     {(options.Buggy ? "BuggyLightEpoch (main - expected to FAIL)" : "LightEpoch (fixed)")}");
+            Console.WriteLine($"  epoch     {(options.Buggy ? "BuggyLightEpoch (pre-fix - expected to FAIL)" : "LightEpoch (fixed)")}");
 
             if (emulated.IsEmulated)
                 Console.WriteLine($"  EMULATION DETECTED: {emulated.Evidence} - memory-ordering results from this run are not evidence about the emulated architecture");
@@ -243,7 +243,7 @@ namespace Tsavorite.epoch.litmus
               --self-test          run only the control, to check the detector fires here
               --no-control         skip the control (a clean result then proves much less)
               --allow-emulation    report a pass even under a detected emulator
-              --buggy              run against BuggyLightEpoch (main's version) instead of the
+              --buggy              run against BuggyLightEpoch (the pre-fix version) instead of the
                                    fixed one, to confirm the harness still catches the bug here
               --json PATH          write a machine-readable summary ('-' for stdout)
               -h, --help           this message

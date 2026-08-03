@@ -610,9 +610,6 @@ namespace Tsavorite.core
             if (EntryAt(entry).localCurrentEpoch != 0)
                 return false;
 
-            // Read CurrentEpoch here rather than once per Acquire, so that a long probe over a busy table
-            // cannot announce an epoch that went stale while probing. Announcing a stale epoch is safe --
-            // it only holds SafeToReclaimEpoch back -- but it needlessly pins reclamation.
             var epoch = Volatile.Read(ref CurrentEpoch);
             if (Interlocked.CompareExchange(ref EntryAt(entry).localCurrentEpoch, epoch, 0) != 0)
                 return false;
