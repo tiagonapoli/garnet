@@ -518,7 +518,7 @@ namespace Tsavorite.core
             Debug.Assert(entry == kInvalidIndex,
                 "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
 
-            ReserveEntryForThread(ref entry, CurrentEpoch);
+            ReserveEntryForThread(ref entry);
 
             DebugAssertEpochAcquired(entry);
 
@@ -544,10 +544,9 @@ namespace Tsavorite.core
             (*(tableAligned + entry)).threadId = 0;
 
             // Zeroing localCurrentEpoch is what publishes the slot as free, so it must be the last store
-            // of the two. A release store guarantees that: the threadId clear cannot be reordered after
+            // of the two. A release store guarantees that the threadId clear cannot be reordered after
             // it. Were the order to flip, another thread could claim the slot and write its own threadId
-            // in the gap, and this thread's clear would then land on top and wipe it — leaving the new
-            // owner holding a slot that ThisInstanceProtected() reports as unprotected.
+            // in the gap, and this thread's clear would then land on top and wipe it.
             Volatile.Write(ref EntryAt(entry).localCurrentEpoch, 0);
 
             entry = kInvalidIndex;
@@ -561,18 +560,18 @@ namespace Tsavorite.core
         /// startOffset1 contains the acquired offset so that the next acquire 
         /// can optimistically get the same slot.
         /// 
-        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to <paramref name="epoch"/>, so reserving
+        /// The claim is a CAS on <c>localCurrentEpoch</c> from 0 to the epoch being announced, so reserving
         /// the slot and announcing the epoch (which needs a memory barrier) are one locked RMW. 0 is
         /// usable as the free-slot sentinel because <c>CurrentEpoch</c> starts at 1 and only increments,
         /// so a protected thread never announces epoch 0.
         /// </summary>
         /// <returns>True if entry was acquired, false if table is full</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        bool TryAcquireEntry(ref int entry, long epoch)
+        bool TryAcquireEntry(ref int entry)
         {
             // Try primary offset
             entry = Metadata.startOffset1;
-            if (TryClaimEntry(entry, epoch))
+            if (TryClaimEntry(entry))
                 return true;
 
             // Try alternate offset
@@ -581,7 +580,7 @@ namespace Tsavorite.core
             Metadata.startOffset2 = tmp;
 
             entry = Metadata.startOffset1;
-            if (TryClaimEntry(entry, epoch))
+            if (TryClaimEntry(entry))
                 return true;
 
             // Circle twice around the table looking for free entries
@@ -592,7 +591,7 @@ namespace Tsavorite.core
                     Metadata.startOffset1 -= kTableSize;
 
                 entry = Metadata.startOffset1;
-                if (TryClaimEntry(entry, epoch))
+                if (TryClaimEntry(entry))
                     return true;
             }
 
@@ -604,14 +603,18 @@ namespace Tsavorite.core
 
         /// <summary>
         /// Claim a single epoch table slot by CAS-ing the announced epoch into it. The CAS is also the
-        /// barrier that publishes the announce: it drains the store buffer, so the announce is globally
-        /// visible before any load in the protected region can be issued.
+        /// memory barrier that publishes the announce.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        bool TryClaimEntry(int entry, long epoch)
+        bool TryClaimEntry(int entry)
         {
             if (EntryAt(entry).localCurrentEpoch != 0)
                 return false;
+
+            // Read CurrentEpoch here rather than once per Acquire, so that a long probe over a busy table
+            // cannot announce an epoch that went stale while probing. Announcing a stale epoch is safe --
+            // it only holds SafeToReclaimEpoch back -- but it needlessly pins reclamation.
+            var epoch = Volatile.Read(ref CurrentEpoch);
 
             if (Interlocked.CompareExchange(ref EntryAt(entry).localCurrentEpoch, epoch, 0) != 0)
                 return false;
@@ -626,9 +629,9 @@ namespace Tsavorite.core
         /// </summary>
         /// <returns>Reserved entry</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void ReserveEntry(ref int entry, long epoch)
+        void ReserveEntry(ref int entry)
         {
-            if (TryAcquireEntry(ref entry, epoch))
+            if (TryAcquireEntry(ref entry))
                 return;
 
             // Table is full, fall back to slow path with waiting
@@ -656,7 +659,7 @@ namespace Tsavorite.core
                     // us waiting on the semaphore forever in case we increment waiterCount
                     // immediately after the epoch releaser sees a zero waiterCount (and
                     // therefore does not release the semaphore).
-                    if (TryAcquireEntry(ref entry, CurrentEpoch))
+                    if (TryAcquireEntry(ref entry))
                         return;
 
                     // No slot available, wait for a signal from Release()
@@ -678,7 +681,7 @@ namespace Tsavorite.core
         /// </summary>
         /// <returns>Reserved entry</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        void ReserveEntryForThread(ref int entry, long epoch)
+        void ReserveEntryForThread(ref int entry)
         {
             if (Metadata.threadId == 0) // run once per thread for performance
             {
@@ -687,7 +690,7 @@ namespace Tsavorite.core
                 Metadata.startOffset1 = (ushort)(1 + (code % kTableSize));
                 Metadata.startOffset2 = (ushort)(1 + ((code >> 16) % kTableSize));
             }
-            ReserveEntry(ref entry, epoch);
+            ReserveEntry(ref entry);
         }
 
         /// <inheritdoc/>
