@@ -373,5 +373,46 @@ namespace Garnet.test
             ClassicAssert.AreEqual(0, tracker.InFlight);
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
         }
+
+        [Test]
+        public void RegisterAndPublishLeavesTheWorkRegisteredWhenPublishingSucceeds()
+        {
+            var tracker = new VectorSetCleanupTracker();
+
+            var observedAtPublish = -1;
+            var published = tracker.RegisterAndPublish(tracker, t =>
+            {
+                observedAtPublish = t.InFlight;
+                return true;
+            });
+
+            ClassicAssert.IsTrue(published);
+            ClassicAssert.AreEqual(1, observedAtPublish, "The work must already be registered when it becomes visible");
+            ClassicAssert.AreEqual(1, tracker.InFlight);
+        }
+
+        [Test]
+        public void RegisterAndPublishRollsBackWhenPublishingFails()
+        {
+            var tracker = new VectorSetCleanupTracker();
+
+            ClassicAssert.IsFalse(tracker.RegisterAndPublish(0, _ => false));
+
+            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
+            ClassicAssert.IsTrue(tracker.WaitAllCleanupsAsync().IsCompleted);
+        }
+
+        [Test]
+        public void RegisterAndPublishRollsBackWhenPublishingThrows()
+        {
+            var tracker = new VectorSetCleanupTracker();
+
+            _ = Assert.Throws<InvalidOperationException>(
+                () => tracker.RegisterAndPublish(0, _ => throw new InvalidOperationException("publish failed")));
+
+            ClassicAssert.AreEqual(0, tracker.InFlight, "A throwing publish must not leak a registration");
+            ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
+        }
     }
 }

@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Threading.Tasks;
 
 namespace Garnet.server
@@ -106,6 +107,34 @@ namespace Garnet.server
             // continuation can never run inline on a background cleanup thread while it still owns
             // pipeline state.
             _ = toSignal?.TrySetResult();
+        }
+
+        /// <summary>
+        /// Register a unit of work and then make it visible via <paramref name="publish"/>, rolling the
+        /// registration back if publishing fails. Returns whether the work was published.
+        ///
+        /// This is rule 1 expressed as code: a caller physically cannot publish cleanup work without
+        /// having registered it first, so the register-then-publish ordering is not left to convention.
+        /// <paramref name="state"/> is threaded through so the callback need not capture.
+        /// </summary>
+        public bool RegisterAndPublish<TState>(TState state, Func<TState, bool> publish)
+        {
+            RegisterCleanup();
+
+            var published = false;
+            try
+            {
+                published = publish(state);
+            }
+            finally
+            {
+                if (!published)
+                {
+                    OnCleanupComplete();
+                }
+            }
+
+            return published;
         }
 
         /// <summary>

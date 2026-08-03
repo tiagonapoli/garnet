@@ -87,15 +87,18 @@ namespace Garnet.server
             }
         }
 
-        private readonly Channel<object> cleanupTaskChannel;
-        private readonly Channel<(ulong Context, TaskCompletionSource MarkCompleted)> requestCleanupTaskChannel;
+        private readonly VectorSetCleanupTracker cleanupTracker = new();
+        private readonly VectorSetCleanupChannel<object> cleanupTaskChannel;
+        private readonly VectorSetCleanupChannel<(ulong Context, TaskCompletionSource MarkCompleted)> requestCleanupTaskChannel;
+
+        // Pure nudge: the drop work itself lives in requestedDrops, whose entries carry the tracker
+        // registrations, so a wake here has no obligation attached and needs no lease.
         private readonly Channel<object> requestDropTaskChannel;
         private readonly ConcurrentDictionary<byte[], (ulong Context, nint IndexPtr)> requestedDrops;
 #if NET9_0_OR_GREATER
         private readonly ConcurrentDictionary<byte[], (ulong Context, nint IndexPtr)>.AlternateLookup<ReadOnlySpan<byte>> requestedDropsLookup;
 #endif
         private readonly ConcurrentDictionary<ulong, byte[]> potentiallyDeleted;
-        private readonly VectorSetCleanupTracker cleanupTracker = new();
         private readonly Task cleanupTask;
         private readonly Task requestCleanupTask;
         private readonly Task requestDropTask;
@@ -216,7 +219,7 @@ namespace Garnet.server
         /// </summary>
         private async Task RunRequestCleanupTaskAsync()
         {
-            while (await requestCleanupTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
+            while (await requestCleanupTaskChannel.WaitToReadAsync().ConfigureAwait(false))
             {
                 Volatile.Write(ref requestCleanupTaskRunning, true);
 
@@ -227,9 +230,9 @@ namespace Garnet.server
 
                 var completions = new List<TaskCompletionSource>();
 
-                // Every item read below was registered by its producer, so this pass owns exactly that
-                // many registrations and must complete them all before it loops.
-                var owned = 0;
+                // Disposed after the try/finally below, so the successor queued in the finally is always
+                // registered before this pass releases the registrations it owns.
+                using var batch = requestCleanupTaskChannel.ReadAllAvailable();
 
                 try
                 {
@@ -245,17 +248,14 @@ namespace Garnet.server
                     var needsUpdate = false;
                     lock (this)
                     {
-                        // Read all pending requests so we can do one update
-                        while (requestCleanupTaskChannel.Reader.TryRead(out var t))
+                        foreach (var (context, markCompleted) in batch.Items)
                         {
-                            owned++;
-
-                            if (t.MarkCompleted != null)
+                            if (markCompleted != null)
                             {
-                                completions.Add(t.MarkCompleted);
+                                completions.Add(markCompleted);
                             }
 
-                            var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(t.Context);
+                            var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
                             if (!contextMetadatas[contextIndex].IsCleaningUp(contextIndex != 0, contextValue))
                             {
                                 contextMetadatas[contextIndex].MarkCleaningUp(contextIndex != 0, contextValue);
@@ -285,15 +285,6 @@ namespace Garnet.server
                             logger?.LogError(innerE, "While completing Vector Set cleanup request");
                         }
                     }
-
-                    // Pump the cleanup task once we're done. Registered here, before this pass releases
-                    // its own registrations below, so the tracked count never dips to zero across the
-                    // hand-off from marking to scanning.
-                    cleanupTracker.RegisterCleanup();
-                    if (!cleanupTaskChannel.Writer.TryWrite(null))
-                    {
-                        cleanupTracker.OnCleanupComplete();
-                    }
                 }
                 catch (Exception e)
                 {
@@ -312,10 +303,10 @@ namespace Garnet.server
                 }
                 finally
                 {
-                    for (var i = 0; i < owned; i++)
-                    {
-                        cleanupTracker.OnCleanupComplete();
-                    }
+                    // Queued unconditionally: if the pass threw after marking contexts, those contexts are
+                    // cleaningUp with no scan queued, and dropping the hand-off here would let a drain
+                    // return with cleanup still owed.
+                    _ = cleanupTaskChannel.TryPublish(null);
 
                     Volatile.Write(ref requestCleanupTaskRunning, false);
                 }
@@ -329,103 +320,101 @@ namespace Garnet.server
         /// </summary>
         private async Task RunCleanupTaskAsync()
         {
-            while (await cleanupTaskChannel.Reader.WaitToReadAsync().ConfigureAwait(false))
+            while (await cleanupTaskChannel.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Each drop index will queue a null object here
-                // We'll handle multiple at once if possible, but using a channel simplifies cancellation and dispose
-                while (cleanupTaskChannel.Reader.TryRead(out _))
+                // Each queued item is one outstanding scan; the lease completes it on every exit path.
+                while (cleanupTaskChannel.TryRead(out var work))
                 {
-                    try
+                    using (work)
                     {
                         await cleanupGate.WaitAsync().ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        cleanupTracker.OnCleanupComplete();
-                        throw;
-                    }
 
-                    try
-                    {
-                        // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
-                        using var cleanupSession = (RespServerSession)getTempSession();
-                        if (cleanupSession.activeDbId != dbId && !cleanupSession.TrySwitchActiveDatabaseSession(dbId))
+                        try
                         {
-                            throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
-                        }
-
-                        // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
-                        //
-                        // So we use to different contexts, one to scan (strings) and one to delete (vectors)
-                        // The ref locals are (re)taken after the pause seam below so they don't cross an await.
-
-                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
-
-                        HashSet<ulong> needCleanup = null;
-                        lock (this)
-                        {
-                            for (var i = 0; i < contextMetadatas.Length; i++)
+                            // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
+                            using var cleanupSession = (RespServerSession)getTempSession();
+                            if (cleanupSession.activeDbId != dbId && !cleanupSession.TrySwitchActiveDatabaseSession(dbId))
                             {
-                                var subCleanup = contextMetadatas[i].GetNeedCleanup();
-                                if (subCleanup != null)
-                                {
-                                    var offset = ContextMetadata.OffsetForContextMetadata(i);
+                                throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
+                            }
 
-                                    needCleanup ??= [];
-                                    foreach (var item in subCleanup)
+                            // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
+                            //
+                            // So we use to different contexts, one to scan (strings) and one to delete (vectors)
+                            // The ref locals are (re)taken after the pause seam below so they don't cross an await.
+
+                            ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
+
+                            HashSet<ulong> needCleanup = null;
+                            lock (this)
+                            {
+                                for (var i = 0; i < contextMetadatas.Length; i++)
+                                {
+                                    var subCleanup = contextMetadatas[i].GetNeedCleanup();
+                                    if (subCleanup != null)
                                     {
-                                        _ = needCleanup.Add(offset + item);
+                                        var offset = ContextMetadata.OffsetForContextMetadata(i);
+
+                                        needCleanup ??= [];
+                                        foreach (var item in subCleanup)
+                                        {
+                                            _ = needCleanup.Add(offset + item);
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        if (needCleanup == null)
-                        {
-                            // Previous run already got here, so bail
-                            continue;
-                        }
-
-                        // Test seam: park with the needCleanup snapshot built but before the delete-scan,
-                        // so a test can stream a record into one of those namespaces and prove the scan deletes it.
-                        await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
-
-                        // Take the scan/delete contexts after the pause so no ref local crosses the await.
-                        ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
-
-                        PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
-
-                        // Scan whole keyspace and remove any associated data using a snapshot
-                        // lookup-based push iterator. This avoids building a parallel tempKv (which
-                        // would cost memory proportional to the keyspace) — IterateLookupSnapshot
-                        // walks the log and uses hash-chain liveness checks bounded to the snapshot's
-                        // TailAddress, so concurrent RCUs don't drop records.
-                        _ = scanCtx.Session.IterateLookupSnapshot(ref callbacks);
-
-                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_2);
-
-                        lock (this)
-                        {
-                            foreach (var cleanedUp in needCleanup)
+                            if (needCleanup == null)
                             {
-                                var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(cleanedUp);
-                                contextMetadatas[contextIndex].FinishedCleaningUp(contextIndex != 0, contextValue);
-
-                                _ = dirtyContextMetadatas.Add(contextIndex);
+                                // Previous run already got here, so bail
+                                continue;
                             }
-                        }
 
-                        ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
-                        UpdateContextMetadata(ref delCtx);
-                    }
-                    catch (Exception e)
-                    {
-                        logger?.LogError(e, "Failure during background cleanup of deleted vector sets, implies storage leak");
-                    }
-                    finally
-                    {
-                        _ = cleanupGate.Release();
-                        cleanupTracker.OnCleanupComplete();
+                            // Test seam: park with the needCleanup snapshot built but before the delete-scan,
+                            // so a test can stream a record into one of those namespaces and prove the scan deletes it.
+                            await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
+
+                            // Take the scan/delete contexts after the pause so no ref local crosses the await.
+                            ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
+
+                            PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
+
+                            // Scan whole keyspace and remove any associated data using a snapshot
+                            // lookup-based push iterator. This avoids building a parallel tempKv (which
+                            // would cost memory proportional to the keyspace) — IterateLookupSnapshot
+                            // walks the log and uses hash-chain liveness checks bounded to the snapshot's
+                            // TailAddress, so concurrent RCUs don't drop records.
+                            _ = scanCtx.Session.IterateLookupSnapshot(ref callbacks);
+
+                            ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_2);
+
+                            lock (this)
+                            {
+                                foreach (var cleanedUp in needCleanup)
+                                {
+                                    var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(cleanedUp);
+                                    contextMetadatas[contextIndex].FinishedCleaningUp(contextIndex != 0, contextValue);
+
+                                    _ = dirtyContextMetadatas.Add(contextIndex);
+                                }
+                            }
+
+                            ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
+                            UpdateContextMetadata(ref delCtx);
+                        }
+                        catch (Exception e)
+                        {
+                            logger?.LogError(e, "Failure during background cleanup of deleted vector sets, implies storage leak");
+
+                            // The contexts this pass was going to clear are still marked cleaningUp, and
+                            // nothing else re-queues them. Requeue before the lease is released, or the
+                            // count reaches zero with the scan still owed and a drain returns early.
+                            _ = cleanupTaskChannel.TryPublish(null);
+                        }
+                        finally
+                        {
+                            _ = cleanupGate.Release();
+                        }
                     }
                 }
             }
@@ -493,7 +482,7 @@ namespace Garnet.server
         /// </summary>
         internal void WaitForCleanupRequests()
         {
-            while (!potentiallyDeleted.IsEmpty || requestCleanupTaskChannel.Reader.TryPeek(out _) || Volatile.Read(ref requestCleanupTaskRunning) || Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) != 0)
+            while (!potentiallyDeleted.IsEmpty || requestCleanupTaskChannel.HasPending || Volatile.Read(ref requestCleanupTaskRunning) || Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) != 0)
             {
                 _ = Thread.Yield();
             }
@@ -596,12 +585,8 @@ namespace Garnet.server
                                 if (needsDelete)
                                 {
                                     // No need to wait for marking, since the record is already "deleted".
-                                    // Registered before the write and before this pass releases its own
-                                    // registration, so the hand-off never lets the count reach zero.
-                                    self.cleanupTracker.RegisterCleanup();
-                                    if (!self.requestCleanupTaskChannel.Writer.TryWrite((context, null)))
+                                    if (!self.requestCleanupTaskChannel.TryPublish((context, null)))
                                     {
-                                        self.cleanupTracker.OnCleanupComplete();
                                         self.logger?.LogWarning("Could not request delete of abandoned Vector Set {key}", SpanByte.ToShortString(key));
                                     }
                                 }
