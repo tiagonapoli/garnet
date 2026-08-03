@@ -13,11 +13,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>1701;1702;1591;IDE0130;IDE0065;IDE0007;IDE0048</NoWarn>
 
-    <!-- The harness measures memory ordering, so the runtime must not reshape the run.
-         Disabling tiered compilation means every method is JITted once at full optimization,
-         with no tier-0 pass and no OSR, so the hot loop is steady-state code from the first
-         iteration. A background/concurrent GC would introduce pauses that swamp the
-         microsecond race window this is trying to sample. -->
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
     <TieredCompilation>false</TieredCompilation>
