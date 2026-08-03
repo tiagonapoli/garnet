@@ -2,9 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using NUnit.Framework;
 using Tsavorite.core;
@@ -12,18 +10,11 @@ using Tsavorite.core;
 namespace Tsavorite.test.epoch
 {
     /// <summary>
-    /// Base for every fixture here: the running-test tracking that <c>Garnet.test.TestBase</c>
-    /// provides, plus the timeouts and join helpers these tests share.
-    ///
-    /// It is a copy rather than a reference because <c>Garnet.test.TestBase</c> lives in the
-    /// <c>Garnet.test</c> assembly, and this project exists precisely so the epoch can be tested
-    /// without dragging in the rest of the server.
+    /// Base for every fixture here: the running-test tracking from <see cref="Garnet.test.TestBase"/>,
+    /// plus the timeouts and join helpers these tests share.
     /// </summary>
-    public abstract class EpochTestBase
+    public abstract class EpochTestBase : Garnet.test.TestBase
     {
-        /// <summary>Tests currently executing, dumped by the unhandled-exception handler.</summary>
-        public static readonly ConcurrentDictionary<string, bool> RunningTests = new();
-
         /// <summary>Long enough that only a genuine hang trips it, not a slow machine.</summary>
         internal static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
@@ -34,21 +25,6 @@ namespace Tsavorite.test.epoch
         /// dominate the suite.
         /// </summary>
         internal static readonly TimeSpan SettleDelay = TimeSpan.FromMilliseconds(100);
-
-        [SetUp]
-        public void TrackRunningTest()
-        {
-            RunningTests[TestContext.CurrentContext.Test.Name] = true;
-
-            if (TestContext.CurrentContext.CurrentRepeatCount > 0)
-                Debug.WriteLine($"*** Current test iteration {TestContext.CurrentContext.CurrentRepeatCount + 1}: {TestContext.CurrentContext.Test.Name} ***");
-        }
-
-        [TearDown]
-        public void RemoveRunningTest()
-        {
-            Assert.That(RunningTests.TryRemove(TestContext.CurrentContext.Test.Name, out _), Is.True, $"Could not find running test {TestContext.CurrentContext.Test.Name}");
-        }
 
         /// <summary>Wait for every thread, failing the test if any of them does not finish in time.</summary>
         protected static void JoinAll(IEnumerable<Thread> threads, string message = "a thread did not finish") => JoinAll(threads, Timeout, message);

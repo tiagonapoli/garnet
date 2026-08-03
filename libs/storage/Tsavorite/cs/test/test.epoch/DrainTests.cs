@@ -176,13 +176,6 @@ namespace Tsavorite.test.epoch
             start.Set();
             JoinAll(threads, "worker did not finish");
 
-            // Anything still pending drains on the next quiescent pass.
-            using (epoch.ProtectedScope())
-            {
-                _ = epoch.BumpCurrentEpoch();
-                epoch.ProtectAndDrain();
-            }
-
             Assert.That(counts, Is.All.EqualTo(1), $"{counts.Count(c => c == 0)} actions never ran and {counts.Count(c => c > 1)} ran more than once");
         }
 
