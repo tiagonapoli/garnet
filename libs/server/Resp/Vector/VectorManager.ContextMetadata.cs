@@ -425,12 +425,9 @@ namespace Garnet.server
             {
                 this.manager = manager;
 
-                // Quiesce the background cleanup scan first. It holds cleanupGate for its whole
-                // iteration (including its own lock(this) / vectorSetLocks sections), so taking the
-                // gate before any other lock both waits out any in-flight scan and blocks a new one
-                // from starting — without which the scan could apply FinishedCleaningUp to the
-                // contextMetadatas array we wipe below. Taking it before vectorSetLocks / Monitor
-                // also avoids deadlocking against a scan that still needs those.
+                // Quiesce the background cleanup scan first, before any other lock: it holds cleanupGate for
+                // its whole iteration, so taking the gate both waits out an in-flight scan and blocks a new
+                // one from applying FinishedCleaningUp to the array we wipe below.
                 this.manager.cleanupGate.Wait();
 
                 // Stop other Vector Set operations

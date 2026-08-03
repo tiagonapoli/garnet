@@ -33,12 +33,12 @@ namespace Garnet.test
         {
             var channel = NewChannel(out var tracker);
 
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
             ClassicAssert.IsTrue(channel.TryPublish(null));
 
             // The registration is already in place at the instant the item became readable, which is
             // what stops a drain from observing an empty pipeline before the consumer wakes.
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
             ClassicAssert.IsTrue(channel.HasPending);
             ClassicAssert.IsFalse(tracker.WaitAllCleanupsAsync().IsCompleted);
         }
@@ -50,10 +50,10 @@ namespace Garnet.test
             _ = channel.TryPublish(null);
 
             ClassicAssert.IsTrue(channel.TryRead(out var lease));
-            ClassicAssert.AreEqual(1, tracker.InFlight, "Dequeuing is not completing - the consumer now owns the work");
+            ClassicAssert.AreEqual(1, tracker.Inflight, "Dequeuing is not completing - the consumer now owns the work");
 
             lease.Dispose();
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
         }
 
         [Test]
@@ -74,7 +74,7 @@ namespace Garnet.test
             }
 
             ClassicAssert.AreEqual(2, seen);
-            ClassicAssert.AreEqual(0, tracker.InFlight, "An early continue must not leak a registration");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "An early continue must not leak a registration");
         }
 
         [Test]
@@ -94,7 +94,7 @@ namespace Garnet.test
 
             // This is the case CleanupChannel.tla flags as unrecoverable: a leak here can never be
             // undone, so every later WaitAllCleanupsAsync would block forever.
-            ClassicAssert.AreEqual(0, tracker.InFlight, "A throw must not leak a registration");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "A throw must not leak a registration");
             ClassicAssert.IsTrue(tracker.WaitAllCleanupsAsync().IsCompleted);
         }
 
@@ -106,16 +106,16 @@ namespace Garnet.test
             _ = channel.TryPublish(null);
             _ = channel.TryPublish(null);
 
-            ClassicAssert.AreEqual(3, tracker.InFlight);
+            ClassicAssert.AreEqual(3, tracker.Inflight);
 
             using (var batch = channel.ReadAllAvailable())
             {
                 ClassicAssert.AreEqual(3, batch.Items.Count);
-                ClassicAssert.AreEqual(3, tracker.InFlight, "Draining the channel must not complete anything");
+                ClassicAssert.AreEqual(3, tracker.Inflight, "Draining the channel must not complete anything");
                 ClassicAssert.IsFalse(channel.HasPending);
             }
 
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
         }
 
         [Test]
@@ -128,7 +128,7 @@ namespace Garnet.test
                 ClassicAssert.AreEqual(0, batch.Items.Count);
             }
 
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
         }
 
@@ -150,10 +150,10 @@ namespace Garnet.test
                 // The successor is published while the batch is still held, exactly as the marking
                 // stage does in its finally.
                 _ = downstream.TryPublish(null);
-                ClassicAssert.AreEqual(2, tracker.InFlight);
+                ClassicAssert.AreEqual(2, tracker.Inflight);
             }
 
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
             ClassicAssert.IsFalse(wait.IsCompleted, "The waiter must not be released across a hand-off");
 
             ClassicAssert.IsTrue(downstream.TryRead(out var work));
@@ -182,7 +182,7 @@ namespace Garnet.test
             ClassicAssert.IsTrue(wait.Wait(Timeout), "This is the hazard being guarded against");
 
             _ = downstream.TryPublish(null);
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
         }
 
         [Test]
@@ -193,7 +193,7 @@ namespace Garnet.test
             channel.CompleteWriter();
 
             ClassicAssert.IsFalse(channel.TryPublish(null));
-            ClassicAssert.AreEqual(0, tracker.InFlight, "A rejected publish must roll its registration back");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "A rejected publish must roll its registration back");
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
             ClassicAssert.IsTrue(tracker.WaitAllCleanupsAsync().IsCompleted);
         }
@@ -214,7 +214,7 @@ namespace Garnet.test
                 _ = channel.TryPublish(null);
             }
 
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
             ClassicAssert.IsFalse(wait.IsCompleted);
 
             ClassicAssert.IsTrue(channel.TryRead(out var retry));
@@ -290,7 +290,7 @@ namespace Garnet.test
             ClassicAssert.IsTrue(consumer.Wait(Timeout));
 
             ClassicAssert.AreEqual(Producers * PerProducer, consumed);
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
         }
     }

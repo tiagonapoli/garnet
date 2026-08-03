@@ -239,9 +239,9 @@ namespace Garnet.server
                     var needsUpdate = false;
                     lock (this)
                     {
-                        foreach (var (context, _) in batch.Items)
+                        foreach (var t in batch.Items)
                         {
-                            var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
+                            var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(t.Context);
                             if (!contextMetadatas[contextIndex].IsCleaningUp(contextIndex != 0, contextValue))
                             {
                                 contextMetadatas[contextIndex].MarkCleaningUp(contextIndex != 0, contextValue);
@@ -285,9 +285,9 @@ namespace Garnet.server
         /// </summary>
         private void CompleteMarkRequests(List<(ulong Context, TaskCompletionSource MarkCompleted)> items, Exception error)
         {
-            foreach (var (_, markCompleted) in items)
+            foreach (var t in items)
             {
-                if (markCompleted == null)
+                if (t.MarkCompleted == null)
                 {
                     continue;
                 }
@@ -296,8 +296,8 @@ namespace Garnet.server
                 {
                     // Idempotent, so an item settled before the throw keeps its original outcome
                     _ = error == null
-                        ? markCompleted.TrySetResult()
-                        : markCompleted.TrySetException(error);
+                        ? t.MarkCompleted.TrySetResult()
+                        : t.MarkCompleted.TrySetException(error);
                 }
                 catch (Exception e)
                 {
@@ -508,7 +508,7 @@ namespace Garnet.server
 
             // The discovery pass itself is cleanup work: it can still be enumerating potentiallyDeleted
             // and feeding the request-cleanup channel, so it must be visible to a drain until it ends.
-            _ = cleanupTracker.RunTrackedAsync(this, static self =>
+            _ = cleanupTracker.RunTrackedTaskAsync(this, static self =>
             {
                 try
                 {

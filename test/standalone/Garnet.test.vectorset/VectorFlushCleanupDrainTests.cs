@@ -1,7 +1,7 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-// Relies on the DEBUG-only VectorManager test hooks (VectorManager.TestHooks.cs).
+// Injection can only be armed in DEBUG (ExceptionInjectionHelper.EnableException is [Conditional("DEBUG")]).
 #if DEBUG
 
 using NUnit.Framework;
@@ -11,14 +11,8 @@ using StackExchange.Redis;
 namespace Garnet.test
 {
     /// <summary>
-    /// Tests that <c>VectorManager.WaitForCleanupComplete</c> fully drains the background cleanup
-    /// pipeline after a FLUSHDB, and that FLUSHDB itself leaves the reservation state coherent.
-    ///
-    /// A FLUSHDB empties the main store, which queues eviction-driven native DiskANN drops and can
-    /// leave in-flight cleanup, while <c>FlushGuard</c> wipes the in-memory context reservation. This
-    /// exercises multiple Vector Sets (distinct contexts) at once and asserts that once the drain
-    /// barrier returns, nothing is outstanding: no reserved contexts, no dirty context metadata, and
-    /// no pending native drops.
+    /// Tests that <c>VectorManager.WaitForCleanupComplete</c> fully drains the background cleanup pipeline
+    /// after a FLUSHDB, and that FLUSHDB itself leaves the reservation state coherent.
     /// </summary>
     [TestFixture]
     public class VectorFlushCleanupDrainTests : VectorSetCleanupTestBase

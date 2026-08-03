@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace Garnet.server
@@ -19,48 +20,43 @@ namespace Garnet.server
     {
         private readonly object sync = new();
 
-        private int inFlight;
+        private int inflight;
 
         /// <summary>
-        /// Handed to waiters and completed when <see cref="inFlight"/> falls to zero. Null when nobody
-        /// is waiting.
+        /// Units of cleanup work currently in flight. Diagnostic and test use only - to wait, use
+        /// <see cref="WaitAllCleanupsAsync"/>, which cannot miss a transition.
         /// </summary>
-        private TaskCompletionSource allCleanupsComplete;
-
-        /// <summary>
-        /// Count of <see cref="OnCleanupComplete"/> calls with no matching <see cref="RegisterCleanup"/>.
-        /// Always zero in a correct pipeline; such a call is ignored rather than driving the count
-        /// negative, since a negative count would hang every future <see cref="WaitAllCleanupsAsync"/>.
-        /// </summary>
-        internal int UnbalancedCompletions { get { lock (sync) { return unbalancedCompletions; } } }
+        public int Inflight { get { lock (sync) { return inflight; } } }
 
         private int unbalancedCompletions;
 
         /// <summary>
-        /// Units of cleanup work currently in flight. Diagnostic and test use only — a caller that
-        /// wants to wait must use <see cref="WaitAllCleanupsAsync"/>, which cannot miss a transition.
+        /// Count of <see cref="OnCleanupComplete"/> calls with no matching <see cref="RegisterCleanup"/>.
+        /// Always zero in a correct pipeline.
         /// </summary>
-        internal int InFlight { get { lock (sync) { return inFlight; } } }
+        public int UnbalancedCompletions { get { lock (sync) { return unbalancedCompletions; } } }
 
         /// <summary>
-        /// Record that a unit of cleanup work now exists.
-        ///
-        /// Must be called before the work becomes visible to the task that will perform it, and must be
-        /// balanced by exactly one <see cref="OnCleanupComplete"/> on every path — including failure
-        /// paths, so callers should complete from a finally.
+        /// Handed to waiters and completed when <see cref="inflight"/> falls to zero. Null when nobody is waiting.
+        /// </summary>
+        private TaskCompletionSource allCleanupsComplete;
+
+        /// <summary>
+        /// Record that a unit of cleanup work now exists. Must be called before the work becomes visible to
+        /// the task that will perform it, and balanced by exactly one <see cref="OnCleanupComplete"/> on
+        /// every path.
         /// </summary>
         public void RegisterCleanup()
         {
             lock (sync)
             {
-                inFlight++;
+                inflight++;
             }
         }
 
         /// <summary>
-        /// Record that a unit of work registered by <see cref="RegisterCleanup"/> is fully done.
-        ///
-        /// If this work handed off to a later stage, that stage must already have been registered.
+        /// Record that a unit of work registered by <see cref="RegisterCleanup"/> is fully done. If it handed
+        /// off to a later stage, that stage must already have been registered.
         /// </summary>
         public void OnCleanupComplete()
         {
@@ -68,23 +64,25 @@ namespace Garnet.server
 
             lock (sync)
             {
-                if (inFlight == 0)
+                if (inflight == 0)
                 {
+                    // Ignored rather than driven negative, which would hang every future WaitAllCleanupsAsync
+                    Debug.Fail("Cleanup completed without a matching registration");
                     unbalancedCompletions++;
                     return;
                 }
 
-                inFlight--;
-                if (inFlight == 0)
+                inflight--;
+                if (inflight == 0)
                 {
                     toSignal = allCleanupsComplete;
                     allCleanupsComplete = null;
                 }
             }
 
-            // Signalled outside the lock, and with RunContinuationsAsynchronously, so a waiter's
-            // continuation can never run inline on a cleanup thread that is still mid-pass — holding
-            // lock (VectorManager) or a channel lease it has not released yet.
+            // Signalled outside the lock, and with RunContinuationsAsynchronously, so a waiter's continuation
+            // can never run inline on a cleanup thread that is still mid-pass - holding lock (VectorManager)
+            // or a channel lease it has not released yet.
             _ = toSignal?.TrySetResult();
         }
 
@@ -92,9 +90,7 @@ namespace Garnet.server
         /// Register a unit of work and then make it visible via <paramref name="publish"/>, rolling the
         /// registration back if publishing fails. Returns whether the work was published.
         ///
-        /// This is rule 1 expressed as code: a caller physically cannot publish cleanup work without
-        /// having registered it first, so the register-then-publish ordering is not left to convention.
-        /// <paramref name="state"/> is threaded through so the callback need not capture.
+        /// This is rule 1 expressed as code, so the ordering is not left to convention.
         /// </summary>
         public bool RegisterAndPublish<TState>(TState state, Func<TState, bool> publish)
         {
@@ -117,15 +113,11 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Register a unit of work and run it on the thread pool, releasing the registration when it
-        /// finishes or throws.
-        ///
-        /// For work that is a background pass rather than an entry in a queue or set: the registration
-        /// is taken before the task is scheduled, so a drain cannot slip between the two, and the caller
-        /// cannot forget to release it. <paramref name="state"/> is threaded through so the callback need
-        /// not capture.
+        /// Register a unit of work and run it on the thread pool, releasing the registration when it finishes
+        /// or throws. For a background pass rather than an entry in a queue or set: the registration is taken
+        /// before the task is scheduled, so a drain cannot slip between the two.
         /// </summary>
-        public Task RunTrackedAsync<TState>(TState state, Action<TState> work)
+        public Task RunTrackedTaskAsync<TState>(TState state, Action<TState> work)
         {
             RegisterCleanup();
 
@@ -143,17 +135,14 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Completes once no cleanup work is in flight.
-        ///
-        /// This says nothing about work registered after it returns — callers use it at boundaries
-        /// where they have already stopped new work from being produced (an emptied store, a paused
-        /// primary), so "nothing outstanding at the instant of return" is the contract.
+        /// Completes once no cleanup work is in flight. Says nothing about work registered after it returns -
+        /// callers use it at boundaries where they have already stopped new work being produced.
         /// </summary>
         public Task WaitAllCleanupsAsync()
         {
             lock (sync)
             {
-                if (inFlight == 0)
+                if (inflight == 0)
                 {
                     return Task.CompletedTask;
                 }

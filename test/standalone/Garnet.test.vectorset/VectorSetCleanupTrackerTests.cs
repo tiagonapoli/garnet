@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.server;
@@ -38,7 +39,7 @@ namespace Garnet.test
             var wait = tracker.WaitAllCleanupsAsync();
 
             ClassicAssert.IsTrue(wait.IsCompletedSuccessfully, "a wait with nothing in flight must not block at all");
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
         }
 
         [Test]
@@ -54,7 +55,7 @@ namespace Garnet.test
             tracker.OnCleanupComplete();
 
             AssertCompletes(wait, "the wait did not return after the last unit of work completed");
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
         }
 
         /// <summary>
@@ -97,7 +98,7 @@ namespace Garnet.test
             tracker.RegisterCleanup();
 
             ClassicAssert.IsTrue(wait.IsCompletedSuccessfully, "a completed wait must not be reopened by later work");
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
         }
 
         /// <summary>
@@ -192,7 +193,7 @@ namespace Garnet.test
             tracker.OnCleanupComplete();
 
             AssertDoesNotComplete(wait, "the count dipped to zero across the hand-off and released the waiter early");
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
 
             tracker.OnCleanupComplete();
             AssertCompletes(wait, "the wait did not return once the successor finished");
@@ -216,7 +217,7 @@ namespace Garnet.test
 
             // The successor only becomes visible afterwards, too late for the waiter above.
             tracker.RegisterCleanup();
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
         }
 
         /// <summary>
@@ -228,9 +229,20 @@ namespace Garnet.test
         {
             var tracker = new VectorSetCleanupTracker();
 
-            tracker.OnCleanupComplete();
+            // The tracker asserts on this path, so silence the listener while deliberately misusing it
+            var listeners = new TraceListener[Trace.Listeners.Count];
+            Trace.Listeners.CopyTo(listeners, 0);
+            Trace.Listeners.Clear();
+            try
+            {
+                tracker.OnCleanupComplete();
+            }
+            finally
+            {
+                Trace.Listeners.AddRange(listeners);
+            }
 
-            ClassicAssert.AreEqual(0, tracker.InFlight, "the count must never go negative");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "the count must never go negative");
             ClassicAssert.AreEqual(1, tracker.UnbalancedCompletions, "the misuse must still be observable");
 
             // The tracker remains usable and live.
@@ -260,7 +272,7 @@ namespace Garnet.test
                     tracker.RegisterCleanup();
                     tracker.OnCleanupComplete();
 
-                    return tracker.InFlight;
+                    return tracker.Inflight;
                 },
                 TaskContinuationOptions.ExecuteSynchronously);
 
@@ -316,11 +328,11 @@ namespace Garnet.test
                     // The tracker said zero; nothing may be registered-but-not-completed at this point
                     // beyond what a producer could have added after the release, which the shadow
                     // decrements only after the tracker completion.
-                    if (tracker.InFlight < 0)
+                    if (tracker.Inflight < 0)
                     {
                         lock (failures)
                         {
-                            failures.Add($"tracker count went negative: {tracker.InFlight}");
+                            failures.Add($"tracker count went negative: {tracker.Inflight}");
                         }
                     }
                 }
@@ -331,7 +343,7 @@ namespace Garnet.test
             AssertCompletes(waiter, "waiter loop did not finish");
 
             ClassicAssert.IsEmpty(failures);
-            ClassicAssert.AreEqual(0, tracker.InFlight, "every registration must have been completed");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "every registration must have been completed");
             ClassicAssert.AreEqual(0, Volatile.Read(ref shadow));
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions, "balanced usage must never report an unbalanced completion");
 
@@ -370,7 +382,7 @@ namespace Garnet.test
             tracker.OnCleanupComplete();
             AssertCompletes(wait, "the wait must return once marking, scanning and drops have all drained");
 
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
         }
 
@@ -382,13 +394,13 @@ namespace Garnet.test
             var observedAtPublish = -1;
             var published = tracker.RegisterAndPublish(tracker, t =>
             {
-                observedAtPublish = t.InFlight;
+                observedAtPublish = t.Inflight;
                 return true;
             });
 
             ClassicAssert.IsTrue(published);
             ClassicAssert.AreEqual(1, observedAtPublish, "The work must already be registered when it becomes visible");
-            ClassicAssert.AreEqual(1, tracker.InFlight);
+            ClassicAssert.AreEqual(1, tracker.Inflight);
         }
 
         [Test]
@@ -398,7 +410,7 @@ namespace Garnet.test
 
             ClassicAssert.IsFalse(tracker.RegisterAndPublish(0, _ => false));
 
-            ClassicAssert.AreEqual(0, tracker.InFlight);
+            ClassicAssert.AreEqual(0, tracker.Inflight);
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
             ClassicAssert.IsTrue(tracker.WaitAllCleanupsAsync().IsCompleted);
         }
@@ -411,7 +423,7 @@ namespace Garnet.test
             _ = Assert.Throws<InvalidOperationException>(
                 () => tracker.RegisterAndPublish(0, _ => throw new InvalidOperationException("publish failed")));
 
-            ClassicAssert.AreEqual(0, tracker.InFlight, "A throwing publish must not leak a registration");
+            ClassicAssert.AreEqual(0, tracker.Inflight, "A throwing publish must not leak a registration");
             ClassicAssert.AreEqual(0, tracker.UnbalancedCompletions);
         }
     }
