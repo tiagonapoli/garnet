@@ -23,14 +23,19 @@ A green run only means something because of two checks:
 
 ## The pieces
 
-- **`QuarantineLitmus`** — the race: reader/reclaimer loop, page pool, poison stamp,
-  violation counter. Generic over the epoch so the JIT specialises it; an indirection
-  inside the window could hide the reordering.
+`Program.cs` is the entry point and `QuarantineLitmus.cs` is the test itself — the race:
+reader/reclaimer loop, page pool, poison stamp, violation counter. It is generic over the
+epoch so the JIT specialises it; an indirection inside the window could hide the
+reordering. Everything else lives in `helpers/`:
+
 - **`TwoThreadBarrier`** — lines the reader and reclaimer up each pass. Without it
   they drift apart and the window is never sampled.
 - **`EpochUnderTest`** — the `IEpochUnderTest` seam plus `FixedEpoch`/`BuggyEpoch`, so
   one binary runs either algorithm.
+- **`BuggyLightEpoch`** — the frozen pre-fix copy of `LightEpoch` that `BuggyEpoch` drives.
+- **`CoreLayout`** — which processor each thread is pinned to.
 - **`Platform`** — page allocation and thread-to-core pinning.
+- **`Emulation`** — the emulator check described below.
 
 ## Running it
 
@@ -56,7 +61,7 @@ the same processors and contend — do not run copies side by side.
 
 ## Comparing against the unfixed algorithm
 
-`BuggyLightEpoch.cs` is a frozen copy of `LightEpoch` as it stood before this PR.
+`helpers/BuggyLightEpoch.cs` is a frozen copy of `LightEpoch` as it stood before this PR.
 `--buggy` runs against it, so both algorithms can be compared on the same machine in
 the same session:
 
