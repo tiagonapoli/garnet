@@ -219,14 +219,14 @@ namespace Garnet.server
                 //
                 // The fact that we're in an OnDispose means Reset() isn't running.
 
-                var completions = new List<TaskCompletionSource>();
-
                 // Disposed after the try/finally below, so the successor queued in the finally is always
                 // registered before this pass releases the registrations it owns.
                 using var batch = requestCleanupTaskChannel.ReadAllAvailable();
 
                 try
                 {
+                    ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_4);
+
                     // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
                     using var cleanupSession = (RespServerSession)getTempSession();
                     if (cleanupSession.activeDbId != dbId && !cleanupSession.TrySwitchActiveDatabaseSession(dbId))
@@ -239,13 +239,8 @@ namespace Garnet.server
                     var needsUpdate = false;
                     lock (this)
                     {
-                        foreach (var (context, markCompleted) in batch.Items)
+                        foreach (var (context, _) in batch.Items)
                         {
-                            if (markCompleted != null)
-                            {
-                                completions.Add(markCompleted);
-                            }
-
                             var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
                             if (!contextMetadatas[contextIndex].IsCleaningUp(contextIndex != 0, contextValue))
                             {
@@ -265,32 +260,11 @@ namespace Garnet.server
 
                     ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_3);
 
-                    foreach (var completion in completions)
-                    {
-                        try
-                        {
-                            _ = completion.TrySetResult();
-                        }
-                        catch (Exception innerE)
-                        {
-                            logger?.LogError(innerE, "While completing Vector Set cleanup request");
-                        }
-                    }
+                    CompleteMarkRequests(batch.Items, error: null);
                 }
                 catch (Exception e)
                 {
-                    foreach (var completion in completions)
-                    {
-                        try
-                        {
-                            _ = completion.TrySetException(e);
-                        }
-                        catch (Exception innerE)
-                        {
-                            // Best effort
-                            logger?.LogError(innerE, "While cancelling Vector Set cleanup requests");
-                        }
-                    }
+                    CompleteMarkRequests(batch.Items, e);
                 }
                 finally
                 {
@@ -300,6 +274,35 @@ namespace Garnet.server
                     _ = cleanupTaskChannel.TryPublish(null);
 
                     Volatile.Write(ref requestCleanupTaskRunning, false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Settle every <c>VectorSetDeleted</c> waiter in a marking pass, driven off the items the pass owns
+        /// rather than off what it managed to process. A waiter blocks a RESP thread, so a pass that throws
+        /// before reaching a given item must still fault it or that thread hangs forever.
+        /// </summary>
+        private void CompleteMarkRequests(List<(ulong Context, TaskCompletionSource MarkCompleted)> items, Exception error)
+        {
+            foreach (var (_, markCompleted) in items)
+            {
+                if (markCompleted == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    // Idempotent, so an item settled before the throw keeps its original outcome
+                    _ = error == null
+                        ? markCompleted.TrySetResult()
+                        : markCompleted.TrySetException(error);
+                }
+                catch (Exception e)
+                {
+                    // Best effort
+                    logger?.LogError(e, "While completing Vector Set cleanup request");
                 }
             }
         }

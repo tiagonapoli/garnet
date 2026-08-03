@@ -86,6 +86,11 @@ namespace Garnet.common
         /// </summary>
         VectorSet_Interrupt_Delete_3,
         /// <summary>
+        /// During deletion of a Vector Set, before the cleanup marking pass has acquired any state - so
+        /// before it has observed any of the requests it is responsible for completing.
+        /// </summary>
+        VectorSet_Interrupt_Delete_4,
+        /// <summary>
         /// Failure after handler registered in activeHandlers but before Start() is called.
         /// This means no SAEA receive loop is running, so the only cleanup path is public Dispose().
         /// </summary>
