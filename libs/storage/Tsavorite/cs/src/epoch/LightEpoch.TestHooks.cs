@@ -34,11 +34,6 @@ namespace Tsavorite.core
         internal int TestHookThreadIdAt(int entry) => EntryAt(entry).threadId;
 
         /// <summary>
-        /// Number of threads parked waiting for a table slot.
-        /// </summary>
-        internal int TestHookWaiterCount => waiterCount & ~kDisposedFlag;
-
-        /// <summary>
         /// Capacity of the drain list.
         /// </summary>
         internal static int TestHookDrainListCapacity => kDrainListSize;
