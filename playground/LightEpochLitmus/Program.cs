@@ -29,27 +29,31 @@ namespace Tsavorite.epoch.litmus
                 return parseError is null ? ExitPass : ExitUsage;
             }
 
+            var emulated = Emulation.Detect();
+            var epochName = options.Buggy ? "buggy" : "fixed";
+
             if (!Platform.IsSupported)
             {
                 Console.Error.WriteLine($"unsupported: the harness needs Windows or Linux for page allocation and core pinning; this is {RuntimeInformation.OSDescription}");
-                return ExitUnsupported;
+                return Finish(options, new Report { Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence, Epoch = epochName }, ExitUnsupported, "unsupported-os");
             }
 
             if (!CoreLayout.TrySelect(options.Disturbers, out var cores))
             {
                 Console.Error.WriteLine($"unsupported: the harness needs at least 4 logical processors to separate the reader from the reclaimer; this machine has {Environment.ProcessorCount}");
-                return ExitUnsupported;
+                return Finish(options, new Report { Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence, Epoch = epochName }, ExitUnsupported, "too-few-processors");
             }
 
-            var emulated = Emulation.Detect();
             WriteHeader(options, cores, emulated);
+
+            var report = new Report { Cores = cores.ToString(), Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence, Epoch = epochName };
 
             if (emulated.IsEmulated && !options.AllowEmulation)
             {
                 Console.Error.WriteLine($"unsupported: this process appears to be running under emulation ({emulated.Evidence}).");
                 Console.Error.WriteLine("An emulator does not reproduce the host's memory ordering, so no result here says anything about the architecture being emulated.");
                 Console.Error.WriteLine("Run on native hardware, or pass --allow-emulation if you understand the result is not evidence.");
-                return ExitUnsupported;
+                return Finish(options, report, ExitUnsupported, "emulated");
             }
 
             // The epoch under test is a generic type argument rather than an interface reference so
@@ -58,7 +62,6 @@ namespace Tsavorite.epoch.litmus
                 ? new QuarantineLitmus<BuggyEpoch>(new BuggyEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run()
                 : new QuarantineLitmus<FixedEpoch>(new FixedEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run();
 
-            var report = new Report { Cores = cores.ToString(), Emulated = emulated.IsEmulated, EmulationEvidence = emulated.Evidence, Epoch = options.Buggy ? "buggy" : "fixed" };
 
             if (!options.NoControl)
             {

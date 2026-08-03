@@ -41,7 +41,7 @@ namespace Tsavorite.epoch.litmus
     /// Shared counters. Reader and reclaimer counters get separate cache lines, and
     /// <see cref="CurPage"/> -- which the reader loads every round -- gets a third.
     /// </summary>
-    [StructLayout(LayoutKind.Explicit, Size = 3 * Line)]
+    [StructLayout(LayoutKind.Explicit, Size = 4 * Line)]
     internal struct Counters
     {
         const int Line = 128;
@@ -54,6 +54,8 @@ namespace Tsavorite.epoch.litmus
 
         [FieldOffset(2 * Line)] internal long Drains;
         [FieldOffset((2 * Line) + 8)] internal long Quarantines;
+
+        [FieldOffset(3 * Line)] internal long DisturberSink;
     }
 
     /// <summary>
@@ -74,6 +76,7 @@ namespace Tsavorite.epoch.litmus
         const int PoolPages = 1024;
         const int WordsPerPage = (int)(PageSize / sizeof(long));
         const long Poison = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
+        const int JoinTimeoutMs = 5000;
 
         private readonly TEpoch epoch;
         private readonly TwoThreadBarrier barrier = new();
@@ -98,6 +101,7 @@ namespace Tsavorite.epoch.litmus
         private ref long CurPage => ref counters->CurPage;
         private ref long Drains => ref counters->Drains;
         private ref long Quarantines => ref counters->Quarantines;
+        private ref long DisturberSink => ref counters->DisturberSink;
 
         internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, CoreLayout cores, bool selfTest = false)
         {
@@ -112,6 +116,7 @@ namespace Tsavorite.epoch.litmus
         {
             pool = Platform.MapPage(MappedBytes);
             counters = (Counters*)(pool + (PageSize * PoolPages));
+            var threadsExited = false;
             try
             {
                 for (var slot = 0; slot < PoolPages; slot++)
@@ -141,9 +146,9 @@ namespace Tsavorite.epoch.litmus
                 var rounds = ReclaimerLoop();
                 stopwatch.Stop();
 
-                _ = reader.Join(5000);
+                threadsExited = reader.Join(JoinTimeoutMs);
                 foreach (var disturber in disturbers)
-                    _ = disturber.Join(5000);
+                    threadsExited &= disturber.Join(JoinTimeoutMs);
 
                 return new QuarantineLitmusResult
                 {
@@ -157,8 +162,17 @@ namespace Tsavorite.epoch.litmus
             }
             finally
             {
-                Platform.Unmap(pool, MappedBytes);
-                epoch.Dispose();
+                // A thread that outlived the join is still dereferencing the pool and the epoch, so
+                // tearing either down would turn a hang into an access violation. Leak instead.
+                if (threadsExited)
+                {
+                    Platform.Unmap(pool, MappedBytes);
+                    epoch.Dispose();
+                }
+                else
+                {
+                    Console.Error.WriteLine($"warning: a harness thread did not exit within {JoinTimeoutMs}ms; leaving the page pool mapped rather than pulling it out from under a live thread");
+                }
             }
         }
 
@@ -173,7 +187,7 @@ namespace Tsavorite.epoch.litmus
                     local += epoch.TestHookAnnouncedEpochAt(i);
             }
 
-            _ = Interlocked.Add(ref Sink, local);
+            _ = Interlocked.Add(ref DisturberSink, local);
         }
 
         void ReaderLoop()
