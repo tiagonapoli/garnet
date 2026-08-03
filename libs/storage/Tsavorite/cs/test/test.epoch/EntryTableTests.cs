@@ -14,22 +14,8 @@ namespace Tsavorite.test.epoch
     /// slot is occupied.
     /// </summary>
     [TestFixture]
-    public class EntryTableTests
+    public class EntryTableTests : EpochTestBase
     {
-        static readonly TimeSpan Generous = TimeSpan.FromSeconds(30);
-
-        LightEpoch epoch;
-
-        [SetUp]
-        public void Setup() => epoch = new LightEpoch();
-
-        [TearDown]
-        public void TearDown()
-        {
-            epoch?.Dispose();
-            epoch = null;
-        }
-
         [Test]
         public void EntryCountIsAtLeastTheMinimumTableSize()
         {
@@ -62,13 +48,14 @@ namespace Tsavorite.test.epoch
                 threads[t].Start();
             }
 
-            Assert.That(allIn.Wait(Generous), Is.True, "threads did not all acquire a slot");
+            Assert.That(allIn.Wait(Timeout), Is.True, "threads did not all acquire a slot");
             Assert.That(entries, Is.Unique, "two concurrently protected threads shared a slot");
+
+            // The table is 1-based: index 0 is kInvalidIndex, the "this thread holds no slot" sentinel.
             Assert.That(entries, Is.All.GreaterThan(0));
 
             release.Set();
-            foreach (var thread in threads)
-                Assert.That(thread.Join(Generous), Is.True);
+            JoinAll(threads);
 
             for (var entry = 1; entry <= epoch.EntryCount; entry++)
                 Assert.That(epoch.AnnouncedEpochAt(entry), Is.Zero, $"slot {entry} was left announced");
@@ -104,7 +91,7 @@ namespace Tsavorite.test.epoch
 
             try
             {
-                Assert.That(allIn.Wait(Generous), Is.True, "could not fill the epoch table");
+                Assert.That(allIn.Wait(Timeout), Is.True, "could not fill the epoch table");
 
                 using var acquired = new ManualResetEventSlim();
                 var latecomer = new Thread(() =>
@@ -118,20 +105,19 @@ namespace Tsavorite.test.epoch
 
                 Assert.That(acquired.Wait(TimeSpan.FromMilliseconds(500)), Is.False, "a thread acquired a slot from a completely full table");
 
-                _ = SpinWait.SpinUntil(() => epoch.WaiterCount > 0, Generous);
+                _ = SpinWait.SpinUntil(() => epoch.WaiterCount > 0, Timeout);
                 Assert.That(epoch.WaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
 
                 releaseFirst.Set();
 
-                Assert.That(acquired.Wait(Generous), Is.True, "freeing a slot did not wake the waiter");
-                Assert.That(latecomer.Join(Generous), Is.True);
+                Assert.That(acquired.Wait(Timeout), Is.True, "freeing a slot did not wake the waiter");
+                Assert.That(latecomer.Join(Timeout), Is.True);
             }
             finally
             {
                 releaseFirst.Set();
                 releaseRest.Set();
-                foreach (var holder in holders)
-                    _ = holder.Join(Generous);
+                TryJoinAll(holders);
             }
 
             Assert.That(epoch.WaiterCount, Is.Zero);
@@ -166,7 +152,7 @@ namespace Tsavorite.test.epoch
 
             try
             {
-                Assert.That(allIn.Wait(Generous), Is.True, "could not fill the epoch table");
+                Assert.That(allIn.Wait(Timeout), Is.True, "could not fill the epoch table");
 
                 Exception caught = null;
                 var waiter = new Thread(() =>
@@ -184,19 +170,18 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 waiter.Start();
 
-                _ = SpinWait.SpinUntil(() => disposable.WaiterCount > 0, Generous);
+                _ = SpinWait.SpinUntil(() => disposable.WaiterCount > 0, Timeout);
                 Assert.That(disposable.WaiterCount, Is.GreaterThan(0), "the thread never parked");
 
                 disposable.Dispose();
 
-                Assert.That(waiter.Join(Generous), Is.True, "the parked thread was never released by Dispose");
+                Assert.That(waiter.Join(Timeout), Is.True, "the parked thread was never released by Dispose");
                 Assert.That(caught, Is.TypeOf<ObjectDisposedException>(), $"expected ObjectDisposedException, got {caught?.GetType().Name ?? "no exception"}");
             }
             finally
             {
                 release.Set();
-                foreach (var holder in holders)
-                    _ = holder.Join(Generous);
+                TryJoinAll(holders);
             }
         }
 
@@ -215,7 +200,7 @@ namespace Tsavorite.test.epoch
                 })
                 { IsBackground = true };
                 t.Start();
-                Assert.That(t.Join(Generous), Is.True);
+                Assert.That(t.Join(Timeout), Is.True);
 
                 Assert.That(entry, Is.GreaterThan(0));
                 _ = seen.Add(entry);
@@ -267,8 +252,7 @@ namespace Tsavorite.test.epoch
             }
 
             start.Set();
-            foreach (var thread in threads)
-                Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True);
+            JoinAll(threads, SoakTimeout);
 
             Assert.That(Volatile.Read(ref conflicts), Is.Zero, "a slot was claimed by two threads at once");
         }

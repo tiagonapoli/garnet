@@ -15,20 +15,8 @@ namespace Tsavorite.test.epoch
     /// cache line. Slots are claimed by bitmask CAS, and the values are owned by the application.
     /// </summary>
     [TestFixture]
-    public class UserWordTests
+    public class UserWordTests : EpochTestBase
     {
-        LightEpoch epoch;
-
-        [SetUp]
-        public void Setup() => epoch = new LightEpoch();
-
-        [TearDown]
-        public void TearDown()
-        {
-            epoch.Dispose();
-            epoch = null;
-        }
-
         [Test]
         public void AllocationHandsOutEverySlotOnceThenThrows()
         {
@@ -94,7 +82,7 @@ namespace Tsavorite.test.epoch
             var second = epoch.AllocateUserWord(20);
             try
             {
-                using (epoch.Protected())
+                using (epoch.ProtectedScope())
                 {
                     epoch.ThisThreadUserWord(first) = 5;
 
@@ -118,7 +106,7 @@ namespace Tsavorite.test.epoch
                 for (var i = 0; i < LightEpoch.MaxUserWords; i++)
                     words.Add(epoch.AllocateUserWord(long.MaxValue));
 
-                using (epoch.Protected())
+                using (epoch.ProtectedScope())
                 {
                     for (var i = 0; i < words.Count; i++)
                         epoch.ThisThreadUserWord(words[i]) = 100 + i;

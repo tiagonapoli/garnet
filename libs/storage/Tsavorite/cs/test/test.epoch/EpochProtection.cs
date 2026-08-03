@@ -7,13 +7,11 @@ using Tsavorite.core;
 namespace Tsavorite.test.epoch
 {
     /// <summary>
-    /// Scopes a protected region to a <c>using</c> block. Most tests here have to stay protected
-    /// across their assertions, and an assertion failure must still suspend the thread or the
-    /// fixture teardown disposes an epoch that a live entry still announces.
+    /// Scopes a protected region to a <c>using</c> block, so that a failing assertion still suspends.
     /// </summary>
     internal static class EpochProtection
     {
-        internal static Scope Protected(this LightEpoch epoch)
+        internal static Scope ProtectedScope(this LightEpoch epoch)
         {
             epoch.Resume();
             return new Scope(epoch);

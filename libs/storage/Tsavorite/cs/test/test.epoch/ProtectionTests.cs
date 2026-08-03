@@ -12,20 +12,8 @@ namespace Tsavorite.test.epoch
     /// and the refresh path leave behind in the epoch table.
     /// </summary>
     [TestFixture]
-    public class ProtectionTests
+    public class ProtectionTests : EpochTestBase
     {
-        LightEpoch epoch;
-
-        [SetUp]
-        public void Setup() => epoch = new LightEpoch();
-
-        [TearDown]
-        public void TearDown()
-        {
-            epoch.Dispose();
-            epoch = null;
-        }
-
         [Test]
         public void UnprotectedThreadHoldsNoSlot()
         {
@@ -38,7 +26,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void SlotIndexIsWithinTheTable()
         {
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 var entry = epoch.ThisThreadEntry();
                 Assert.That(entry, Is.GreaterThan(0));
@@ -70,7 +58,7 @@ namespace Tsavorite.test.epoch
 
             for (var i = 0; i < 32; i++)
             {
-                using (epoch.Protected())
+                using (epoch.ProtectedScope())
                 {
                     Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     _ = epoch.BumpCurrentEpoch();
@@ -85,7 +73,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void SuspendResumeKeepsTheThreadProtected()
         {
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 epoch.SuspendResume();
 
@@ -98,7 +86,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void RefreshRepublishesTheLatestEpochEveryTime()
         {
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < 16; i++)
                 {
@@ -124,7 +112,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void ToStringReportsProtectedThreads()
         {
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 var description = epoch.ToString();
                 Assert.That(description, Does.Contain("CurrentEpoch"));
@@ -161,7 +149,7 @@ namespace Tsavorite.test.epoch
             Bump();
             Bump();
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
             }

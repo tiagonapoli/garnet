@@ -21,17 +21,9 @@ namespace Tsavorite.test.epoch
         {
             var before = LightEpoch.ActiveInstanceCount();
 
-            var first = new LightEpoch();
-            var second = new LightEpoch();
-            try
-            {
+            using (var first = new LightEpoch())
+            using (var second = new LightEpoch())
                 Assert.That(LightEpoch.ActiveInstanceCount(), Is.EqualTo(before + 2));
-            }
-            finally
-            {
-                first.Dispose();
-                second.Dispose();
-            }
 
             Assert.That(LightEpoch.ActiveInstanceCount(), Is.EqualTo(before), "Dispose did not return the instance id");
         }
@@ -39,53 +31,39 @@ namespace Tsavorite.test.epoch
         [Test]
         public void ProtectingOneInstanceLeavesTheOtherUntouched()
         {
-            var first = new LightEpoch();
-            var second = new LightEpoch();
-            try
+            using var first = new LightEpoch();
+            using var second = new LightEpoch();
+
+            var secondEpoch = second.CurrentEpoch;
+
+            using (first.ProtectedScope())
             {
-                var secondEpoch = second.CurrentEpoch;
+                Assert.That(first.ThisInstanceProtected(), Is.True);
+                Assert.That(second.ThisInstanceProtected(), Is.False);
 
-                using (first.Protected())
-                {
-                    Assert.That(first.ThisInstanceProtected(), Is.True);
-                    Assert.That(second.ThisInstanceProtected(), Is.False);
+                for (var i = 0; i < 4; i++)
+                    _ = first.BumpCurrentEpoch();
 
-                    for (var i = 0; i < 4; i++)
-                        _ = first.BumpCurrentEpoch();
-
-                    Assert.That(second.CurrentEpoch, Is.EqualTo(secondEpoch), "bumping one instance advanced another");
-                    Assert.That(second.MinAnnouncedEpoch(), Is.EqualTo(secondEpoch));
-                }
-            }
-            finally
-            {
-                first.Dispose();
-                second.Dispose();
+                Assert.That(second.CurrentEpoch, Is.EqualTo(secondEpoch), "bumping one instance advanced another");
+                Assert.That(second.MinAnnouncedEpoch(), Is.EqualTo(secondEpoch));
             }
         }
 
         [Test]
         public void OneThreadCanHoldSlotsInSeveralInstancesAtOnce()
         {
-            var first = new LightEpoch();
-            var second = new LightEpoch();
-            try
-            {
-                using (first.Protected())
-                using (second.Protected())
-                {
-                    Assert.That(first.ThisInstanceProtected(), Is.True);
-                    Assert.That(second.ThisInstanceProtected(), Is.True);
-                }
+            using var first = new LightEpoch();
+            using var second = new LightEpoch();
 
-                Assert.That(first.ThisInstanceProtected(), Is.False);
-                Assert.That(second.ThisInstanceProtected(), Is.False);
-            }
-            finally
+            using (first.ProtectedScope())
+            using (second.ProtectedScope())
             {
-                first.Dispose();
-                second.Dispose();
+                Assert.That(first.ThisInstanceProtected(), Is.True);
+                Assert.That(second.ThisInstanceProtected(), Is.True);
             }
+
+            Assert.That(first.ThisInstanceProtected(), Is.False);
+            Assert.That(second.ThisInstanceProtected(), Is.False);
         }
 
         [Test]
@@ -101,10 +79,8 @@ namespace Tsavorite.test.epoch
             {
                 Assert.That(second.ThisInstanceProtected(), Is.False, "a recycled instance id left stale thread-static state behind");
 
-                using (second.Protected())
-                {
+                using (second.ProtectedScope())
                     Assert.That(second.ThisInstanceProtected(), Is.True);
-                }
             }
             finally
             {
@@ -138,16 +114,9 @@ namespace Tsavorite.test.epoch
                     instance.Dispose();
             }
 
-            var afterwards = new LightEpoch();
-            try
-            {
-                afterwards.Resume();
-                afterwards.Suspend();
-            }
-            finally
-            {
-                afterwards.Dispose();
-            }
+            using var afterwards = new LightEpoch();
+            afterwards.Resume();
+            afterwards.Suspend();
         }
     }
 }

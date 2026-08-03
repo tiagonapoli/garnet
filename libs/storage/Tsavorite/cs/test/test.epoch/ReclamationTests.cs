@@ -15,20 +15,8 @@ namespace Tsavorite.test.epoch
     /// statement about it never overtaking a thread that is still inside a protected region.
     /// </summary>
     [TestFixture]
-    public class ReclamationTests
+    public class ReclamationTests : EpochTestBase
     {
-        LightEpoch epoch;
-
-        [SetUp]
-        public void Setup() => epoch = new LightEpoch();
-
-        [TearDown]
-        public void TearDown()
-        {
-            epoch.Dispose();
-            epoch = null;
-        }
-
         [Test]
         public void AnEmptyTableAnnouncesNothing()
         {
@@ -47,7 +35,7 @@ namespace Tsavorite.test.epoch
             using var reader = new ParkedReader(epoch);
             Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch));
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < 8; i++)
                     _ = epoch.BumpCurrentEpoch();
@@ -66,7 +54,7 @@ namespace Tsavorite.test.epoch
         {
             using var reader = new ParkedReader(epoch);
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < 64; i++)
                 {
@@ -80,7 +68,7 @@ namespace Tsavorite.test.epoch
 
             reader.LeaveAndJoin();
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 _ = epoch.BumpCurrentEpoch();
                 Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(reader.AnnouncedEpoch), "once the reader left, the epoch it held must become reclaimable");
@@ -105,7 +93,7 @@ namespace Tsavorite.test.epoch
             // The only announcement was this thread's own, so everything before it is reclaimable.
             Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(announced - 1));
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 _ = epoch.BumpCurrentEpoch();
                 Assert.That(epoch.SafeToReclaimEpoch, Is.GreaterThanOrEqualTo(announced), "the previously announced epoch stayed unreclaimable after the thread suspended");
@@ -123,7 +111,7 @@ namespace Tsavorite.test.epoch
                 {
                     readers[i] = new ParkedReader(epoch);
 
-                    using (epoch.Protected())
+                    using (epoch.ProtectedScope())
                     {
                         _ = epoch.BumpCurrentEpoch();
                     }
@@ -136,7 +124,7 @@ namespace Tsavorite.test.epoch
 
                 Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(oldest));
 
-                using (epoch.Protected())
+                using (epoch.ProtectedScope())
                 {
                     _ = epoch.BumpCurrentEpoch();
                     Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(oldest - 1));
@@ -145,7 +133,7 @@ namespace Tsavorite.test.epoch
                 // Retiring the oldest reader must move the frontier up to the next oldest, and no further.
                 readers[0].LeaveAndJoin();
 
-                using (epoch.Protected())
+                using (epoch.ProtectedScope())
                 {
                     _ = epoch.BumpCurrentEpoch();
                     Assert.That(epoch.SafeToReclaimEpoch, Is.EqualTo(readers[1].AnnouncedEpoch - 1));
@@ -187,7 +175,7 @@ namespace Tsavorite.test.epoch
                 checkers[t] = new Thread(() =>
                 {
                     start.Wait();
-                    using (epoch.Protected())
+                    using (epoch.ProtectedScope())
                     {
                         for (var r = 0; r < Rounds; r++)
                         {
@@ -224,12 +212,10 @@ namespace Tsavorite.test.epoch
             }
 
             start.Set();
-            foreach (var thread in checkers)
-                Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True, "checker did not finish");
+            JoinAll(checkers, SoakTimeout, "checker did not finish");
 
             Volatile.Write(ref stopChurn, true);
-            foreach (var thread in churn)
-                Assert.That(thread.Join(TimeSpan.FromMinutes(1)), Is.True, "churn thread did not finish");
+            JoinAll(churn, SoakTimeout, "churn thread did not finish");
 
             Assert.That(Volatile.Read(ref violations), Is.Zero, "SafeToReclaimEpoch reached an epoch a thread was still announcing");
         }

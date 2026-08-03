@@ -10,30 +10,18 @@ using Tsavorite.core;
 namespace Tsavorite.test.epoch
 {
     /// <summary>
-    /// The drain list: deferred actions attached to an epoch, which must run once the epoch they were
-    /// registered against becomes safe to reclaim, and must not run one moment sooner.
+    /// The drain list: deferred actions that must run once the epoch they were registered against
+    /// becomes safe to reclaim, and not one moment sooner.
     /// </summary>
     [TestFixture]
-    public class DrainTests
+    public class DrainTests : EpochTestBase
     {
-        LightEpoch epoch;
-
-        [SetUp]
-        public void Setup() => epoch = new LightEpoch();
-
-        [TearDown]
-        public void TearDown()
-        {
-            epoch.Dispose();
-            epoch = null;
-        }
-
         [Test]
         public void ActionRunsImmediatelyWhenNobodyElseIsProtected()
         {
             var ran = 0;
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref ran));
                 Assert.That(Volatile.Read(ref ran), Is.EqualTo(1), "with no other thread protected the action's epoch is immediately reclaimable");
@@ -51,7 +39,7 @@ namespace Tsavorite.test.epoch
             var drained = 0;
             using var reader = new ParkedReader(epoch);
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref drained));
             }
@@ -71,7 +59,7 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < capacity; i++)
                 {
@@ -100,7 +88,7 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < capacity; i++)
                 {
@@ -111,7 +99,7 @@ namespace Tsavorite.test.epoch
                 using var registered = new ManualResetEventSlim();
                 var latecomer = new Thread(() =>
                 {
-                    using (epoch.Protected())
+                    using (epoch.ProtectedScope())
                     {
                         epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref extraRan));
                         registered.Set();
@@ -139,7 +127,7 @@ namespace Tsavorite.test.epoch
 
             using var reader = new ParkedReader(epoch);
 
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 for (var i = 0; i < ActionCount; i++)
                 {
@@ -174,7 +162,7 @@ namespace Tsavorite.test.epoch
                     for (var i = 0; i < PerThread; i++)
                     {
                         var index = (threadIndex * PerThread) + i;
-                        using (epoch.Protected())
+                        using (epoch.ProtectedScope())
                         {
                             epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref counts[index]));
                         }
@@ -189,7 +177,7 @@ namespace Tsavorite.test.epoch
                 Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True, "worker did not finish");
 
             // Anything still pending drains on the next quiescent pass.
-            using (epoch.Protected())
+            using (epoch.ProtectedScope())
             {
                 _ = epoch.BumpCurrentEpoch();
                 epoch.ProtectAndDrain();
