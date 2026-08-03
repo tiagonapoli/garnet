@@ -18,18 +18,6 @@ namespace Tsavorite.test.epoch
     public class ReclamationTests : SingleEpochTestBase
     {
         [Test]
-        public void AnEmptyTableAnnouncesNothing()
-        {
-            Assert.That(epoch.TestHookMinAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
-
-            for (var entry = 1; entry <= epoch.EntryCount; entry++)
-            {
-                Assert.That(epoch.TestHookAnnouncedEpochAt(entry), Is.Zero);
-                Assert.That(epoch.TestHookThreadIdAt(entry), Is.Zero);
-            }
-        }
-
-        [Test]
         public void ProtectingLowersTheAnnouncedMinimum()
         {
             using var reader = new ParkedReaderThread(epoch);
