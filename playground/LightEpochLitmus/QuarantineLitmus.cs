@@ -4,6 +4,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Tsavorite.epoch.litmus
@@ -34,6 +35,26 @@ namespace Tsavorite.epoch.litmus
         public override string ToString()
             => $"violations={Violations:N0} sampledRounds={SampledRounds:N0} rounds={Rounds:N0} "
              + $"drains={Drains:N0} quarantined={Quarantines:N0} elapsed={Elapsed.TotalSeconds:F1}s";
+    }
+
+    /// <summary>
+    /// Shared counters for a run. Reader and reclaimer counters get separate cache lines, and
+    /// <see cref="CurPage"/> -- the reclaimer-to-reader channel the reader loads every round --
+    /// gets a third, so no RFO lands on the loop this harness is timing.
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = 3 * Line)]
+    internal struct Counters
+    {
+        const int Line = 128;
+
+        [FieldOffset(0)] internal long ObservedPages;
+        [FieldOffset(8)] internal long Sink;
+        [FieldOffset(16)] internal long Violations;
+
+        [FieldOffset(Line)] internal long CurPage;
+
+        [FieldOffset(2 * Line)] internal long Drains;
+        [FieldOffset((2 * Line) + 8)] internal long Quarantines;
     }
 
     /// <summary>
@@ -68,24 +89,17 @@ namespace Tsavorite.epoch.litmus
         private readonly Action[] drainCallbacks = new Action[PoolPages];
 
         private byte* pool;
-        private byte* counters;
-
-        // Reader and reclaimer counters get separate lines, and curPage -- the reclaimer-to-reader
-        // channel the reader loads every round -- gets a third, so no RFO lands on the loop this
-        // harness is timing.
-        const nuint CounterLine = 128;
+        private Counters* counters;
 
         // One extra page for the counters, page-aligned and outside every page the reclaimer poisons.
         const nuint MappedBytes = (PageSize * PoolPages) + PageSize;
 
-        private ref long ObservedPages => ref *(long*)counters;
-        private ref long Sink => ref *(long*)(counters + 8);
-        private ref long Violations => ref *(long*)(counters + 16);
-
-        private ref long CurPage => ref *(long*)(counters + CounterLine);
-
-        private ref long Drains => ref *(long*)(counters + (2 * CounterLine));
-        private ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
+        private ref long ObservedPages => ref counters->ObservedPages;
+        private ref long Sink => ref counters->Sink;
+        private ref long Violations => ref counters->Violations;
+        private ref long CurPage => ref counters->CurPage;
+        private ref long Drains => ref counters->Drains;
+        private ref long Quarantines => ref counters->Quarantines;
 
         internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, CoreLayout cores, bool selfTest = false)
         {
@@ -99,7 +113,7 @@ namespace Tsavorite.epoch.litmus
         internal QuarantineLitmusResult Run()
         {
             pool = Platform.MapPage(MappedBytes);
-            counters = pool + (PageSize * PoolPages);
+            counters = (Counters*)(pool + (PageSize * PoolPages));
             try
             {
                 for (var slot = 0; slot < PoolPages; slot++)
