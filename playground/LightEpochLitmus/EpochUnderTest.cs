@@ -9,10 +9,9 @@ namespace Tsavorite.epoch.litmus
 {
     /// <summary>
     /// The slice of the epoch API the litmus drives, so the same harness can be pointed at the
-    /// fixed <see cref="LightEpoch"/> or at <see cref="BuggyLightEpoch"/>.
-    ///
-    /// Implementations are structs and the harness is generic over them so the calls stay direct:
-    /// an interface indirection in the reader loop could hide the reordering being hunted.
+    /// fixed <see cref="LightEpoch"/> or at <see cref="BuggyLightEpoch"/>. Implementations are
+    /// structs and the harness is generic over them so the calls stay direct: an interface
+    /// indirection in the reader loop could hide the reordering being hunted.
     /// </summary>
     internal interface IEpochUnderTest : IDisposable
     {

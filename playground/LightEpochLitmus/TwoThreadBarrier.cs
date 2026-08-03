@@ -7,11 +7,10 @@ using System.Threading;
 namespace Tsavorite.epoch.litmus
 {
     /// <summary>
-    /// Two-thread lockstep barrier for the litmus harnesses, plus the shared shutdown protocol.
-    ///
-    /// The reclaimer owns the deadline and runs one extra barrier pass with <see cref="Stop"/> set.
-    /// That alone can still strand it, because the reader may observe Stop on its way out and never
-    /// enter that pass; <see cref="Depart"/> covers it by releasing whoever is left waiting.
+    /// Two-thread lockstep barrier, plus the shutdown protocol. The reclaimer owns the deadline and
+    /// runs one extra pass with <see cref="Stop"/> set; that alone can strand it, because the reader
+    /// may observe Stop on its way out and never enter that pass, so <see cref="Depart"/> releases
+    /// whoever is left waiting.
     /// </summary>
     internal sealed class TwoThreadBarrier
     {
@@ -24,10 +23,7 @@ namespace Tsavorite.epoch.litmus
 
         internal bool Stop => stop;
 
-        /// <summary>
-        /// Announce that this thread is leaving the barrier for good, releasing a partner
-        /// that is -- or later ends up -- waiting for it.
-        /// </summary>
+        /// <summary>Leave the barrier for good, releasing a partner that is -- or later ends up -- waiting for it.</summary>
         internal void Depart() => abandoned = true;
 
         /// <summary>Release the reader and let it observe <see cref="Stop"/> on its next pass.</summary>

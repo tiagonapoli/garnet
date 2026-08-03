@@ -38,9 +38,8 @@ namespace Tsavorite.epoch.litmus
     }
 
     /// <summary>
-    /// Shared counters for a run. Reader and reclaimer counters get separate cache lines, and
-    /// <see cref="CurPage"/> -- the reclaimer-to-reader channel the reader loads every round --
-    /// gets a third, so no RFO lands on the loop this harness is timing.
+    /// Shared counters. Reader and reclaimer counters get separate cache lines, and
+    /// <see cref="CurPage"/> -- which the reader loads every round -- gets a third.
     /// </summary>
     [StructLayout(LayoutKind.Explicit, Size = 3 * Line)]
     internal struct Counters
@@ -83,9 +82,8 @@ namespace Tsavorite.epoch.litmus
         private readonly CoreLayout cores;
         private readonly bool selfTest;
 
-        // One cached delegate per pool slot. BumpCurrentEpoch defers the callback until the retired
-        // epoch is safe, so it must stay bound to the page that was retired; building them once
-        // keeps that binding without allocating in the race loop.
+        // BumpCurrentEpoch defers the callback, so it must stay bound to the page that was retired.
+        // Building them once keeps that binding without allocating in the race loop.
         private readonly Action[] drainCallbacks = new Action[PoolPages];
 
         private byte* pool;
@@ -126,9 +124,9 @@ namespace Tsavorite.epoch.litmus
                 reader.Start();
 
                 // Disturbers only read the epoch table, so they cannot influence any epoch decision.
-                // They keep its cache lines shared rather than exclusively owned, so an announce
-                // must first win an RFO -- and since x86 store buffers commit in order, that pins
-                // the announce in the buffer long enough for a missing StoreLoad fence to show.
+                // They keep its cache lines shared, so an announce must first win an RFO -- and
+                // since x86 store buffers commit in order, that pins the announce in the buffer
+                // long enough for a missing StoreLoad fence to show.
                 var disturbers = new Thread[cores.DisturberCores.Length];
                 for (var i = 0; i < disturbers.Length; i++)
                 {
@@ -188,13 +186,12 @@ namespace Tsavorite.epoch.litmus
 
                 // Nothing may sit between the barrier and Resume(). The window is a few instructions
                 // wide, and arriving late drains the announce out of the store buffer before the
-                // reclaimer scans, so no run length produces a violation -- a single extra volatile
-                // load here was measured to be the difference between catching the unfixed epoch
-                // and catching nothing. Hence the shutdown check lives after WaitAtEnd.
+                // reclaimer scans -- a single extra volatile load here was measured to be the
+                // difference between catching the unfixed epoch and catching nothing. Hence the
+                // shutdown check lives after WaitAtEnd.
                 //
-                // Resume-then-Refresh mirrors a normal Tsavorite BasicContext operation:
-                // ClientSession.UnsafeResumeThread calls Resume and then InternalRefresh, which
-                // begins with ProtectAndDrain.
+                // Resume-then-ProtectAndDrain mirrors ClientSession.UnsafeResumeThread, which calls
+                // Resume and then InternalRefresh.
                 epoch.Resume();
                 epoch.ProtectAndDrain();
 
@@ -240,8 +237,7 @@ namespace Tsavorite.epoch.litmus
 
         /// <summary>
         /// BumpCurrentEpoch asserts ThisInstanceProtected(), so the retiring thread holds and
-        /// refreshes an epoch every round, the way Tsavorite drives it in production. Retiring
-        /// unprotected would widen the race window past anything real code can produce.
+        /// refreshes an epoch every round, the way Tsavorite drives it in production.
         /// </summary>
         long ReclaimerLoop()
         {
@@ -261,8 +257,7 @@ namespace Tsavorite.epoch.litmus
 
                 CurPage = 0;
 
-                // Self-test: poison unconditionally, as if the epoch had wrongly cleared the page
-                // every round, proving the detection path can fire on this machine.
+                // Poison unconditionally, as if the epoch had wrongly cleared the page every round.
                 if (selfTest)
                     Quarantine((long)page);
 
@@ -278,10 +273,7 @@ namespace Tsavorite.epoch.litmus
             return round;
         }
 
-        /// <summary>
-        /// Stands in for the unmap: the epoch says this page is recyclable, so stamping it destroys
-        /// any value a still-protected reader could legitimately see.
-        /// </summary>
+        /// <summary>Stands in for the unmap: stamping the page destroys any value a still-protected reader could legitimately see.</summary>
         void Quarantine(long page)
         {
             _ = Interlocked.Increment(ref Quarantines);

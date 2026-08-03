@@ -53,7 +53,7 @@ namespace Tsavorite.epoch.litmus
             }
 
             // The epoch under test is a generic type argument rather than an interface reference so
-            // the harness JITs down to direct calls; picking it here keeps that choice in one place.
+            // the harness JITs down to direct calls.
             QuarantineLitmusResult Run(int seconds, bool selfTest) => options.Buggy
                 ? new QuarantineLitmus<BuggyEpoch>(new BuggyEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run()
                 : new QuarantineLitmus<FixedEpoch>(new FixedEpoch(), TimeSpan.FromSeconds(seconds), options.Deref, cores, selfTest).Run();

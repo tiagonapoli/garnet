@@ -9,6 +9,7 @@ namespace Tsavorite.epoch.litmus
     /// <summary>Which cores the harness pins its threads to.</summary>
     internal readonly struct CoreLayout
     {
+        /// <summary>Disturbers only keep other epoch slots occupied, so more of them just adds scheduler noise.</summary>
         const int MaxDisturbers = 6;
 
         internal int ReclaimerCore { get; init; }
@@ -17,11 +18,8 @@ namespace Tsavorite.epoch.litmus
 
         /// <summary>
         /// Reclaimer on processor 0, reader on 2, disturbers on 4, 6, 8 and so on. Stepping by two
-        /// gives each thread its own physical core on an SMT machine, where two sibling threads
-        /// share a store buffer and would mask the reordering this harness is looking for.
-        /// Disturbers only exist to keep other epoch slots occupied, so they are capped -- more of
-        /// them buys nothing and adds scheduler noise. False if there are too few processors to
-        /// lay the threads out this way.
+        /// gives each thread its own physical core on an SMT machine, where sibling threads share a
+        /// store buffer and would mask the reordering. False if there are too few processors.
         /// </summary>
         internal static bool TrySelect(out CoreLayout cores)
         {

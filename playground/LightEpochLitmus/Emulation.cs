@@ -9,10 +9,9 @@ using System.Runtime.InteropServices;
 namespace Tsavorite.epoch.litmus
 {
     /// <summary>
-    /// Best-effort detection of running under an emulator, which would make a clean run
-    /// meaningless: an emulator interleaves guest instructions on the host's memory model, so
-    /// the reorderings this harness exists to catch cannot occur. Detection is one-sided -- a
-    /// positive is reliable, a negative is not a guarantee of native execution.
+    /// Best-effort detection of running under an emulator, which interleaves guest instructions on
+    /// the host's memory model, so the reorderings this harness hunts cannot occur. One-sided: a
+    /// positive is reliable, a negative is not.
     /// </summary>
     internal static class Emulation
     {
@@ -32,9 +31,8 @@ namespace Tsavorite.epoch.litmus
             if (!OperatingSystem.IsLinux())
                 return default;
 
-            // qemu-user maps its own binary into the guest process, so it shows up in the address
-            // space even though uname, /proc/cpuinfo and the process architecture all report the
-            // emulated target faithfully.
+            // qemu-user maps its own binary into the guest process, even though uname, /proc/cpuinfo
+            // and the process architecture all report the emulated target faithfully.
             if (TryReadFile("/proc/self/maps", out var maps) && maps.Contains("qemu", StringComparison.OrdinalIgnoreCase))
                 return Emulated("qemu is mapped into this process (/proc/self/maps)");
 
@@ -47,12 +45,9 @@ namespace Tsavorite.epoch.litmus
             if (cpuinfo.Contains("QEMU", StringComparison.Ordinal))
                 return Emulated("/proc/cpuinfo reports a QEMU CPU");
 
-            // The check that actually catches `docker run --platform linux/arm64` on an x86 host.
-            // qemu-user there reports aarch64 through uname, the process architecture and the
-            // cpuinfo feature list, and keeps itself out of /proc/self/maps, so the only thing
-            // left that gives it away is the MIDR: every real implementer is registered and
-            // non-zero (0x41 ARM, 0x50 Ampere, 0x51 Qualcomm, 0x61 Apple), while TCG synthesises
-            // an all-zero one.
+            // The check that catches `docker run --platform linux/arm64` on an x86 host, where
+            // qemu-user gives itself away nowhere else: every real implementer is registered and
+            // non-zero (0x41 ARM, 0x50 Ampere, 0x51 Qualcomm, 0x61 Apple), TCG synthesises 0x00.
             if (TryGetCpuImplementer(cpuinfo, out var implementer) && implementer == 0)
                 return Emulated("/proc/cpuinfo reports CPU implementer 0x00, which no real part uses");
 

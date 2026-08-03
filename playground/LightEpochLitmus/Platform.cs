@@ -7,10 +7,7 @@ using System.Runtime.InteropServices;
 
 namespace Tsavorite.epoch.litmus
 {
-    /// <summary>
-    /// The two OS primitives the litmus tests need: whole-page allocation that can be truly
-    /// unmapped (so a later access faults), and best-effort thread-to-core pinning.
-    /// </summary>
+    /// <summary>Page allocation and best-effort thread-to-core pinning.</summary>
     internal static unsafe class Platform
     {
         const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000, PAGE_RW = 0x04;
@@ -31,11 +28,7 @@ namespace Tsavorite.epoch.litmus
         /// <summary>Whether page unmapping and core pinning are available on this platform.</summary>
         internal static bool IsSupported => OperatingSystem.IsWindows() || OperatingSystem.IsLinux();
 
-        /// <summary>
-        /// Allocate a standalone reservation, committed and readable/writable. <see cref="Unmap"/>
-        /// needs the base address of a whole VirtualAlloc reservation on Windows, so each page
-        /// must come from its own call.
-        /// </summary>
+        /// <summary>Allocate a page-aligned region, committed and readable/writable.</summary>
         internal static byte* MapPage(nuint bytes)
         {
             if (OperatingSystem.IsWindows())
@@ -53,14 +46,12 @@ namespace Tsavorite.epoch.litmus
             return (byte*)mapped;
         }
 
-        /// <summary>Fully unmap the region; any subsequent access to it faults.</summary>
+        /// <summary>Release the region.</summary>
         internal static void Unmap(byte* p, nuint bytes)
         {
             if (OperatingSystem.IsWindows())
             {
-                // MEM_RELEASE requires dwSize 0 and drops the whole reservation. If a later
-                // VirtualAlloc reuses the range the access silently succeeds, which can only hide
-                // a violation, never manufacture one.
+                // MEM_RELEASE requires dwSize 0 and drops the whole reservation.
                 if (!VirtualFree((IntPtr)p, 0, MEM_RELEASE))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "VirtualFree failed.");
 
@@ -74,7 +65,7 @@ namespace Tsavorite.epoch.litmus
         /// <summary>
         /// Pin the calling thread to <paramref name="core"/>. Best effort: containers and CI agents
         /// often restrict affinity, and a failure only adds jitter rather than invalidating a
-        /// violation. Every failure path reports why on stderr.
+        /// violation.
         /// </summary>
         internal static bool TryPin(int core)
         {
