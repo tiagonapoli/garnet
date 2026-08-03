@@ -11,7 +11,7 @@ namespace Tsavorite.epoch.litmus
     /// The two OS primitives the litmus tests need: whole-page allocation that can be truly
     /// unmapped (so a later access faults), and best-effort thread-to-core pinning.
     /// </summary>
-    internal static unsafe class LitmusNative
+    internal static unsafe class Platform
     {
         const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000, PAGE_RW = 0x04;
         [DllImport("kernel32", SetLastError = true)] static extern IntPtr VirtualAlloc(IntPtr a, nuint s, uint t, uint p);

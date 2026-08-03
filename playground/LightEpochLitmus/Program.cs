@@ -29,13 +29,13 @@ namespace Tsavorite.epoch.litmus
                 return parseError is null ? ExitPass : ExitUsage;
             }
 
-            if (!LitmusNative.IsSupported)
+            if (!Platform.IsSupported)
             {
                 Console.Error.WriteLine($"unsupported: the harness needs Windows or Linux for page allocation and core pinning; this is {RuntimeInformation.OSDescription}");
                 return ExitUnsupported;
             }
 
-            if (!LitmusCores.TrySelect(out var cores))
+            if (!CoreLayout.TrySelect(out var cores))
             {
                 Console.Error.WriteLine($"unsupported: the harness needs at least 4 logical processors to separate the reader from the reclaimer; this machine has {Environment.ProcessorCount}");
                 return ExitUnsupported;
@@ -139,7 +139,7 @@ namespace Tsavorite.epoch.litmus
             return exitCode;
         }
 
-        static void WriteHeader(Options options, LitmusCores cores, Emulation.Result emulated)
+        static void WriteHeader(Options options, CoreLayout cores, Emulation.Result emulated)
         {
             Console.WriteLine($"LightEpochLitmus  {RuntimeInformation.FrameworkDescription}");
             Console.WriteLine($"  os        {RuntimeInformation.OSDescription}");

@@ -14,7 +14,7 @@ namespace Tsavorite.epoch.litmus
     /// Implementations are structs and the harness is generic over them so the calls stay direct:
     /// an interface indirection in the reader loop could hide the reordering being hunted.
     /// </summary>
-    internal interface ILitmusEpoch : IDisposable
+    internal interface IEpochUnderTest : IDisposable
     {
         int EntryCount { get; }
         long TestHookAnnouncedEpochAt(int entry);
@@ -25,7 +25,7 @@ namespace Tsavorite.epoch.litmus
     }
 
     /// <summary>The epoch as this branch ships it: the slot claim CAS announces the epoch.</summary>
-    internal readonly struct FixedEpoch : ILitmusEpoch
+    internal readonly struct FixedEpoch : IEpochUnderTest
     {
         readonly LightEpoch epoch = new();
 
@@ -54,7 +54,7 @@ namespace Tsavorite.epoch.litmus
     }
 
     /// <summary>The epoch as it stands on main: the announce is a plain store behind the claim CAS.</summary>
-    internal readonly struct BuggyEpoch : ILitmusEpoch
+    internal readonly struct BuggyEpoch : IEpochUnderTest
     {
         readonly BuggyLightEpoch epoch = new();
 

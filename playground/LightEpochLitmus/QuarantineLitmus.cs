@@ -23,7 +23,7 @@ namespace Tsavorite.epoch.litmus
         /// <summary>Rounds the reclaimer completed.</summary>
         internal long Rounds { get; init; }
 
-        /// <summary>Pages retired via <see cref="ILitmusEpoch.BumpCurrentEpoch(Action)"/>.</summary>
+        /// <summary>Pages retired via <see cref="IEpochUnderTest.BumpCurrentEpoch(Action)"/>.</summary>
         internal long Drains { get; init; }
 
         /// <summary>Pages the epoch actually decided were safe to recycle.</summary>
@@ -51,7 +51,7 @@ namespace Tsavorite.epoch.litmus
     /// IPI, and taking an interrupt drains the interrupted core's store buffer, fencing the reader
     /// on every round. Pages and drain callbacks are pre-allocated so no round allocates.
     /// </summary>
-    internal sealed unsafe class QuarantineLitmus<TEpoch> where TEpoch : struct, ILitmusEpoch
+    internal sealed unsafe class QuarantineLitmus<TEpoch> where TEpoch : struct, IEpochUnderTest
     {
         const nuint PageSize = 4096;
         const int PoolPages = 1024;
@@ -59,10 +59,10 @@ namespace Tsavorite.epoch.litmus
         const long Poison = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
 
         readonly TEpoch epoch;
-        readonly LitmusRendezvous rendezvous = new();
+        readonly Rendezvous rendezvous = new();
         readonly TimeSpan duration;
         readonly int deref;
-        readonly LitmusCores cores;
+        readonly CoreLayout cores;
         readonly bool selfTest;
 
         // One cached delegate per pool slot. BumpCurrentEpoch defers the callback until the retired
@@ -90,7 +90,7 @@ namespace Tsavorite.epoch.litmus
         ref long Drains => ref *(long*)(counters + (2 * CounterLine));
         ref long Quarantines => ref *(long*)(counters + (2 * CounterLine) + 8);
 
-        internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, LitmusCores cores, bool selfTest = false)
+        internal QuarantineLitmus(TEpoch epoch, TimeSpan duration, int deref, CoreLayout cores, bool selfTest = false)
         {
             this.epoch = epoch;
             this.duration = duration;
@@ -101,7 +101,7 @@ namespace Tsavorite.epoch.litmus
 
         internal QuarantineLitmusResult Run()
         {
-            pool = LitmusNative.MapPage(MappedBytes);
+            pool = Platform.MapPage(MappedBytes);
             counters = pool + (PageSize * PoolPages);
             try
             {
@@ -126,7 +126,7 @@ namespace Tsavorite.epoch.litmus
                     disturbers[i].Start();
                 }
 
-                _ = LitmusNative.TryPin(cores.ReclaimerCore);
+                _ = Platform.TryPin(cores.ReclaimerCore);
 
                 var stopwatch = Stopwatch.StartNew();
                 var rounds = ReclaimerLoop();
@@ -148,14 +148,14 @@ namespace Tsavorite.epoch.litmus
             }
             finally
             {
-                LitmusNative.Unmap(pool, MappedBytes);
+                Platform.Unmap(pool, MappedBytes);
                 epoch.Dispose();
             }
         }
 
         void DisturberLoop(int core)
         {
-            _ = LitmusNative.TryPin(core);
+            _ = Platform.TryPin(core);
 
             long local = 0;
             while (!rendezvous.Stop)
@@ -169,7 +169,7 @@ namespace Tsavorite.epoch.litmus
 
         void ReaderLoop()
         {
-            _ = LitmusNative.TryPin(cores.ReaderCore);
+            _ = Platform.TryPin(cores.ReaderCore);
 
             while (true)
             {
