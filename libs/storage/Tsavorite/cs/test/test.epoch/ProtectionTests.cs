@@ -18,8 +18,8 @@ namespace Tsavorite.test.epoch
         public void UnprotectedThreadHoldsNoSlot()
         {
             Assert.That(epoch.ThisInstanceProtected(), Is.False);
-            Assert.That(epoch.ThisThreadEntry(), Is.Zero);
-            Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Zero);
+            Assert.That(epoch.TestHookThisThreadEntry(), Is.Zero);
+            Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Zero);
             Assert.That(epoch.TrySuspend(), Is.False);
         }
 
@@ -28,10 +28,10 @@ namespace Tsavorite.test.epoch
         {
             using (epoch.ProtectedScope())
             {
-                var entry = epoch.ThisThreadEntry();
+                var entry = epoch.TestHookThisThreadEntry();
                 Assert.That(entry, Is.GreaterThan(0));
                 Assert.That(entry, Is.LessThanOrEqualTo(epoch.EntryCount));
-                Assert.That(epoch.ThreadIdAt(entry), Is.EqualTo(Environment.CurrentManagedThreadId));
+                Assert.That(epoch.TestHookThreadIdAt(entry), Is.EqualTo(Environment.CurrentManagedThreadId));
             }
         }
 
@@ -39,12 +39,12 @@ namespace Tsavorite.test.epoch
         public void SuspendLeavesTheSlotCompletelyFree()
         {
             epoch.Resume();
-            var entry = epoch.ThisThreadEntry();
+            var entry = epoch.TestHookThisThreadEntry();
             epoch.Suspend();
 
-            Assert.That(epoch.AnnouncedEpochAt(entry), Is.Zero, "the announced epoch was left behind");
-            Assert.That(epoch.ThreadIdAt(entry), Is.Zero, "the thread id was left behind");
-            Assert.That(epoch.ThisThreadEntry(), Is.Zero);
+            Assert.That(epoch.TestHookAnnouncedEpochAt(entry), Is.Zero, "the announced epoch was left behind");
+            Assert.That(epoch.TestHookThreadIdAt(entry), Is.Zero, "the thread id was left behind");
+            Assert.That(epoch.TestHookThisThreadEntry(), Is.Zero);
         }
 
         /// <summary>
@@ -60,11 +60,11 @@ namespace Tsavorite.test.epoch
             {
                 using (epoch.ProtectedScope())
                 {
-                    Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
+                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     _ = epoch.BumpCurrentEpoch();
-                    Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
+                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     epoch.ProtectAndDrain();
-                    Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.Not.Zero);
+                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
                     Assert.That(epoch.CurrentEpoch, Is.GreaterThan(0));
                 }
             }
@@ -78,8 +78,8 @@ namespace Tsavorite.test.epoch
                 epoch.SuspendResume();
 
                 Assert.That(epoch.ThisInstanceProtected(), Is.True);
-                Assert.That(epoch.ThisThreadEntry(), Is.GreaterThan(0));
-                Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+                Assert.That(epoch.TestHookThisThreadEntry(), Is.GreaterThan(0));
+                Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
             }
         }
 
@@ -92,7 +92,7 @@ namespace Tsavorite.test.epoch
                 {
                     _ = epoch.BumpCurrentEpoch();
                     epoch.ProtectAndDrain();
-                    Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
                 }
             }
         }
@@ -151,10 +151,10 @@ namespace Tsavorite.test.epoch
 
             using (epoch.ProtectedScope())
             {
-                Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+                Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
             }
 
-            Assert.That(epoch.ThisThreadAnnouncedEpoch(), Is.EqualTo(0));
+            Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(0));
         }
 
         void Bump()

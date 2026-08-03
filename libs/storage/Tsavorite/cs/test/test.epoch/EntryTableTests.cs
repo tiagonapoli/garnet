@@ -39,7 +39,7 @@ namespace Tsavorite.test.epoch
                 threads[t] = new Thread(() =>
                 {
                     epoch.Resume();
-                    entries[index] = epoch.ThisThreadEntry();
+                    entries[index] = epoch.TestHookThisThreadEntry();
                     _ = allIn.Signal();
                     release.Wait();
                     epoch.Suspend();
@@ -58,7 +58,7 @@ namespace Tsavorite.test.epoch
             JoinAll(threads);
 
             for (var entry = 1; entry <= epoch.EntryCount; entry++)
-                Assert.That(epoch.AnnouncedEpochAt(entry), Is.Zero, $"slot {entry} was left announced");
+                Assert.That(epoch.TestHookAnnouncedEpochAt(entry), Is.Zero, $"slot {entry} was left announced");
         }
 
         /// <summary>
@@ -105,8 +105,8 @@ namespace Tsavorite.test.epoch
 
                 Assert.That(acquired.Wait(SettleDelay), Is.False, "a thread acquired a slot from a completely full table");
 
-                _ = SpinWait.SpinUntil(() => epoch.WaiterCount > 0, Timeout);
-                Assert.That(epoch.WaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
+                _ = SpinWait.SpinUntil(() => epoch.TestHookWaiterCount > 0, Timeout);
+                Assert.That(epoch.TestHookWaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
 
                 releaseFirst.Set();
 
@@ -120,7 +120,7 @@ namespace Tsavorite.test.epoch
                 TryJoinAll(holders);
             }
 
-            Assert.That(epoch.WaiterCount, Is.Zero);
+            Assert.That(epoch.TestHookWaiterCount, Is.Zero);
         }
 
         /// <summary>
@@ -170,8 +170,8 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 waiter.Start();
 
-                _ = SpinWait.SpinUntil(() => disposable.WaiterCount > 0, Timeout);
-                Assert.That(disposable.WaiterCount, Is.GreaterThan(0), "the thread never parked");
+                _ = SpinWait.SpinUntil(() => disposable.TestHookWaiterCount > 0, Timeout);
+                Assert.That(disposable.TestHookWaiterCount, Is.GreaterThan(0), "the thread never parked");
 
                 disposable.Dispose();
 
@@ -195,7 +195,7 @@ namespace Tsavorite.test.epoch
                 var t = new Thread(() =>
                 {
                     epoch.Resume();
-                    entry = epoch.ThisThreadEntry();
+                    entry = epoch.TestHookThisThreadEntry();
                     epoch.Suspend();
                 })
                 { IsBackground = true };
@@ -211,7 +211,7 @@ namespace Tsavorite.test.epoch
             Assert.That(seen.Count, Is.LessThan(64), "no epoch table slot was ever reused");
 
             for (var i = 1; i <= epoch.EntryCount; i++)
-                Assert.That(epoch.AnnouncedEpochAt(i), Is.Zero, $"slot {i} left announced");
+                Assert.That(epoch.TestHookAnnouncedEpochAt(i), Is.Zero, $"slot {i} left announced");
         }
 
         /// <summary>
@@ -238,9 +238,9 @@ namespace Tsavorite.test.epoch
                     {
                         epoch.Resume();
 
-                        if (epoch.ThreadIdAt(epoch.ThisThreadEntry()) != myId)
+                        if (epoch.TestHookThreadIdAt(epoch.TestHookThisThreadEntry()) != myId)
                             _ = Interlocked.Increment(ref conflicts);
-                        if (epoch.ThisThreadAnnouncedEpoch() == 0)
+                        if (epoch.TestHookThisThreadAnnouncedEpoch() == 0)
                             _ = Interlocked.Increment(ref conflicts);
 
                         epoch.ProtectAndDrain();

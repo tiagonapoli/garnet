@@ -20,12 +20,12 @@ namespace Tsavorite.test.epoch
         [Test]
         public void AnEmptyTableAnnouncesNothing()
         {
-            Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+            Assert.That(epoch.TestHookMinAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
 
             for (var entry = 1; entry <= epoch.EntryCount; entry++)
             {
-                Assert.That(epoch.AnnouncedEpochAt(entry), Is.Zero);
-                Assert.That(epoch.ThreadIdAt(entry), Is.Zero);
+                Assert.That(epoch.TestHookAnnouncedEpochAt(entry), Is.Zero);
+                Assert.That(epoch.TestHookThreadIdAt(entry), Is.Zero);
             }
         }
 
@@ -33,7 +33,7 @@ namespace Tsavorite.test.epoch
         public void ProtectingLowersTheAnnouncedMinimum()
         {
             using var reader = new ParkedReaderThread(epoch);
-            Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch));
+            Assert.That(epoch.TestHookMinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch));
 
             using (epoch.ProtectedScope())
             {
@@ -41,7 +41,7 @@ namespace Tsavorite.test.epoch
                     _ = epoch.BumpCurrentEpoch();
 
                 Assert.That(epoch.CurrentEpoch, Is.GreaterThan(reader.AnnouncedEpoch));
-                Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch), "the parked reader is the oldest announcement and must define the minimum");
+                Assert.That(epoch.TestHookMinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch), "the parked reader is the oldest announcement and must define the minimum");
             }
         }
 
@@ -62,7 +62,7 @@ namespace Tsavorite.test.epoch
                     epoch.ProtectAndDrain();
 
                     Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(reader.AnnouncedEpoch), "an epoch that a live reader had announced was declared safe to reclaim");
-                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(epoch.MinAnnouncedEpoch()), "SafeToReclaimEpoch overtook the oldest announcement in the table");
+                    Assert.That(epoch.SafeToReclaimEpoch, Is.LessThan(epoch.TestHookMinAnnouncedEpoch()), "SafeToReclaimEpoch overtook the oldest announcement in the table");
                 }
             }
 
@@ -82,7 +82,7 @@ namespace Tsavorite.test.epoch
             long announced;
             try
             {
-                announced = epoch.ThisThreadAnnouncedEpoch();
+                announced = epoch.TestHookThisThreadAnnouncedEpoch();
                 _ = epoch.BumpCurrentEpoch();
             }
             finally
@@ -122,7 +122,7 @@ namespace Tsavorite.test.epoch
                 for (var i = 1; i < ReaderCount; i++)
                     Assert.That(readers[i].AnnouncedEpoch, Is.GreaterThan(oldest));
 
-                Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(oldest));
+                Assert.That(epoch.TestHookMinAnnouncedEpoch(), Is.EqualTo(oldest));
 
                 using (epoch.ProtectedScope())
                 {
@@ -184,7 +184,7 @@ namespace Tsavorite.test.epoch
                             else
                                 epoch.ProtectAndDrain();
 
-                            var announced = epoch.ThisThreadAnnouncedEpoch();
+                            var announced = epoch.TestHookThisThreadAnnouncedEpoch();
                             if (Volatile.Read(ref epoch.SafeToReclaimEpoch) >= announced)
                                 _ = Interlocked.Increment(ref violations);
                         }

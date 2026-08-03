@@ -45,7 +45,7 @@ namespace Tsavorite.test.epoch
                     _ = first.BumpCurrentEpoch();
 
                 Assert.That(second.CurrentEpoch, Is.EqualTo(secondEpoch), "bumping one instance advanced another");
-                Assert.That(second.MinAnnouncedEpoch(), Is.EqualTo(secondEpoch));
+                Assert.That(second.TestHookMinAnnouncedEpoch(), Is.EqualTo(secondEpoch));
             }
         }
 
@@ -97,7 +97,7 @@ namespace Tsavorite.test.epoch
                 InvalidOperationException caught = null;
                 try
                 {
-                    while (created.Count <= LightEpoch.MaxInstanceCount)
+                    while (created.Count <= LightEpoch.TestHookMaxInstanceCount)
                         created.Add(new LightEpoch());
                 }
                 catch (InvalidOperationException e)
@@ -105,8 +105,8 @@ namespace Tsavorite.test.epoch
                     caught = e;
                 }
 
-                Assert.That(caught, Is.Not.Null, "creating more than MaxInstanceCount instances must throw");
-                Assert.That(LightEpoch.ActiveInstanceCount(), Is.EqualTo(LightEpoch.MaxInstanceCount));
+                Assert.That(caught, Is.Not.Null, "creating more than TestHookMaxInstanceCount instances must throw");
+                Assert.That(LightEpoch.ActiveInstanceCount(), Is.EqualTo(LightEpoch.TestHookMaxInstanceCount));
             }
             finally
             {

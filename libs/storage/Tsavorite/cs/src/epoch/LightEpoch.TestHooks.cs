@@ -12,12 +12,12 @@ namespace Tsavorite.core
         /// <summary>
         /// The epoch table index this thread currently holds for this instance, or 0 if unprotected.
         /// </summary>
-        internal int ThisThreadEntry() => Metadata.Entries.GetRef(instanceId);
+        internal int TestHookThisThreadEntry() => Metadata.Entries.GetRef(instanceId);
 
         /// <summary>
         /// The epoch this thread currently announces for this instance, or 0 if unprotected.
         /// </summary>
-        internal long ThisThreadAnnouncedEpoch()
+        internal long TestHookThisThreadAnnouncedEpoch()
         {
             var entry = Metadata.Entries.GetRef(instanceId);
             return entry == kInvalidIndex ? 0 : EntryAt(entry).localCurrentEpoch;
@@ -26,18 +26,18 @@ namespace Tsavorite.core
         /// <summary>
         /// The epoch announced in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// </summary>
-        internal long AnnouncedEpochAt(int entry) => EntryAt(entry).localCurrentEpoch;
+        internal long TestHookAnnouncedEpochAt(int entry) => EntryAt(entry).localCurrentEpoch;
 
         /// <summary>
         /// The thread id recorded in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// </summary>
-        internal int ThreadIdAt(int entry) => EntryAt(entry).threadId;
+        internal int TestHookThreadIdAt(int entry) => EntryAt(entry).threadId;
 
         /// <summary>
         /// Smallest epoch announced by any slot, or <see cref="CurrentEpoch"/> if none is protected.
         /// <see cref="SafeToReclaimEpoch"/> must always stay strictly below this.
         /// </summary>
-        internal long MinAnnouncedEpoch()
+        internal long TestHookMinAnnouncedEpoch()
         {
             var min = CurrentEpoch;
             for (var index = 1; index <= kTableSize; index++)
@@ -53,16 +53,16 @@ namespace Tsavorite.core
         /// <summary>
         /// Number of threads parked waiting for a table slot.
         /// </summary>
-        internal int WaiterCount => waiterCount & ~kDisposedFlag;
+        internal int TestHookWaiterCount => waiterCount & ~kDisposedFlag;
 
         /// <summary>
         /// Capacity of the drain list.
         /// </summary>
-        internal static int DrainListCapacity => kDrainListSize;
+        internal static int TestHookDrainListCapacity => kDrainListSize;
 
         /// <summary>
         /// Maximum number of concurrent <see cref="LightEpoch"/> instances.
         /// </summary>
-        internal static int MaxInstanceCount => InstanceIndexBuffer.MaxInstances;
+        internal static int TestHookMaxInstanceCount => InstanceIndexBuffer.MaxInstances;
     }
 }

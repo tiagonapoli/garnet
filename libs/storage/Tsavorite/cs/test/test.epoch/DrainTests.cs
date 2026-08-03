@@ -55,7 +55,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void EveryActionRunsExactlyOnceWhenTheDrainListFills()
         {
-            var capacity = LightEpoch.DrainListCapacity;
+            var capacity = LightEpoch.TestHookDrainListCapacity;
             var counts = new int[capacity];
 
             using var reader = new ParkedReaderThread(epoch);
@@ -83,7 +83,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void RegisteringBlocksWhileTheDrainListIsFullAndCompletesAfterwards()
         {
-            var capacity = LightEpoch.DrainListCapacity;
+            var capacity = LightEpoch.TestHookDrainListCapacity;
             var counts = new int[capacity];
             var extraRan = 0;
 

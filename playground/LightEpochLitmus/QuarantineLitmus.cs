@@ -169,7 +169,7 @@ namespace Tsavorite.epoch.litmus
             while (!rendezvous.Stop)
             {
                 for (var i = 1; i <= epoch.EntryCount; i++)
-                    local += epoch.AnnouncedEpochAt(i);
+                    local += epoch.TestHookAnnouncedEpochAt(i);
             }
 
             _ = Interlocked.Add(ref Sink, local);

@@ -19,7 +19,7 @@ namespace Tsavorite.epoch.litmus
     internal interface ILitmusEpoch : IDisposable
     {
         int EntryCount { get; }
-        long AnnouncedEpochAt(int entry);
+        long TestHookAnnouncedEpochAt(int entry);
         void Resume();
         void Suspend();
         void ProtectAndDrain();
@@ -36,7 +36,7 @@ namespace Tsavorite.epoch.litmus
         public int EntryCount { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => epoch.EntryCount; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public long AnnouncedEpochAt(int entry) => epoch.AnnouncedEpochAt(entry);
+        public long TestHookAnnouncedEpochAt(int entry) => epoch.TestHookAnnouncedEpochAt(entry);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Resume() => epoch.Resume();
@@ -65,7 +65,7 @@ namespace Tsavorite.epoch.litmus
         public int EntryCount { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => epoch.EntryCount; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public long AnnouncedEpochAt(int entry) => epoch.AnnouncedEpochAt(entry);
+        public long TestHookAnnouncedEpochAt(int entry) => epoch.TestHookAnnouncedEpochAt(entry);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Resume() => epoch.Resume();

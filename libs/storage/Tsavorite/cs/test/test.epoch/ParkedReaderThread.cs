@@ -27,7 +27,7 @@ namespace Tsavorite.test.epoch
             thread = new Thread(() =>
             {
                 epoch.Resume();
-                Volatile.Write(ref announcedEpoch, epoch.ThisThreadAnnouncedEpoch());
+                Volatile.Write(ref announcedEpoch, epoch.TestHookThisThreadAnnouncedEpoch());
                 entered.Set();
                 release.Wait();
                 epoch.Suspend();

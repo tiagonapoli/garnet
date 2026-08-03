@@ -909,6 +909,6 @@ namespace Tsavorite.epoch.litmus
         /// The epoch announced in epoch table slot <paramref name="entry"/>, or 0 if the slot is free.
         /// Mirrors the test hook of the same name on the fixed epoch so the harness can drive both.
         /// </summary>
-        internal long AnnouncedEpochAt(int entry) => (*(tableAligned + entry)).localCurrentEpoch;
+        internal long TestHookAnnouncedEpochAt(int entry) => (*(tableAligned + entry)).localCurrentEpoch;
     }
 }
