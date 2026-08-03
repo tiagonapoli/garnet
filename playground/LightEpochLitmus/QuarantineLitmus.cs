@@ -41,18 +41,15 @@ namespace Tsavorite.epoch.litmus
     /// than by hardware fault. <typeparamref name="TEpoch"/> selects which epoch is under test:
     /// <see cref="FixedEpoch"/> is expected to pass, <see cref="BuggyEpoch"/> to fail.
     ///
-    /// The reader announces its epoch and then loads a shared page pointer; the reclaimer
-    /// unlinks that pointer and asks the epoch to retire the page. If the reclaimer's scan
-    /// misses the reader's announce, the epoch authorises the free while the reader is
-    /// inside the page. "Freeing" stamps a poison sentinel over the page, so a reader that
-    /// observes poison in a page it was protecting is a use-after-free by the algorithm's
-    /// own definition.
+    /// The reader announces its epoch then loads a shared page pointer; the reclaimer unlinks that
+    /// pointer and retires the page. If the reclaimer's scan misses the announce, the epoch
+    /// authorises the free while the reader is inside the page. "Freeing" stamps a poison sentinel,
+    /// so a reader observing poison in a page it was protecting is a use-after-free by the
+    /// algorithm's own definition.
     ///
-    /// This detects the race without unmapping anything, which is what makes it work on x86-64:
-    /// an unmap would send a TLB shootdown IPI, and taking an interrupt drains the interrupted
-    /// core's store buffer, so the OS would fence the reader on every round and the race could
-    /// never appear. Pages come from a pool allocated once and the drain callbacks are pre-built,
-    /// so nothing allocates per round.
+    /// Nothing is unmapped, which is what makes this work on x86-64: an unmap sends a TLB shootdown
+    /// IPI, and taking an interrupt drains the interrupted core's store buffer, fencing the reader
+    /// on every round. Pages and drain callbacks are pre-allocated so no round allocates.
     /// </summary>
     internal sealed unsafe class QuarantineLitmus<TEpoch> where TEpoch : struct, ILitmusEpoch
     {

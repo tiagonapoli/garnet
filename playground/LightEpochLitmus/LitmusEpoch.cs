@@ -11,10 +11,8 @@ namespace Tsavorite.epoch.litmus
     /// The slice of the epoch API the litmus drives, so the same harness can be pointed at the
     /// fixed <see cref="LightEpoch"/> or at <see cref="BuggyLightEpoch"/>.
     ///
-    /// The implementations are structs and <see cref="QuarantineLitmus{TEpoch}"/> is generic over
-    /// them, so the JIT specialises the harness per epoch and these calls stay direct. An interface
-    /// call in the reader loop would add an indirection to the few instructions that make up the
-    /// race window and could hide the very reordering the run exists to catch.
+    /// Implementations are structs and the harness is generic over them so the calls stay direct:
+    /// an interface indirection in the reader loop could hide the reordering being hunted.
     /// </summary>
     internal interface ILitmusEpoch : IDisposable
     {

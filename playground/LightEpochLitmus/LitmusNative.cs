@@ -33,9 +33,8 @@ namespace Tsavorite.epoch.litmus
 
         /// <summary>
         /// Allocate a standalone reservation, committed and readable/writable. <see cref="Unmap"/>
-        /// removes it from the process page tables, which requires the base address of a whole
-        /// VirtualAlloc reservation on Windows — so each page must come from its own call rather
-        /// than be carved out of a larger block.
+        /// needs the base address of a whole VirtualAlloc reservation on Windows, so each page
+        /// must come from its own call.
         /// </summary>
         internal static byte* MapPage(nuint bytes)
         {
@@ -59,10 +58,9 @@ namespace Tsavorite.epoch.litmus
         {
             if (OperatingSystem.IsWindows())
             {
-                // MEM_RELEASE requires dwSize to be 0 and releases the whole reservation, so the
-                // range leaves the page tables and a later access raises STATUS_ACCESS_VIOLATION.
-                // If a later VirtualAlloc happens to reuse the range the access silently succeeds
-                // instead, which can only hide a violation, never manufacture one.
+                // MEM_RELEASE requires dwSize 0 and drops the whole reservation. If a later
+                // VirtualAlloc reuses the range the access silently succeeds, which can only hide
+                // a violation, never manufacture one.
                 if (!VirtualFree((IntPtr)p, 0, MEM_RELEASE))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "VirtualFree failed.");
 
@@ -74,9 +72,9 @@ namespace Tsavorite.epoch.litmus
         }
 
         /// <summary>
-        /// Pin the calling thread to <paramref name="core"/>. Best effort: containers and CI
-        /// agents often restrict affinity, and a failure only adds jitter to the race window
-        /// rather than invalidating a violation.
+        /// Pin the calling thread to <paramref name="core"/>. Best effort: containers and CI agents
+        /// often restrict affinity, and a failure only adds jitter rather than invalidating a
+        /// violation. Every failure path reports why on stderr.
         /// </summary>
         internal static bool TryPin(int core)
         {
@@ -85,13 +83,19 @@ namespace Tsavorite.epoch.litmus
                 if (OperatingSystem.IsWindows())
                 {
                     if ((uint)core >= UIntPtr.Size * 8)
-                        return false;
+                        return PinFailed(core, $"core is outside the {UIntPtr.Size * 8}-bit affinity mask");
 
-                    return SetThreadAffinityMask(GetCurrentThread(), (UIntPtr)(1UL << core)) != UIntPtr.Zero;
+                    if (SetThreadAffinityMask(GetCurrentThread(), (UIntPtr)(1UL << core)) == UIntPtr.Zero)
+                        return PinFailed(core, $"SetThreadAffinityMask failed with error {Marshal.GetLastWin32Error()}");
+
+                    return true;
                 }
 
-                if (!OperatingSystem.IsLinux() || (uint)core >= CpuSetBytes * 8)
-                    return false;
+                if (!OperatingSystem.IsLinux())
+                    return PinFailed(core, "pinning is only implemented for Windows and Linux");
+
+                if ((uint)core >= CpuSetBytes * 8)
+                    return PinFailed(core, $"core is outside the {CpuSetBytes * 8}-CPU set");
 
                 var cpuMask = stackalloc ulong[CpuSetBytes / sizeof(ulong)];
                 for (var i = 0; i < CpuSetBytes / sizeof(ulong); i++)
@@ -100,16 +104,25 @@ namespace Tsavorite.epoch.litmus
                 cpuMask[core / 64] = 1UL << (core % 64);
 
                 // pid 0 means the calling thread: every Linux thread is a task with its own mask.
-                return LinuxSchedSetAffinity(0, CpuSetBytes, cpuMask) == 0;
+                if (LinuxSchedSetAffinity(0, CpuSetBytes, cpuMask) != 0)
+                    return PinFailed(core, $"sched_setaffinity failed with errno {Marshal.GetLastWin32Error()}");
+
+                return true;
             }
-            catch (DllNotFoundException)
+            catch (DllNotFoundException e)
             {
-                return false;
+                return PinFailed(core, e.Message);
             }
-            catch (EntryPointNotFoundException)
+            catch (EntryPointNotFoundException e)
             {
-                return false;
+                return PinFailed(core, e.Message);
             }
+        }
+
+        static bool PinFailed(int core, string reason)
+        {
+            Console.Error.WriteLine($"warning: could not pin thread to core {core}: {reason}. The race window will be noisier.");
+            return false;
         }
     }
 }

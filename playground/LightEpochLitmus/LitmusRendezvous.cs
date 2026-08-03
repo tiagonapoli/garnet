@@ -8,18 +8,11 @@ using System.Threading;
 namespace Tsavorite.epoch.litmus
 {
     /// <summary>
-    /// Two-thread lockstep barrier for the litmus harnesses, plus the shared shutdown
-    /// protocol. The reclaimer owns the deadline; when it expires it performs one extra
-    /// barrier pass with <see cref="Stop"/> set so the reader is never left blocked
-    /// waiting for a partner that has already gone.
+    /// Two-thread lockstep barrier for the litmus harnesses, plus the shared shutdown protocol.
     ///
-    /// That extra pass alone is not enough, because the reader's <see cref="Stop"/> check and
-    /// the reclaimer's <c>stop = true</c> race: if the reader observes Stop as it leaves a pass
-    /// it returns without entering the next one, and the reclaimer waits in <see cref="Shutdown"/>
-    /// for a partner that will never arrive. <see cref="Depart"/> closes that: whichever side
-    /// leaves first marks the rendezvous abandoned, and a wait releases on either the sense flip
-    /// or abandonment. The abandoned check is short-circuited behind the sense read, so the
-    /// iteration that actually releases a waiter does no extra work.
+    /// The reclaimer owns the deadline and runs one extra barrier pass with <see cref="Stop"/> set.
+    /// That alone can still strand it, because the reader may observe Stop on its way out and never
+    /// enter that pass; <see cref="Depart"/> covers it by releasing whoever is left waiting.
     /// </summary>
     internal sealed class LitmusRendezvous
     {
@@ -80,11 +73,7 @@ namespace Tsavorite.epoch.litmus
         }
     }
 
-    /// <summary>
-    /// Which cores the litmus harness pins its threads to. Two threads on distinct physical
-    /// cores are what open the race window; the disturbers only keep the epoch table's cache
-    /// lines shared rather than exclusively owned.
-    /// </summary>
+    /// <summary>Which cores the litmus harness pins its threads to.</summary>
     internal readonly struct LitmusCores
     {
         internal int ReclaimerCore { get; init; }
@@ -92,9 +81,8 @@ namespace Tsavorite.epoch.litmus
         internal int[] DisturberCores { get; init; }
 
         /// <summary>
-        /// Lay the threads out on even-numbered logical processors, which on an SMT machine
-        /// puts them on distinct physical cores. Returns false if the machine is too small
-        /// for the reader and reclaimer to be separated at all.
+        /// Lay the threads out on even-numbered logical processors, which on an SMT machine puts
+        /// them on distinct physical cores. False if the machine is too small to separate them.
         /// </summary>
         internal static bool TrySelect(out LitmusCores cores)
         {
