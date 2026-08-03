@@ -14,7 +14,7 @@ namespace Tsavorite.test.epoch
     /// <see cref="LightEpoch.Dispose"/>.
     /// </summary>
     [TestFixture]
-    public class InstanceTests
+    public class InstanceTests : EpochTestBase
     {
         [Test]
         public void ActiveInstanceCountTracksConstructionAndDispose()

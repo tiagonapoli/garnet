@@ -14,7 +14,7 @@ namespace Tsavorite.test.epoch
     /// slot is occupied.
     /// </summary>
     [TestFixture]
-    public class EntryTableTests : EpochTestBase
+    public class EntryTableTests : SingleEpochTestBase
     {
         [Test]
         public void EntryCountIsAtLeastTheMinimumTableSize()
@@ -103,7 +103,7 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 latecomer.Start();
 
-                Assert.That(acquired.Wait(TimeSpan.FromMilliseconds(500)), Is.False, "a thread acquired a slot from a completely full table");
+                Assert.That(acquired.Wait(SettleDelay), Is.False, "a thread acquired a slot from a completely full table");
 
                 _ = SpinWait.SpinUntil(() => epoch.WaiterCount > 0, Timeout);
                 Assert.That(epoch.WaiterCount, Is.GreaterThan(0), "the blocked thread never parked on the waiter semaphore");
@@ -252,7 +252,7 @@ namespace Tsavorite.test.epoch
             }
 
             start.Set();
-            JoinAll(threads, SoakTimeout);
+            JoinAll(threads, Timeout);
 
             Assert.That(Volatile.Read(ref conflicts), Is.Zero, "a slot was claimed by two threads at once");
         }

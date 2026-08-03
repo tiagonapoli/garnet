@@ -15,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// cache line. Slots are claimed by bitmask CAS, and the values are owned by the application.
     /// </summary>
     [TestFixture]
-    public class UserWordTests : EpochTestBase
+    public class UserWordTests : SingleEpochTestBase
     {
         [Test]
         public void AllocationHandsOutEverySlotOnceThenThrows()
@@ -171,12 +171,12 @@ namespace Tsavorite.test.epoch
                     threads[t].Start();
                 }
 
-                Assert.That(allWritten.Wait(TimeSpan.FromSeconds(30)), Is.True);
+                Assert.That(allWritten.Wait(Timeout), Is.True);
                 Assert.That(epoch.GetMinUserWord(word), Is.EqualTo(100L));
 
                 release.Set();
                 foreach (var thread in threads)
-                    Assert.That(thread.Join(TimeSpan.FromSeconds(30)), Is.True);
+                    Assert.That(thread.Join(Timeout), Is.True);
             }
             finally
             {
@@ -215,7 +215,7 @@ namespace Tsavorite.test.epoch
 
             start.Set();
             foreach (var thread in threads)
-                Assert.That(thread.Join(TimeSpan.FromMinutes(1)), Is.True);
+                Assert.That(thread.Join(Timeout), Is.True);
 
             Assert.That(Volatile.Read(ref duplicates), Is.Zero, "the same user-word slot was allocated twice at once");
         }

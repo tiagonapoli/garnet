@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using NUnit.Framework;
@@ -14,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// becomes safe to reclaim, and not one moment sooner.
     /// </summary>
     [TestFixture]
-    public class DrainTests : EpochTestBase
+    public class DrainTests : SingleEpochTestBase
     {
         [Test]
         public void ActionRunsImmediatelyWhenNobodyElseIsProtected()
@@ -37,7 +38,7 @@ namespace Tsavorite.test.epoch
         public void TheLastThreadToSuspendRunsPendingActions()
         {
             var drained = 0;
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
 
             using (epoch.ProtectedScope())
             {
@@ -57,7 +58,7 @@ namespace Tsavorite.test.epoch
             var capacity = LightEpoch.DrainListCapacity;
             var counts = new int[capacity];
 
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
 
             using (epoch.ProtectedScope())
             {
@@ -86,7 +87,7 @@ namespace Tsavorite.test.epoch
             var counts = new int[capacity];
             var extraRan = 0;
 
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
 
             using (epoch.ProtectedScope())
             {
@@ -108,12 +109,12 @@ namespace Tsavorite.test.epoch
                 { IsBackground = true };
                 latecomer.Start();
 
-                Assert.That(registered.Wait(TimeSpan.FromMilliseconds(500)), Is.False, "registered an action into a full drain list while nothing was reclaimable");
+                Assert.That(registered.Wait(SettleDelay), Is.False, "registered an action into a full drain list while nothing was reclaimable");
 
                 reader.LeaveAndJoin();
 
-                Assert.That(registered.Wait(TimeSpan.FromSeconds(30)), Is.True, "the blocked registration never completed after the drain list could be emptied");
-                Assert.That(latecomer.Join(TimeSpan.FromSeconds(30)), Is.True);
+                Assert.That(registered.Wait(Timeout), Is.True, "the blocked registration never completed after the drain list could be emptied");
+                Assert.That(latecomer.Join(Timeout), Is.True);
 
                 Assert.That(counts, Is.All.EqualTo(1), "the backlog did not drain exactly once each");
             }
@@ -123,9 +124,9 @@ namespace Tsavorite.test.epoch
         public void ActionsRunInEpochOrder()
         {
             const int ActionCount = 8;
-            var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
+            var order = new ConcurrentQueue<int>();
 
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
 
             using (epoch.ProtectedScope())
             {
@@ -173,8 +174,7 @@ namespace Tsavorite.test.epoch
             }
 
             start.Set();
-            foreach (var thread in threads)
-                Assert.That(thread.Join(TimeSpan.FromMinutes(2)), Is.True, "worker did not finish");
+            JoinAll(threads, "worker did not finish");
 
             // Anything still pending drains on the next quiescent pass.
             using (epoch.ProtectedScope())
@@ -203,7 +203,7 @@ namespace Tsavorite.test.epoch
             })
             { IsBackground = true };
             reader.Start();
-            Assert.That(protectedThreadEntered.Wait(TimeSpan.FromSeconds(30)), Is.True);
+            Assert.That(protectedThreadEntered.Wait(Timeout), Is.True);
 
             epoch.Resume();
             epoch.BumpCurrentEpoch(() => Interlocked.Increment(ref drained));
@@ -212,13 +212,9 @@ namespace Tsavorite.test.epoch
             Assert.That(Volatile.Read(ref drained), Is.Zero, "action drained while a thread was still protected");
 
             releaseProtectedThread.Set();
-            Assert.That(reader.Join(TimeSpan.FromSeconds(30)), Is.True);
+            Assert.That(reader.Join(Timeout), Is.True);
 
-            epoch.Resume();
-            epoch.ProtectAndDrain();
-            epoch.Suspend();
-
-            Assert.That(Volatile.Read(ref drained), Is.EqualTo(1));
+            Assert.That(Volatile.Read(ref drained), Is.EqualTo(1), "the last thread to suspend did not drain the action on its way out");
         }
     }
 }

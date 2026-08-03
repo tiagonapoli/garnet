@@ -15,7 +15,7 @@ namespace Tsavorite.test.epoch
     /// statement about it never overtaking a thread that is still inside a protected region.
     /// </summary>
     [TestFixture]
-    public class ReclamationTests : EpochTestBase
+    public class ReclamationTests : SingleEpochTestBase
     {
         [Test]
         public void AnEmptyTableAnnouncesNothing()
@@ -32,7 +32,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void ProtectingLowersTheAnnouncedMinimum()
         {
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
             Assert.That(epoch.MinAnnouncedEpoch(), Is.EqualTo(reader.AnnouncedEpoch));
 
             using (epoch.ProtectedScope())
@@ -52,7 +52,7 @@ namespace Tsavorite.test.epoch
         [Test]
         public void SafeToReclaimNeverReachesALiveAnnouncedEpoch()
         {
-            using var reader = new ParkedReader(epoch);
+            using var reader = new ParkedReaderThread(epoch);
 
             using (epoch.ProtectedScope())
             {
@@ -104,12 +104,12 @@ namespace Tsavorite.test.epoch
         public void TheOldestOfManyReadersDefinesTheFrontier()
         {
             const int ReaderCount = 8;
-            var readers = new ParkedReader[ReaderCount];
+            var readers = new ParkedReaderThread[ReaderCount];
             try
             {
                 for (var i = 0; i < ReaderCount; i++)
                 {
-                    readers[i] = new ParkedReader(epoch);
+                    readers[i] = new ParkedReaderThread(epoch);
 
                     using (epoch.ProtectedScope())
                     {
@@ -212,10 +212,10 @@ namespace Tsavorite.test.epoch
             }
 
             start.Set();
-            JoinAll(checkers, SoakTimeout, "checker did not finish");
+            JoinAll(checkers, Timeout, "checker did not finish");
 
             Volatile.Write(ref stopChurn, true);
-            JoinAll(churn, SoakTimeout, "churn thread did not finish");
+            JoinAll(churn, Timeout, "churn thread did not finish");
 
             Assert.That(Volatile.Read(ref violations), Is.Zero, "SafeToReclaimEpoch reached an epoch a thread was still announcing");
         }
@@ -277,7 +277,7 @@ namespace Tsavorite.test.epoch
 
             Volatile.Write(ref stop, true);
             foreach (var reader in readers)
-                Assert.That(reader.Join(TimeSpan.FromSeconds(30)), Is.True);
+                Assert.That(reader.Join(Timeout), Is.True);
 
             Assert.That(Volatile.Read(ref freed), Is.GreaterThan(0), "the reclaimer never freed anything, so the test proved nothing");
             Assert.That(Volatile.Read(ref violations), Is.Zero, "a reader dereferenced a page that had already been freed");
