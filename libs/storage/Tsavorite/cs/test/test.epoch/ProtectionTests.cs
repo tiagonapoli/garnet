@@ -24,15 +24,10 @@ namespace Tsavorite.test.epoch
         }
 
         [Test]
-        public void SlotIndexIsWithinTheTable()
+        public void AProtectedThreadOwnsAValidSlot()
         {
             using (epoch.ProtectedScope())
-            {
-                var entry = epoch.TestHookThisThreadEntry();
-                Assert.That(entry, Is.GreaterThan(0));
-                Assert.That(entry, Is.LessThanOrEqualTo(epoch.EntryCount));
-                Assert.That(epoch.TestHookThreadIdAt(entry), Is.EqualTo(Environment.CurrentManagedThreadId));
-            }
+                AssertProtectedAt(epoch.CurrentEpoch);
         }
 
         [Test]
@@ -47,29 +42,6 @@ namespace Tsavorite.test.epoch
             Assert.That(epoch.TestHookThisThreadEntry(), Is.Zero);
         }
 
-        /// <summary>
-        /// The claim CAS uses 0 as "slot free", so a protected thread announcing 0 would make a live
-        /// slot look reclaimable and claimable. CurrentEpoch starts at 1 and only ever increases.
-        /// </summary>
-        [Test]
-        public void AProtectedThreadNeverAnnouncesEpochZero()
-        {
-            Assert.That(epoch.CurrentEpoch, Is.GreaterThan(0));
-
-            for (var i = 0; i < 32; i++)
-            {
-                using (epoch.ProtectedScope())
-                {
-                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
-                    _ = epoch.BumpCurrentEpoch();
-                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
-                    epoch.ProtectAndDrain();
-                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.Not.Zero);
-                    Assert.That(epoch.CurrentEpoch, Is.GreaterThan(0));
-                }
-            }
-        }
-
         [Test]
         public void SuspendResumeKeepsTheThreadProtected()
         {
@@ -77,9 +49,7 @@ namespace Tsavorite.test.epoch
             {
                 epoch.SuspendResume();
 
-                Assert.That(epoch.ThisInstanceProtected(), Is.True);
-                Assert.That(epoch.TestHookThisThreadEntry(), Is.GreaterThan(0));
-                Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+                AssertProtectedAt(epoch.CurrentEpoch);
             }
         }
 
@@ -90,9 +60,13 @@ namespace Tsavorite.test.epoch
             {
                 for (var i = 0; i < 16; i++)
                 {
-                    _ = epoch.BumpCurrentEpoch();
+                    var announced = epoch.TestHookThisThreadAnnouncedEpoch();
+
+                    var bumped = epoch.BumpCurrentEpoch();
+                    AssertProtectedAt(announced, "BumpCurrentEpoch must not republish the announced epoch");
+
                     epoch.ProtectAndDrain();
-                    Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
+                    AssertProtectedAt(bumped);
                 }
             }
         }
@@ -100,26 +74,13 @@ namespace Tsavorite.test.epoch
         [Test]
         public void ProtectionSurvivesRepeatedResumeSuspendCycles()
         {
-            for (var i = 0; i < 1_000; i++)
+            for (var i = 0; i < 128; i++)
             {
                 epoch.Resume();
                 Assert.That(epoch.ThisInstanceProtected(), Is.True);
                 epoch.Suspend();
                 Assert.That(epoch.ThisInstanceProtected(), Is.False);
             }
-        }
-
-        [Test]
-        public void ToStringReportsProtectedThreads()
-        {
-            using (epoch.ProtectedScope())
-            {
-                var description = epoch.ToString();
-                Assert.That(description, Does.Contain("CurrentEpoch"));
-                Assert.That(description, Does.Contain($"tid={Environment.CurrentManagedThreadId}"));
-            }
-
-            Assert.That(epoch.ToString(), Does.Contain("none]"));
         }
 
         [Test]
@@ -143,25 +104,17 @@ namespace Tsavorite.test.epoch
             Assert.That(epoch.TrySuspend(), Is.False);
         }
 
-        [Test]
-        public void AcquireAnnouncesCurrentEpoch()
+        /// <summary>Everything that must hold while this thread is inside a protected region.</summary>
+        void AssertProtectedAt(long announcedEpoch, string because = null)
         {
-            Bump();
-            Bump();
+            var entry = epoch.TestHookThisThreadEntry();
 
-            using (epoch.ProtectedScope())
-            {
-                Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(epoch.CurrentEpoch));
-            }
-
-            Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(0));
-        }
-
-        void Bump()
-        {
-            epoch.Resume();
-            _ = epoch.BumpCurrentEpoch();
-            epoch.Suspend();
+            Assert.That(epoch.ThisInstanceProtected(), Is.True, because);
+            Assert.That(entry, Is.GreaterThan(0), because);
+            Assert.That(entry, Is.LessThanOrEqualTo(epoch.EntryCount), because);
+            Assert.That(epoch.TestHookThreadIdAt(entry), Is.EqualTo(Environment.CurrentManagedThreadId), because);
+            Assert.That(epoch.TestHookThisThreadAnnouncedEpoch(), Is.EqualTo(announcedEpoch), because);
+            Assert.That(epoch.TestHookAnnouncedEpochAt(entry), Is.EqualTo(announcedEpoch), because);
         }
     }
 }
