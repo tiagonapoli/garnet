@@ -1,28 +1,20 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
 using System.Collections.Generic;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Garnet.common;
 
 namespace Garnet.server
 {
     /// <summary>
-    /// A cleanup work queue: a channel whose items are counted by a <see cref="VectorSetCleanupTracker"/>,
-    /// so that every queued item is outstanding from the moment it is published until the consumer is
-    /// finished with it.
-    ///
-    /// The point is to make the tracker's accounting unrepresentable-to-get-wrong rather than merely
-    /// documented. Publishing registers before the item is visible, and reading hands back a lease that
-    /// completes the registration when disposed — so an early <c>continue</c>, an exception, or a new
-    /// <c>return</c> added later cannot leak a registration. A leaked registration is unrecoverable:
-    /// the count never returns to zero, so every subsequent FLUSH and replica full sync blocks forever
-    /// with nothing to point at.
-    ///
-    /// Only queues that carry cleanup obligations should use this. A channel used purely to nudge a
-    /// consumer that already tracks its work elsewhere carries no obligation and should stay a plain
-    /// <see cref="Channel{T}"/>.
+    /// A cleanup work queue whose items are counted by a <see cref="VectorSetCleanupTracker"/>: publishing
+    /// registers before the item is visible, and reading hands back a lease that completes the registration
+    /// when disposed, so an early <c>continue</c>, an exception, or a <c>return</c> added later cannot leak
+    /// one. A leaked registration is unrecoverable — every subsequent FLUSH and replica full sync then blocks
+    /// forever. Queues that carry no cleanup obligation should stay a plain <see cref="Channel{T}"/>.
     /// </summary>
     internal sealed class VectorSetCleanupChannel<T>
     {
@@ -79,10 +71,10 @@ namespace Garnet.server
         private readonly Channel<T> channel;
         private readonly VectorSetCleanupTracker tracker;
 
-        internal VectorSetCleanupChannel(VectorSetCleanupTracker tracker, bool singleWriter)
+        internal VectorSetCleanupChannel(VectorSetCleanupTracker tracker)
         {
             this.tracker = tracker;
-            channel = Channel.CreateUnbounded<T>(new() { SingleWriter = singleWriter, SingleReader = true, AllowSynchronousContinuations = false });
+            channel = Channel.CreateUnbounded<T>(new() { SingleWriter = false, SingleReader = true, AllowSynchronousContinuations = false });
         }
 
         /// <summary>
@@ -131,5 +123,15 @@ namespace Garnet.server
         internal void CompleteWriter() => channel.Writer.Complete();
 
         internal Task Completion => channel.Reader.Completion;
+
+        /// <summary>
+        /// Stop accepting items and block until the queue has drained and <paramref name="consumer"/> has exited.
+        /// </summary>
+        internal void CompleteAndWaitForConsumer(Task consumer)
+        {
+            CompleteWriter();
+            AsyncUtils.BlockingWait(Completion);
+            AsyncUtils.BlockingWait(consumer);
+        }
     }
 }

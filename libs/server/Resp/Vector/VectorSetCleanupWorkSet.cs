@@ -1,22 +1,19 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Garnet.server
 {
     /// <summary>
     /// A keyed set of outstanding cleanup work whose membership <em>is</em> its
-    /// <see cref="VectorSetCleanupTracker"/> registration: adding an entry registers it, and completing
-    /// the entry both removes it and releases the registration.
-    ///
-    /// This is the same bargain <see cref="VectorSetCleanupChannel{T}"/> makes, for work that is
-    /// addressed by key rather than queued — a caller can look up whether a specific unit is still
-    /// pending. Because the two are updated together, "the key is present" and "a registration is
-    /// outstanding" cannot disagree, so a drain cannot return while an entry is still visible to
-    /// callers polling for it.
+    /// <see cref="VectorSetCleanupTracker"/> registration: adding an entry registers it, and completing the
+    /// entry both removes it and releases the registration. Because the two move together, "the key is
+    /// present" and "a registration is outstanding" cannot disagree, so a drain cannot return while an entry
+    /// is still visible to callers polling for it.
     /// </summary>
     internal sealed class VectorSetCleanupWorkSet<TValue>
     {
@@ -53,6 +50,20 @@ namespace Garnet.server
 #else
             return entries.ContainsKey(key.ToArray());
 #endif
+        }
+
+        /// <summary>
+        /// Block until no work is pending for <paramref name="key"/>. The entry is only removed once the
+        /// work has actually been performed, so this returning implies completion, not merely dequeue.
+        ///
+        /// Do not call this while holding any Vector Set related locks, we will deadlock.
+        /// </summary>
+        internal void WaitForCompletion(ReadOnlySpan<byte> key)
+        {
+            while (Contains(key))
+            {
+                _ = Thread.Yield();
+            }
         }
 
         /// <summary>

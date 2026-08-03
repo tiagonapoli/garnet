@@ -1,14 +1,12 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Threading.Tasks;
-#if DEBUG
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading.Tasks;
 using Garnet.common;
 using Tsavorite.core;
-#endif
 
 namespace Garnet.server
 {
@@ -20,31 +18,23 @@ namespace Garnet.server
         /// <summary>
         /// When drops are pending, hold the drop pass in flight so a store-empty boundary can be crossed
         /// while native drops are still outstanding — proving the sync-path drain barrier waits for them.
-        /// No-op outside DEBUG, so production call sites need no conditional compilation of their own.
+        /// Injection can only be armed in DEBUG, so this completes synchronously in Release.
         /// </summary>
         internal Task TestHookPauseInNativeDropAsync()
-        {
-#if DEBUG
-            return requestedDrops.IsEmpty
+            => requestedDrops.IsEmpty
                 ? Task.CompletedTask
                 : ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
-#else
-            return Task.CompletedTask;
-#endif
-        }
-
-#if DEBUG
 
         /// <summary>
         /// Counts element records whose namespace maps to a single context block.
         /// </summary>
-        private sealed class ContextRecordCounter : IScanIteratorFunctions
+        private sealed class TestHookContextRecordCounter : IScanIteratorFunctions
         {
             private readonly ulong pairedContext;
 
             public int Count { get; private set; }
 
-            public ContextRecordCounter(ulong pairedContext)
+            public TestHookContextRecordCounter(ulong pairedContext)
             {
                 this.pairedContext = pairedContext;
             }
@@ -178,13 +168,11 @@ namespace Garnet.server
             if (session.activeDbId != dbId && !session.TrySwitchActiveDatabaseSession(dbId))
                 throw new GarnetException($"Could not switch VectorManager test session to {dbId}, initialization failed");
 
-            var counter = new ContextRecordCounter(context & ~(ContextStep - 1));
+            var counter = new TestHookContextRecordCounter(context & ~(ContextStep - 1));
             ref var scanCtx = ref session.storageSession.stringBasicContext;
             _ = scanCtx.Session.IterateLookupSnapshot(ref counter);
 
             return counter.Count;
         }
-
-#endif
     }
 }

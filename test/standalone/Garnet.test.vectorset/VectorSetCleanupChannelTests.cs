@@ -25,7 +25,7 @@ namespace Garnet.test
         private static VectorSetCleanupChannel<object> NewChannel(out VectorSetCleanupTracker tracker)
         {
             tracker = new VectorSetCleanupTracker();
-            return new VectorSetCleanupChannel<object>(tracker, singleWriter: false);
+            return new VectorSetCleanupChannel<object>(tracker);
         }
 
         [Test]
@@ -136,8 +136,8 @@ namespace Garnet.test
         public void HandOffPublishedBeforeBatchDisposalNeverDipsToZero()
         {
             var tracker = new VectorSetCleanupTracker();
-            var upstream = new VectorSetCleanupChannel<object>(tracker, singleWriter: false);
-            var downstream = new VectorSetCleanupChannel<object>(tracker, singleWriter: false);
+            var upstream = new VectorSetCleanupChannel<object>(tracker);
+            var downstream = new VectorSetCleanupChannel<object>(tracker);
 
             _ = upstream.TryPublish(null);
 
@@ -166,8 +166,8 @@ namespace Garnet.test
         public void HandOffPublishedAfterBatchDisposalReleasesAWaiterEarly()
         {
             var tracker = new VectorSetCleanupTracker();
-            var upstream = new VectorSetCleanupChannel<object>(tracker, singleWriter: false);
-            var downstream = new VectorSetCleanupChannel<object>(tracker, singleWriter: false);
+            var upstream = new VectorSetCleanupChannel<object>(tracker);
+            var downstream = new VectorSetCleanupChannel<object>(tracker);
 
             _ = upstream.TryPublish(null);
 

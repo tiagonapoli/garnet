@@ -204,8 +204,8 @@ namespace Garnet.server
             vectorSetLocks = new(vectorSetReplayCount);
 
             this.getTempSession = getTempSession;
-            cleanupTaskChannel = new(cleanupTracker, singleWriter: false);
-            requestCleanupTaskChannel = new(cleanupTracker, singleWriter: false);
+            cleanupTaskChannel = new(cleanupTracker);
+            requestCleanupTaskChannel = new(cleanupTracker);
             requestDropTaskChannel = Channel.CreateUnbounded<object>(new() { SingleWriter = false, SingleReader = true, AllowSynchronousContinuations = false });
 
             cleanupTask = RunCleanupTaskAsync();
@@ -423,19 +423,11 @@ namespace Garnet.server
             AsyncUtils.BlockingWait(requestDropTaskChannel.Reader.Completion);
             AsyncUtils.BlockingWait(requestDropTask);
 
-            // Wait for any _marking_ of cleanup state to finish. PauseCleanupAsync callers MUST
-            // have called ResumeCleanup before reaching here, otherwise the cleanup task
-            // is permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
-            requestCleanupTaskChannel.CompleteWriter();
-            AsyncUtils.BlockingWait(requestCleanupTaskChannel.Completion);
-            AsyncUtils.BlockingWait(requestCleanupTask);
-
-            // Wait for any in progress cleanup to finish. PauseCleanupAsync callers MUST
-            // have called ResumeCleanup before reaching here, otherwise the cleanup task
-            // is permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
-            cleanupTaskChannel.CompleteWriter();
-            AsyncUtils.BlockingWait(cleanupTaskChannel.Completion);
-            AsyncUtils.BlockingWait(cleanupTask);
+            // Wait for any _marking_ of cleanup state, then any in progress cleanup, to finish. PauseCleanupAsync
+            // callers MUST have called ResumeCleanup before reaching here, otherwise the cleanup task is
+            // permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
+            requestCleanupTaskChannel.CompleteAndWaitForConsumer(requestCleanupTask);
+            cleanupTaskChannel.CompleteAndWaitForConsumer(cleanupTask);
 
             // Cleanup task has fully drained, so nothing else can take this gate.
             cleanupGate.Dispose();

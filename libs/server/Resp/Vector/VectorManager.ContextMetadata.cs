@@ -455,11 +455,11 @@ namespace Garnet.server
                 manager.contextMetadatas = new ContextMetadata[1];
                 manager.dirtyContextMetadatas.Clear();
 
-                // Allow new contexts to be issued
-                Monitor.Exit(manager);
-
                 // Allow Vector Set operations again
                 manager.vectorSetLocks.ReleaseLock(lockToken);
+
+                // Allow new contexts to be issued
+                Monitor.Exit(manager);
 
                 // Resume the background cleanup scan
                 _ = manager.cleanupGate.Release();

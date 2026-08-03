@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -448,13 +448,7 @@ namespace Garnet.server
         /// 
         /// Do not call this while holding any Vector Set related locks, we will deadlock.
         /// </summary>
-        public void WaitForDiskANNIndexDrop(ReadOnlySpan<byte> key)
-        {
-            while (requestedDrops.Contains(key))
-            {
-                _ = Thread.Yield();
-            }
-        }
+        public void WaitForDiskANNIndexDrop(ReadOnlySpan<byte> key) => requestedDrops.WaitForCompletion(key);
 
         /// <summary>
         /// For testing purposes, block until all cleanup requests are processed.
@@ -468,7 +462,7 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Block until the whole cleanup pipeline has quiesced. Call at store-emptying boundaries (FLUSH,
+        /// Block until the whole cleanup pipeline has finished. Call at store-emptying boundaries (FLUSH,
         /// replica full sync) AFTER the store is emptied, and never while cleanup is paused.
         /// </summary>
         public Task WaitForCleanupCompleteAsync() => cleanupTracker.WaitAllCleanupsAsync();
@@ -555,7 +549,7 @@ namespace Garnet.server
 
                                 if (needsDelete)
                                 {
-                                    // No need to wait for marking, since the record is already "deleted".
+                                    // No need to wait for marking, since the record is already "deleted"
                                     if (!self.requestCleanupTaskChannel.TryPublish((context, null)))
                                     {
                                         self.logger?.LogWarning("Could not request delete of abandoned Vector Set {key}", SpanByte.ToShortString(key));

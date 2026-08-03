@@ -1,4 +1,4 @@
-// Copyright (c) Microsoft Corporation.
+﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -7,25 +7,13 @@ using System.Threading.Tasks;
 namespace Garnet.server
 {
     /// <summary>
-    /// Counts Vector Set cleanup work that is in flight so a caller can block until there is none.
-    ///
-    /// This deliberately knows nothing about what cleanup <em>is</em> — it does not schedule, perform,
-    /// or order anything, it only counts. Two rules make it correct:
-    ///
+    /// Counts Vector Set cleanup work in flight so a caller can block until there is none.
+    /// Two placement rules make a count of zero mean "nothing outstanding":
     /// <list type="number">
-    /// <item><b>Register before publish.</b> A producer must register a unit of work before that work
-    /// becomes visible to whoever will perform it (before writing it to a channel or adding it to a
-    /// shared set). Registering on the consumer side after dequeuing leaves a window where the work
-    /// exists but is invisible to a waiter.</item>
-    /// <item><b>Register the successor before completing the predecessor.</b> Where one stage hands
-    /// work off to the next, the new registration must happen before the old one completes, or the
-    /// count can dip to zero mid-pipeline and a waiter returns early.</item>
+    /// <item><b>Register before publish</b>, so work is never visible to a performer while invisible to a waiter.</item>
+    /// <item><b>Register the successor before completing the predecessor</b>, so the count cannot dip to zero
+    /// while work is being handed from one pipeline stage to the next.</item>
     /// </list>
-    ///
-    /// With that discipline the entire quiescence argument is local to each register/complete pair:
-    /// a count of zero implies no cleanup work is outstanding, no matter how many stages, channels or
-    /// background tasks the pipeline grows. That replaces having to reason globally about channel FIFO
-    /// order, sentinel round-trips, and a set of separate in-progress flags.
     /// </summary>
     internal sealed class VectorSetCleanupTracker
     {
