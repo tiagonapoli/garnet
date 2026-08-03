@@ -59,7 +59,7 @@ namespace Tsavorite.epoch.litmus
         const long Poison = unchecked((long)0xDEAD_BEEF_DEAD_BEEFUL);
 
         readonly TEpoch epoch;
-        readonly Rendezvous rendezvous = new();
+        readonly TwoThreadBarrier barrier = new();
         readonly TimeSpan duration;
         readonly int deref;
         readonly CoreLayout cores;
@@ -158,7 +158,7 @@ namespace Tsavorite.epoch.litmus
             _ = Platform.TryPin(core);
 
             long local = 0;
-            while (!rendezvous.Stop)
+            while (!barrier.Stop)
             {
                 for (var i = 1; i <= epoch.EntryCount; i++)
                     local += epoch.TestHookAnnouncedEpochAt(i);
@@ -173,13 +173,13 @@ namespace Tsavorite.epoch.litmus
 
             while (true)
             {
-                rendezvous.StartBarrier();
+                barrier.WaitAtStart();
 
                 // Nothing may sit between the barrier and Resume(). The window is a few instructions
                 // wide, and arriving late drains the announce out of the store buffer before the
                 // reclaimer scans, so no run length produces a violation -- a single extra volatile
                 // load here was measured to be the difference between catching the unfixed epoch
-                // and catching nothing. Hence the shutdown check lives after EndBarrier.
+                // and catching nothing. Hence the shutdown check lives after WaitAtEnd.
                 //
                 // Resume-then-Refresh mirrors a normal Tsavorite BasicContext operation:
                 // ClientSession.UnsafeResumeThread calls Resume and then InternalRefresh, which
@@ -190,13 +190,13 @@ namespace Tsavorite.epoch.litmus
                 ReadAndCheck();
 
                 epoch.Suspend();
-                rendezvous.EndBarrier();
+                barrier.WaitAtEnd();
 
-                // After EndBarrier so it stays out of the window above. Depart() because the
+                // After WaitAtEnd so it stays out of the window above. Depart() because the
                 // reclaimer's Shutdown may already be waiting in a pass this thread will not enter.
-                if (rendezvous.Stop)
+                if (barrier.Stop)
                 {
-                    rendezvous.Depart();
+                    barrier.Depart();
                     return;
                 }
             }
@@ -246,7 +246,7 @@ namespace Tsavorite.epoch.litmus
                     words[index] = index;
                 Volatile.Write(ref CurPage, (long)page);
 
-                rendezvous.StartBarrier();
+                barrier.WaitAtStart();
 
                 CurPage = 0;
 
@@ -258,11 +258,11 @@ namespace Tsavorite.epoch.litmus
                 epoch.BumpCurrentEpoch(drainCallbacks[round % PoolPages]);
                 epoch.ProtectAndDrain();
                 Drains++;
-                rendezvous.EndBarrier();
+                barrier.WaitAtEnd();
                 round++;
             }
 
-            rendezvous.Shutdown();
+            barrier.Shutdown();
             epoch.Suspend();
             return round;
         }

@@ -13,7 +13,7 @@ namespace Tsavorite.epoch.litmus
     /// That alone can still strand it, because the reader may observe Stop on its way out and never
     /// enter that pass; <see cref="Depart"/> covers it by releasing whoever is left waiting.
     /// </summary>
-    internal sealed class Rendezvous
+    internal sealed class TwoThreadBarrier
     {
         int startCount;
         int startSense;
@@ -25,7 +25,7 @@ namespace Tsavorite.epoch.litmus
         internal bool Stop => stop;
 
         /// <summary>
-        /// Announce that this thread is leaving the rendezvous for good, releasing a partner
+        /// Announce that this thread is leaving the barrier for good, releasing a partner
         /// that is -- or later ends up -- waiting for it.
         /// </summary>
         internal void Depart() => abandoned = true;
@@ -34,13 +34,13 @@ namespace Tsavorite.epoch.litmus
         internal void Shutdown()
         {
             stop = true;
-            StartBarrier();
-            EndBarrier();
+            WaitAtStart();
+            WaitAtEnd();
             Depart();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void StartBarrier()
+        internal void WaitAtStart()
         {
             var sense = Volatile.Read(ref startSense);
             if (Interlocked.Increment(ref startCount) == 2)
@@ -56,7 +56,7 @@ namespace Tsavorite.epoch.litmus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal void EndBarrier()
+        internal void WaitAtEnd()
         {
             var sense = Volatile.Read(ref endSense);
             if (Interlocked.Increment(ref endCount) == 2)

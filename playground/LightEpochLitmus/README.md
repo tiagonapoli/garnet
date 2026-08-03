@@ -29,7 +29,7 @@ Two things make a green run mean something, and both are asserted:
 - **`QuarantineLitmus`** — the race: reader/reclaimer loop, page pool, poison stamp,
   violation counter. Generic over the epoch so the JIT specialises it and the reader
   keeps direct calls; an indirection inside the window could hide the reordering.
-- **`Rendezvous`** — the two-thread barrier that lines the reader and reclaimer
+- **`TwoThreadBarrier`** — the two-thread barrier that lines the reader and reclaimer
   up each pass. Without it they drift apart and the window is never sampled.
 - **`EpochUnderTest`** — the `IEpochUnderTest` seam and the `FixedEpoch`/`BuggyEpoch`
   adapters, which let one binary run either algorithm.
