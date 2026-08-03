@@ -129,6 +129,32 @@ namespace Garnet.server
         }
 
         /// <summary>
+        /// Register a unit of work and run it on the thread pool, releasing the registration when it
+        /// finishes or throws.
+        ///
+        /// For work that is a background pass rather than an entry in a queue or set: the registration
+        /// is taken before the task is scheduled, so a drain cannot slip between the two, and the caller
+        /// cannot forget to release it. <paramref name="state"/> is threaded through so the callback need
+        /// not capture.
+        /// </summary>
+        public Task RunTrackedAsync<TState>(TState state, Action<TState> work)
+        {
+            RegisterCleanup();
+
+            return Task.Run(() =>
+            {
+                try
+                {
+                    work(state);
+                }
+                finally
+                {
+                    OnCleanupComplete();
+                }
+            });
+        }
+
+        /// <summary>
         /// Completes once no cleanup work is in flight.
         ///
         /// This says nothing about work registered after it returns — callers use it at boundaries

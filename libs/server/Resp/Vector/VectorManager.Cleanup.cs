@@ -94,10 +94,7 @@ namespace Garnet.server
         // Pure nudge: the drop work itself lives in requestedDrops, whose entries carry the tracker
         // registrations, so a wake here has no obligation attached and needs no lease.
         private readonly Channel<object> requestDropTaskChannel;
-        private readonly ConcurrentDictionary<byte[], (ulong Context, nint IndexPtr)> requestedDrops;
-#if NET9_0_OR_GREATER
-        private readonly ConcurrentDictionary<byte[], (ulong Context, nint IndexPtr)>.AlternateLookup<ReadOnlySpan<byte>> requestedDropsLookup;
-#endif
+        private readonly VectorSetCleanupWorkSet<(ulong Context, nint IndexPtr)> requestedDrops;
         private readonly ConcurrentDictionary<ulong, byte[]> potentiallyDeleted;
         private readonly Task cleanupTask;
         private readonly Task requestCleanupTask;
@@ -185,11 +182,7 @@ namespace Garnet.server
                         finally
                         {
                             vectorSetLocks.ReleaseLock(lockToken);
-                            if (requestedDrops.TryRemove(k, out _))
-                            {
-                                cleanupTracker.OnCleanupComplete();
-                            }
-                            else
+                            if (!requestedDrops.TryComplete(k, out _))
                             {
                                 logger?.LogCritical("Drop for {key} raced with some other cleanup, this should never happen", SpanByte.ToShortString(k));
                             }
@@ -448,14 +441,7 @@ namespace Garnet.server
         /// <summary>
         /// True if a pending request to drop the DiskANN index behind this _specific_ key exists.
         /// </summary>
-        public bool DropRequested(ReadOnlySpan<byte> key)
-        {
-#if NET9_0_OR_GREATER
-            return requestedDropsLookup.ContainsKey(key);
-#else
-            return requestedDrops.ContainsKey(key.ToArray());
-#endif
-        }
+        public bool DropRequested(ReadOnlySpan<byte> key) => requestedDrops.Contains(key);
 
         /// <summary>
         /// Block until <see cref="DropRequested(ReadOnlySpan{byte})"/> would return false.
@@ -464,12 +450,7 @@ namespace Garnet.server
         /// </summary>
         public void WaitForDiskANNIndexDrop(ReadOnlySpan<byte> key)
         {
-#if NET9_0_OR_GREATER
-            while (requestedDropsLookup.ContainsKey(key))
-#else
-            var keyBytes = key.ToArray();
-            while (requestedDrops.ContainsKey(keyBytes))
-#endif
+            while (requestedDrops.Contains(key))
             {
                 _ = Thread.Yield();
             }
@@ -530,10 +511,7 @@ namespace Garnet.server
 
             // The discovery pass itself is cleanup work: it can still be enumerating potentiallyDeleted
             // and feeding the request-cleanup channel, so it must be visible to a drain until it ends.
-            cleanupTracker.RegisterCleanup();
-            _ = Task.Run(() => QueueCleanups(this));
-
-            static void QueueCleanups(VectorManager self)
+            _ = cleanupTracker.RunTrackedAsync(this, static self =>
             {
                 try
                 {
@@ -595,10 +573,9 @@ namespace Garnet.server
                 }
                 finally
                 {
-                    self.cleanupTracker.OnCleanupComplete();
                     _ = Interlocked.Decrement(ref self.postCheckpointTasksRunning);
                 }
-            }
+            });
         }
     }
 }

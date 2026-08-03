@@ -212,10 +212,7 @@ namespace Garnet.server
             requestCleanupTask = RunRequestCleanupTaskAsync();
             requestDropTask = RunRequestDropTaskAsync();
 
-            requestedDrops = new(ByteArrayComparer.Instance);
-#if NET9_0_OR_GREATER
-            requestedDropsLookup = requestedDrops.GetAlternateLookup<ReadOnlySpan<byte>>();
-#endif
+            requestedDrops = new(cleanupTracker);
 
             potentiallyDeleted = [];
 
@@ -676,9 +673,7 @@ namespace Garnet.server
             // It's possible for an index to be recovered from disk but never initialized, which means we need no drop
             if (indexPtr != 0)
             {
-                // The drop is registered before it is added, so a concurrent drain cannot observe an
-                // empty pipeline in the window between the add and the wake.
-                if (!cleanupTracker.RegisterAndPublish((requestedDrops, Key: key.ToArray(), Value: (context, indexPtr)), static s => s.requestedDrops.TryAdd(s.Key, s.Value)))
+                if (!requestedDrops.TryAdd(key.ToArray(), (context, indexPtr)))
                 {
                     throw new GarnetException($"Drop triggered multiple times for same index: {SpanByte.ToShortString(key)}");
                 }
