@@ -149,7 +149,12 @@ namespace Garnet.server
                     throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
                 }
 
+                await TestHookPauseInNativeDropAsync().ConfigureAwait(false);
+
+                // Set after the pause: ActiveThreadSession is [ThreadStatic] and the pause can resume on
+                // a different pool thread.
                 ActiveThreadSession = dropSession.storageSession;
+
                 try
                 {
                     // Process all pending drops
@@ -316,9 +321,6 @@ namespace Garnet.server
                     // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
                     //
                     // So we use to different contexts, one to scan (strings) and one to delete (vectors)
-                    ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
-                    ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
-
                     ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
 
                     HashSet<ulong> needCleanup = null;
@@ -345,6 +347,15 @@ namespace Garnet.server
                         // Previous run already got here, so bail
                         continue;
                     }
+
+                    // Test seam: park with the needCleanup snapshot built but before the delete-scan,
+                    // so a test can stream a record into one of those namespaces and prove the scan deletes it.
+                    await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan).ConfigureAwait(false);
+
+                    // Taken after the pause so no ref local crosses the await.
+                    // One context to scan (strings) and one to delete (vectors).
+                    ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
+                    ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
 
                     PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
 
@@ -430,6 +441,29 @@ namespace Garnet.server
                 _ = Thread.Yield();
             }
         }
+
+        /// <summary>
+        /// Block until the whole cleanup pipeline has finished. Call at store-emptying boundaries (FLUSH,
+        /// replica full sync) AFTER the store is emptied, and never while cleanup is paused.
+        /// </summary>
+        public Task WaitForCleanupCompleteAsync()
+        {
+            // A marking pass that faults leaves its contexts marked with no scan queued. The caller has
+            // already emptied the store, so scheduling a scan here retires those stranded marks with no
+            // live key to lose.
+            //
+            // TODO: a pass still in flight can mark contexts after this scan was queued and then fault,
+            // leaving marks with no scan and the barrier returning with cleanup still owed. Re-checking
+            // for marks after the wait and repeating would close this.
+            _ = cleanupTaskChannel.TryPublish();
+
+            return cleanupWorkCounter.WaitAllCleanupsAsync();
+        }
+
+        /// <summary>
+        /// Synchronous wrapper over <see cref="WaitForCleanupCompleteAsync"/>.
+        /// </summary>
+        public void WaitForCleanupComplete() => AsyncUtils.BlockingWait(WaitForCleanupCompleteAsync());
 
         /// <summary>
         /// Called when a Vector Set is discovered (typically via compaction) to _potentially_ be deleted.

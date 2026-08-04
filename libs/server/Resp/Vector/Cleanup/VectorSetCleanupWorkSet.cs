@@ -32,6 +32,14 @@ namespace Garnet.server
         }
 
         /// <summary>
+        /// Whether any work is pending. Diagnostic only - to wait for quiescence use
+        /// <see cref="VectorSetCleanupWorkCounter.WaitAllCleanupsAsync"/>.
+        /// </summary>
+        public bool IsEmpty => entries.IsEmpty;
+
+        public int Count => entries.Count;
+
+        /// <summary>
         /// Whether work is still pending for <paramref name="key"/>.
         /// </summary>
         public bool Contains(ReadOnlySpan<byte> key)
