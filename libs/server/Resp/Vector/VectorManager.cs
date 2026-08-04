@@ -204,18 +204,15 @@ namespace Garnet.server
             vectorSetLocks = new(vectorSetReplayCount);
 
             this.getTempSession = getTempSession;
-            cleanupTaskChannel = Channel.CreateUnbounded<object>(new() { SingleWriter = false, SingleReader = true, AllowSynchronousContinuations = false });
-            requestCleanupTaskChannel = Channel.CreateUnbounded<(ulong Context, TaskCompletionSource Completion)>(new() { SingleWriter = false, SingleReader = true, AllowSynchronousContinuations = false });
+            cleanupTaskChannel = new(cleanupTracker);
+            requestCleanupTaskChannel = new(cleanupTracker);
             requestDropTaskChannel = Channel.CreateUnbounded<object>(new() { SingleWriter = false, SingleReader = true, AllowSynchronousContinuations = false });
 
             cleanupTask = RunCleanupTaskAsync();
             requestCleanupTask = RunRequestCleanupTaskAsync();
             requestDropTask = RunRequestDropTaskAsync();
 
-            requestedDrops = new(ByteArrayComparer.Instance);
-#if NET9_0_OR_GREATER
-            requestedDropsLookup = requestedDrops.GetAlternateLookup<ReadOnlySpan<byte>>();
-#endif
+            requestedDrops = new(cleanupTracker);
 
             potentiallyDeleted = [];
 
@@ -367,7 +364,7 @@ namespace Garnet.server
             }
 
             // Resume any cleanups we didn't complete before recovery
-            _ = cleanupTaskChannel.Writer.TryWrite(null);
+            _ = cleanupTaskChannel.TryPublish(null);
         }
 
         /// <summary>
@@ -426,19 +423,11 @@ namespace Garnet.server
             AsyncUtils.BlockingWait(requestDropTaskChannel.Reader.Completion);
             AsyncUtils.BlockingWait(requestDropTask);
 
-            // Wait for any _marking_ of cleanup state to finish. PauseCleanupAsync callers MUST
-            // have called ResumeCleanup before reaching here, otherwise the cleanup task
-            // is permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
-            requestCleanupTaskChannel.Writer.Complete();
-            AsyncUtils.BlockingWait(requestCleanupTaskChannel.Reader.Completion);
-            AsyncUtils.BlockingWait(requestCleanupTask);
-
-            // Wait for any in progress cleanup to finish. PauseCleanupAsync callers MUST
-            // have called ResumeCleanup before reaching here, otherwise the cleanup task
-            // is permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
-            cleanupTaskChannel.Writer.Complete();
-            AsyncUtils.BlockingWait(cleanupTaskChannel.Reader.Completion);
-            AsyncUtils.BlockingWait(cleanupTask);
+            // Wait for any _marking_ of cleanup state, then any in progress cleanup, to finish. PauseCleanupAsync
+            // callers MUST have called ResumeCleanup before reaching here, otherwise the cleanup task is
+            // permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
+            requestCleanupTaskChannel.CompleteAndWaitForConsumer(requestCleanupTask);
+            cleanupTaskChannel.CompleteAndWaitForConsumer(cleanupTask);
 
             // Cleanup task has fully drained, so nothing else can take this gate.
             cleanupGate.Dispose();
@@ -633,7 +622,7 @@ namespace Garnet.server
 
             var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            if (!requestCleanupTaskChannel.Writer.TryWrite((context, tcs)))
+            if (!requestCleanupTaskChannel.TryPublish((context, tcs)))
             {
                 throw new GarnetException("Could not submit request for Vector Set cleanup, aborting delete");
             }

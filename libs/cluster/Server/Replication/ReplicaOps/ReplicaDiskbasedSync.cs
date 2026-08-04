@@ -150,7 +150,10 @@ namespace Garnet.cluster
                         vectorManager?.ResumeCleanup();
                     }
 
-                    // Suspend background tasks that may interfere with AOF
+                    // Drain Vector Set cleanup before streaming, or it can delete a namespace the stream writes into.
+                    if (vectorManager != null)
+                        await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
+
                     await storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
 
                     // Stop advance time task when reconfiguring node to be replica

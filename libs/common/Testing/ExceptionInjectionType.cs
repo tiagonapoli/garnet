@@ -86,6 +86,11 @@ namespace Garnet.common
         /// </summary>
         VectorSet_Interrupt_Delete_3,
         /// <summary>
+        /// During deletion of a Vector Set, before the cleanup marking pass has acquired any state - so
+        /// before it has observed any of the requests it is responsible for completing.
+        /// </summary>
+        VectorSet_Interrupt_Delete_4,
+        /// <summary>
         /// Failure after handler registered in activeHandlers but before Start() is called.
         /// This means no SAEA receive loop is running, so the only cleanup path is public Dispose().
         /// </summary>
@@ -125,5 +130,17 @@ namespace Garnet.common
         /// Vector Set: pause in the index-recreate window before RMW write refreshed index pointer back to the main store.
         /// </summary>
         VectorSet_Pause_Before_Recreate_Rmw,
+
+        /// <summary>
+        /// Vector Set: pause inside the background native-index drop task after a drop has been picked
+        /// up from the pending-drop set but before DiskANN DropIndex runs.
+        /// </summary>
+        VectorSet_Pause_In_Native_Index_Drop,
+
+        /// <summary>
+        /// Vector Set: pause inside the background cleanup scan after the <c>needCleanup</c> snapshot
+        /// has been built but before the delete-scan (<c>IterateLookupSnapshot</c>) runs.
+        /// </summary>
+        VectorSet_Pause_In_Cleanup_Scan,
     }
 }

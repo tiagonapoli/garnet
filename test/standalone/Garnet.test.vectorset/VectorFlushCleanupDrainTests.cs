@@ -1,0 +1,102 @@
+﻿// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+// Injection can only be armed in DEBUG (ExceptionInjectionHelper.EnableException is [Conditional("DEBUG")]).
+#if DEBUG
+
+using NUnit.Framework;
+using NUnit.Framework.Legacy;
+using StackExchange.Redis;
+
+namespace Garnet.test
+{
+    /// <summary>
+    /// Tests that <c>VectorManager.WaitForCleanupComplete</c> fully drains the background cleanup pipeline
+    /// after a FLUSHDB, and that FLUSHDB itself leaves the reservation state coherent.
+    /// </summary>
+    [TestFixture]
+    public class VectorFlushCleanupDrainTests : VectorSetCleanupTestBase
+    {
+        /// <summary>
+        /// Create several Vector Sets, each in its own context, then FLUSHDB and drain. After the
+        /// barrier returns the reservation bitmap, the dirty-metadata set, and the pending-drop set
+        /// must all be empty, and no records may remain in any namespace.
+        /// </summary>
+        [Test]
+        public void FlushDbDrainsAllVectorSetCleanup()
+        {
+            const int Sets = 5;
+            const int ElementsPerSet = 200;
+
+            var vectorManager = VectorManager;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            var adminServer = redis.GetServers()[0];
+
+            var preCreateCalls = vectorManager.Service.CreateIndexCalls;
+            var preDropCalls = vectorManager.Service.DropIndexCalls;
+
+            for (var s = 0; s < Sets; s++)
+            {
+                PopulateVectorSet(db, $"{{vs}}set-{s}", ElementsPerSet, seed: 2026_08_01 + s);
+            }
+
+            ClassicAssert.AreEqual(Sets, vectorManager.TestHookGetReservedContextCount(), "each populated Vector Set should reserve exactly one context");
+
+            adminServer.FlushDatabase(0);
+
+            // Drain the whole cleanup pipeline: request-cleanup marking, checkpoint discovery, the
+            // cleanup scan, and native DiskANN drops queued by emptying the store.
+            vectorManager.WaitForCleanupComplete();
+
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetReservedContextCount(), "FLUSHDB must leave no reserved Vector Set context");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetDirtyContextMetadataCount(), "FLUSHDB must leave no dirty context metadata");
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetPendingDropCount(), "the drain must complete every pending native index drop");
+
+            var dbSize = (long)db.Execute("DBSIZE");
+            ClassicAssert.AreEqual(0, dbSize, "FLUSHDB must remove every record across all namespaces");
+
+            var finalCreateCalls = vectorManager.Service.CreateIndexCalls;
+            var finalDropCalls = vectorManager.Service.DropIndexCalls;
+
+            // Every native index that was created must have been dropped by the drain.
+            ClassicAssert.Greater(finalCreateCalls, preCreateCalls, "populating the Vector Sets should have created native indexes");
+            ClassicAssert.AreEqual(finalCreateCalls - preCreateCalls, finalDropCalls - preDropCalls, "every created native index must be dropped by the drain");
+        }
+
+        /// <summary>
+        /// After a FLUSHDB drains the pipeline, creating a brand-new Vector Set must succeed. A stale
+        /// dirty-context-metadata entry left by the flush would fault the first UpdateContextMetadata,
+        /// so this is a regression guard for the FLUSHDB reset coherence.
+        /// </summary>
+        [Test]
+        public void FreshVectorSetAfterFlushDbSucceeds()
+        {
+            var vectorManager = VectorManager;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            var adminServer = redis.GetServers()[0];
+
+            for (var s = 0; s < 3; s++)
+            {
+                PopulateVectorSet(db, $"{{vs}}pre-{s}", 100, seed: 2026_08_10 + s);
+            }
+
+            adminServer.FlushDatabase(0);
+            vectorManager.WaitForCleanupComplete();
+
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetReservedContextCount());
+            ClassicAssert.AreEqual(0, vectorManager.TestHookGetDirtyContextMetadataCount());
+
+            // A fresh Vector Set must create cleanly on top of the reset reservation state.
+            PopulateVectorSet(db, "{vs}fresh", 100, seed: 2026_08_20);
+
+            ClassicAssert.AreEqual(1, vectorManager.TestHookGetReservedContextCount(), "the fresh Vector Set should reserve exactly one context after the reset");
+            ClassicAssert.IsTrue(db.KeyExists("{vs}fresh"), "the fresh Vector Set must persist after being created post-FLUSHDB");
+        }
+    }
+}
+
+#endif

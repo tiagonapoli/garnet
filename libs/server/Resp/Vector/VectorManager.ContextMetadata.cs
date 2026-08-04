@@ -57,8 +57,12 @@ namespace Garnet.server
             private HashSlots slots;
 
 
-            public readonly bool IsEmpty
-            => inUse == 0 && migrating == 0 && cleaningUp == 0;
+            /// <summary>
+            /// Bitmask of the contexts in this block reserved for any reason (in use, cleaning up, or migrating).
+            /// </summary>
+            internal readonly ulong ReservedMask => inUse | cleaningUp | migrating;
+
+            public readonly bool IsEmpty => ReservedMask == 0;
 
             public readonly bool IsInUse(bool allowZero, ushort context)
             {
@@ -421,6 +425,10 @@ namespace Garnet.server
             {
                 this.manager = manager;
 
+                // Quiesce the background cleanup scan first, before any other lock: it holds cleanupGate for
+                // its whole iteration, so this both waits out an in-flight scan and blocks a new one.
+                this.manager.cleanupGate.Wait();
+
                 // Stop other Vector Set operations
                 this.manager.vectorSetLocks.AcquireAllExclusiveLock(out lockToken);
 
@@ -437,14 +445,19 @@ namespace Garnet.server
                     return;
                 }
 
-                // Clear out all context data
+                // Clear out all context data. dirtyContextMetadatas indexes into contextMetadatas, so stale
+                // entries would fault the next UpdateContextMetadata.
                 manager.contextMetadatas = new ContextMetadata[1];
+                manager.dirtyContextMetadatas.Clear();
 
                 // Allow Vector Set operations again
                 manager.vectorSetLocks.ReleaseLock(lockToken);
 
                 // Allow new contexts to be issued
                 Monitor.Exit(manager);
+
+                // Resume the background cleanup scan
+                _ = manager.cleanupGate.Release();
             }
         }
 

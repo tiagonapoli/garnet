@@ -1388,6 +1388,10 @@ namespace Garnet.test
         public void InterruptedVectorSetDelete_AfterMark()
         => InterruptedVectorSetDelete(ExceptionInjectionType.VectorSet_Interrupt_Delete_3);
 
+        [Test]
+        public void InterruptedVectorSetDelete_BeforeMarkObservesRequest()
+        => InterruptedVectorSetDelete(ExceptionInjectionType.VectorSet_Interrupt_Delete_4);
+
         private void InterruptedVectorSetDelete(ExceptionInjectionType faultLocation)
         {
             TestUtils.IgnoreIfExceptionInjectionDisabled();
