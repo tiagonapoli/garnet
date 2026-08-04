@@ -204,12 +204,13 @@ namespace Tsavorite.test
         }
 
         /// <summary>
-        /// The leak itself: after an exception escapes <c>OnPagesClosedWorker</c>, the ownership token is
-        /// still set even though no thread is running the worker any more. Everything else in this fixture
-        /// is a consequence of this state.
+        /// The leak itself: an exception must not carry the close-ownership token away with it. If
+        /// <c>OnPagesClosedWorker</c> unwinds while still holding the token, the pipeline is left with an owner
+        /// that no longer exists and <c>ClosedUntilAddress</c> can never advance again. Everything else in this
+        /// fixture is a consequence of that state.
         /// </summary>
         [Test, Category("TsavoriteKV")]
-        public void EvictFailureStrandsCloseOwnershipToken()
+        public void EvictFailureReleasesCloseOwnershipToken()
         {
             FillAndEvictCleanly(0, 128);
             ClassicAssert.AreEqual(0, OngoingCloseUntilAddress,
@@ -221,12 +222,10 @@ namespace Tsavorite.test
             ClassicAssert.Greater(injector.ThrownCount, 0,
                 "Precondition: the injected OnEvict failure never fired, so the close worker was never unwound.");
 
-            // The worker never reached its release CAS, so the token is stranded with no owner running.
-            ClassicAssert.AreNotEqual(0, OngoingCloseUntilAddress,
-                "OnPagesClosedWorker unwound without releasing OngoingCloseUntilAddress: the close pipeline now"
-                + " has a phantom owner and ClosedUntilAddress can never advance again.");
-            ClassicAssert.Less(store.hlogBase.ClosedUntilAddress, OngoingCloseUntilAddress,
-                "ClosedUntilAddress must be behind the stranded token — that gap is what later waiters spin on.");
+            ClassicAssert.AreEqual(0, OngoingCloseUntilAddress,
+                "OnPagesClosedWorker unwound without releasing OngoingCloseUntilAddress. The close pipeline now has"
+                + " a phantom owner: every later OnPagesClosed defers to it, so ClosedUntilAddress can never advance"
+                + " and every waiter on it spins in Thread.Yield() forever.");
         }
 
         /// <summary>
@@ -254,7 +253,7 @@ namespace Tsavorite.test
             Fill(1_000, 128);
             EvictWithInjectedFailure();
 
-            ClassicAssert.AreNotEqual(0, OngoingCloseUntilAddress, "Precondition: the ownership token must be stranded.");
+            ClassicAssert.Greater(injector.ThrownCount, 0, "Precondition: the injected OnEvict failure never fired.");
 
             var completed = RunWithTimeout(() => store.Reset(), out var error);
 
@@ -277,7 +276,7 @@ namespace Tsavorite.test
             Fill(1_000, 128);
             EvictWithInjectedFailure();
 
-            ClassicAssert.AreNotEqual(0, OngoingCloseUntilAddress, "Precondition: the ownership token must be stranded.");
+            ClassicAssert.Greater(injector.ThrownCount, 0, "Precondition: the injected OnEvict failure never fired.");
 
             Fill(2_000, 128);
             var completed = RunWithTimeout(() => store.Log.FlushAndEvict(wait: true), out var error);

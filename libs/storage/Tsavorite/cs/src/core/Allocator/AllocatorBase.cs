@@ -403,8 +403,12 @@ namespace Tsavorite.core
                             //       OnPagesClosedWorker may still be running.
                             // In both cases, calling FreeAllAllocatedPages while the worker is mid-flight
                             // would race with its FreePage calls and corrupt page state.
-                            while (ClosedUntilAddress < newBeginAddress)
-                                _ = Thread.Yield();
+                            //
+                            // Reset() runs on a quiesced store, so "a worker is still running" cannot stay
+                            // true indefinitely here. If the wait stops making progress, the ownership token
+                            // belongs to a worker that already unwound; take the pipeline over and close the
+                            // range on this thread rather than spinning on it forever.
+                            WaitForClose(newBeginAddress);
 
                             FreeAllAllocatedPages();
                         }
@@ -793,6 +797,12 @@ namespace Tsavorite.core
             ClosedUntilAddress = firstValidAddress;
             FlushedUntilAddress = firstValidAddress;
             BeginAddress = firstValidAddress;
+
+            // ClosedUntilAddress has just been rewound, so any close ownership published against the previous
+            // log generation is meaningless here — and because it is only ever cleared from inside
+            // OnPagesClosedWorker, a stale value would outlive that generation and make every later
+            // OnPagesClosed defer to an owner that no longer exists, silently disabling page closing for good.
+            OngoingCloseUntilAddress = 0;
 
             // Initialize TailAddress (the address of the next allocaton); this will always be nonzero.
             TailPageOffset.Page = (int)GetPage(firstValidAddress);
@@ -1506,7 +1516,78 @@ namespace Tsavorite.core
             }
         }
 
+        /// <summary>
+        /// Waits for <see cref="ClosedUntilAddress"/> to reach <paramref name="targetAddress"/>, taking over the
+        /// close pipeline if the wait stalls.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="OnPagesClosed(long)"/> returns without doing anything when <c>OngoingCloseUntilAddress</c> is
+        /// non-zero, on the assumption that whoever published it is inside <see cref="OnPagesClosedWorker"/> and
+        /// will close our range too. If that worker unwound, the token is stranded and no thread will ever advance
+        /// <see cref="ClosedUntilAddress"/> — an unconditional spin here would then burn a core forever. Callers of
+        /// this helper (currently only <c>ResetCore</c>) run on a quiesced store, so a genuine worker must finish
+        /// promptly; a stall means the owner is gone, and we reclaim the pipeline and close the range ourselves.
+        /// </remarks>
+        private void WaitForClose(long targetAddress)
+        {
+            var stallThreshold = Stopwatch.Frequency;   // one second
+            var lastProgressTimestamp = Stopwatch.GetTimestamp();
+            var lastClosedUntilAddress = ClosedUntilAddress;
+
+            while (ClosedUntilAddress < targetAddress)
+            {
+                if (disposed)
+                    return;
+
+                var closedUntilAddress = ClosedUntilAddress;
+                if (closedUntilAddress != lastClosedUntilAddress)
+                {
+                    lastClosedUntilAddress = closedUntilAddress;
+                    lastProgressTimestamp = Stopwatch.GetTimestamp();
+                }
+                else if (Stopwatch.GetTimestamp() - lastProgressTimestamp > stallThreshold)
+                {
+                    // No progress for a full second on a quiesced store: the close owner is gone. Reclaim the
+                    // pipeline and drive the close from this thread.
+                    logger?.LogWarning("Close pipeline stalled at ClosedUntilAddress {closedUntilAddress} waiting for {targetAddress};"
+                        + " reclaiming ownership from OngoingCloseUntilAddress {ongoingCloseUntilAddress}",
+                        closedUntilAddress, targetAddress, OngoingCloseUntilAddress);
+
+                    _ = MonotonicUpdate(ref SafeHeadAddress, targetAddress, out _);
+                    _ = Interlocked.Exchange(ref OngoingCloseUntilAddress, targetAddress);
+                    OnPagesClosedWorker();
+
+                    lastProgressTimestamp = Stopwatch.GetTimestamp();
+                    lastClosedUntilAddress = ClosedUntilAddress;
+                    continue;
+                }
+
+                _ = Thread.Yield();
+            }
+        }
+
         private void OnPagesClosedWorker()
+        {
+            // Ownership of the close pipeline is published by setting OngoingCloseUntilAddress non-zero; every
+            // subsequent OnPagesClosed defers to whoever holds it. If this method unwinds (an application
+            // OnEvict callback, an eviction-observer, or EvictRecordsInRange throwing) without clearing the
+            // token, the pipeline is left with an owner that no longer exists: ClosedUntilAddress can never
+            // advance again, and every waiter on it spins in Thread.Yield() forever. Release ownership on the
+            // exception path so the range is simply retried by the next caller.
+            var completed = false;
+            try
+            {
+                OnPagesClosedWorkerCore();
+                completed = true;
+            }
+            finally
+            {
+                if (!completed)
+                    _ = Interlocked.Exchange(ref OngoingCloseUntilAddress, 0);
+            }
+        }
+
+        private void OnPagesClosedWorkerCore()
         {
             while (true)
             {
