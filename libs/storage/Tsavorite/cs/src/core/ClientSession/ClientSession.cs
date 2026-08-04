@@ -540,10 +540,8 @@ namespace Tsavorite.core
         internal void UnsafeResumeThread<TSessionFunctionsWrapper>(TSessionFunctionsWrapper sessionFunctions)
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
-            // We do not track any "acquired" state here; if someone mixes calls between safe and unsafe contexts, they will 
-            // get the "trying to acquire already-acquired epoch" error.
             store.epoch.Resume();
-            store.InternalRefresh<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions);
+            store.InternalRefreshAfterAcquire<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions);
         }
 
         /// <summary>

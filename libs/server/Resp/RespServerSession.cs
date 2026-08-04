@@ -95,6 +95,12 @@ namespace Garnet.server
         internal byte* dcurr, dend;
         bool toDispose;
 
+        /// <summary>
+        /// Cached timestamp (ticks) for the current batch, set once per TryConsumeMessages call.
+        /// Commands that need UtcNow.Ticks (e.g. SETEX) use this to avoid repeated clock reads.
+        /// </summary>
+        internal long batchTimestampTicks;
+
         int opCount;
 
         // Thread ID performing a synchronous self-broadcast (set only around SubscribeBroker.PublishNow).
@@ -114,6 +120,9 @@ namespace Garnet.server
         internal ReadSessionState readSessionState;
 
         readonly IGarnetAuthenticator _authenticator;
+
+        // True when no ACL enforcement is needed (GarnetNoAuthAuthenticator with all-permissions default user)
+        readonly bool _skipACLCheck;
 
         // Current active database ID
         internal int activeDbId;
@@ -282,6 +291,7 @@ namespace Garnet.server
             this.storeWrapper = storeWrapper;
             this.subscribeBroker = subscribeBroker;
             this._authenticator = authenticator ?? storeWrapper.serverOptions.AuthSettings?.CreateAuthenticator(this.storeWrapper) ?? new GarnetNoAuthAuthenticator();
+            this._skipACLCheck = !this._authenticator.HasACLSupport && this._authenticator.IsAuthenticated;
 
             if (storeWrapper.serverOptions.EnableLua && enableScripts)
                 sessionScriptCache = new(storeWrapper, _authenticator, storeWrapper.luaTimeoutManager, logger);
@@ -481,6 +491,7 @@ namespace Garnet.server
             bytesRead = bytesReceived;
             if (!txnSkip)
                 readHead = 0;
+            batchTimestampTicks = DateTimeOffset.UtcNow.Ticks;
             try
             {
                 LatencyMetrics?.Start(LatencyMetricsType.NET_RS_LAT);

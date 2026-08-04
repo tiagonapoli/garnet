@@ -22,6 +22,29 @@ namespace Tsavorite.core
                 SystemState.Equal(sessionFunctions.Ctx.SessionState, stateMachineDriver.SystemState))
                 return;
 
+            InternalRefreshSlowPath<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions);
+        }
+
+        /// <summary>
+        /// Lightweight refresh after Acquire() which already set localCurrentEpoch and checked drainCount.
+        /// Skips the redundant ProtectAndDrain call.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void InternalRefreshAfterAcquire<TInput, TOutput, TContext, TSessionFunctionsWrapper>(TSessionFunctionsWrapper sessionFunctions)
+            where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
+        {
+            // Fast path: check if we are in an unchanged REST phase
+            if (sessionFunctions.Ctx.SessionState.Phase == Phase.REST &&
+                SystemState.Equal(sessionFunctions.Ctx.SessionState, stateMachineDriver.SystemState))
+                return;
+
+            InternalRefreshSlowPath<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void InternalRefreshSlowPath<TInput, TOutput, TContext, TSessionFunctionsWrapper>(TSessionFunctionsWrapper sessionFunctions)
+            where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
+        {
             while (true)
             {
                 // Acquire a session-local copy of the system state
@@ -38,8 +61,6 @@ namespace Tsavorite.core
                         break;
                     case Phase.PREPARE_GROW:
                         // Session needs to wait in PREPARE_GROW phase unless it is in an active transaction.
-                        // We cannot avoid spinning on hash table growth: operations (and transactions) in (v) have to drain
-                        // out before we grow the hash table because the lock table is co-located with the hash table.
                         if (!sessionFunctions.Ctx.isAcquiredTransactional)
                         {
                             epoch.ProtectAndDrain();

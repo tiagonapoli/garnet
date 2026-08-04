@@ -17,7 +17,12 @@ namespace Tsavorite.core
         internal RecordSource<TStoreFunctions, TAllocator> recSrc;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal OperationStackContext(long keyHash) => hei = new(keyHash);
+        internal OperationStackContext(long keyHash)
+        {
+            hei = new(keyHash);
+            Unsafe.SkipInit(out recSrc);
+            newLogicalAddress = kInvalidAddress;
+        }
 
         /// <summary>
         /// Sets <see cref="recSrc"/> to the current <see cref="hei"/>.<see cref="HashEntryInfo.Address"/>, which is the address it had
