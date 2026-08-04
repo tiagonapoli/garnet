@@ -86,6 +86,7 @@ namespace Garnet.server
             }
         }
 
+        private readonly VectorSetCleanupWorkCounter cleanupWorkCounter = new();
         private readonly VectorSetCleanupWorkChannel<object> cleanupTaskChannel;
         private readonly VectorSetCleanupWorkChannel<(ulong Context, TaskCompletionSource MarkCompleted)> requestCleanupTaskChannel;
         private readonly VectorSetCleanupWorkChannel<object> requestDropTaskChannel;
@@ -136,8 +137,10 @@ namespace Garnet.server
         {
             while (await requestDropTaskChannel.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Every pass services the whole of requestedDrops, so the backlog collapses into one pass
-                requestDropTaskChannel.DrainPending();
+                // Every pass services the whole of requestedDrops, so the backlog collapses into one pass.
+                // Each entry registered before its wake-up was published and is released by TryComplete, so
+                // releasing the batch here cannot let the count reach zero while a drop is still pending.
+                using var batch = requestDropTaskChannel.ReadAllAvailable();
 
                 // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
                 using var dropSession = (RespServerSession)getTempSession();
@@ -205,6 +208,10 @@ namespace Garnet.server
 
                 var completions = new List<TaskCompletionSource>();
 
+                // Disposed at the end of this iteration, after cleanupTaskChannel.TryPublish below has
+                // registered the successor, so the count cannot dip to zero mid-handoff.
+                using var batch = requestCleanupTaskChannel.ReadAllAvailable();
+
                 try
                 {
                     // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
@@ -219,8 +226,8 @@ namespace Garnet.server
                     var needsUpdate = false;
                     lock (this)
                     {
-                        // Read all pending requests so we can do one update
-                        while (requestCleanupTaskChannel.TryRead(out var t))
+                        // One update for every request the batch owns
+                        foreach (var t in batch.Items)
                         {
                             if (t.MarkCompleted != null)
                             {
@@ -290,13 +297,10 @@ namespace Garnet.server
         /// </summary>
         private async Task RunCleanupTaskAsync()
         {
-            while (await cleanupTaskChannel.WaitToReadAsync().ConfigureAwait(false))
+            // Each item is one outstanding scan; the lease completes it on every exit path
+            while (await cleanupTaskChannel.WaitToAcquireAsync().ConfigureAwait(false) is { } scan)
             {
-                // Each item is one outstanding scan
-                if (!cleanupTaskChannel.TryRead(out _))
-                {
-                    continue;
-                }
+                using var lease = scan;
 
                 await cleanupGate.WaitAsync().ConfigureAwait(false);
 
@@ -457,7 +461,10 @@ namespace Garnet.server
         public unsafe void CheckpointCompleted()
         {
             _ = Interlocked.Increment(ref postCheckpointTasksRunning);
-            _ = Task.Run(() => QueueCleanups(this));
+
+            // The discovery pass is itself cleanup work: it can still be feeding the request-cleanup
+            // channel, so it must be visible to a drain until it ends.
+            _ = cleanupWorkCounter.RunCountedTaskAsync(this, QueueCleanups);
 
             static void QueueCleanups(VectorManager self)
             {

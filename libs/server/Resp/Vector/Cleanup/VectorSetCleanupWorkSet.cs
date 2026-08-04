@@ -9,17 +9,22 @@ using System.Threading;
 namespace Garnet.server
 {
     /// <summary>
-    /// A keyed set of outstanding Vector Set cleanup work.
+    /// A keyed set of outstanding cleanup work whose membership <em>is</em> its
+    /// <see cref="VectorSetCleanupWorkCounter"/> registration: adding registers, and completing both removes the
+    /// entry and releases the registration. The two moving together stops a drain returning while an entry is
+    /// still visible to callers polling for it.
     /// </summary>
     internal sealed class VectorSetCleanupWorkSet<TValue>
     {
+        private readonly VectorSetCleanupWorkCounter counter;
         private readonly ConcurrentDictionary<byte[], TValue> entries;
 #if NET9_0_OR_GREATER
         private readonly ConcurrentDictionary<byte[], TValue>.AlternateLookup<ReadOnlySpan<byte>> lookup;
 #endif
 
-        public VectorSetCleanupWorkSet()
+        public VectorSetCleanupWorkSet(VectorSetCleanupWorkCounter counter)
         {
+            this.counter = counter;
             entries = new(ByteArrayComparer.Instance);
 #if NET9_0_OR_GREATER
             lookup = entries.GetAlternateLookup<ReadOnlySpan<byte>>();
@@ -53,14 +58,38 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Add work for <paramref name="key"/>. False if work is already pending for it.
+        /// Register a unit of work and add it. Returns false, leaving nothing registered, if work is already
+        /// pending for <paramref name="key"/>.
         /// </summary>
-        public bool TryAdd(byte[] key, TValue value) => entries.TryAdd(key, value);
+        public bool TryAdd(byte[] key, TValue value)
+        {
+            counter.RegisterCleanup();
+
+            if (entries.TryAdd(key, value))
+            {
+                return true;
+            }
+
+            counter.OnCleanupComplete();
+            return false;
+        }
 
         /// <summary>
-        /// Remove the entry, marking its work done. False if it was not present.
+        /// Remove the entry and release its registration. False if it was not present.
+        ///
+        /// Removed before released: between the two the count is still non-zero so a drain keeps waiting.
+        /// Releasing first would let the count reach zero while <see cref="Contains"/> still reports pending.
         /// </summary>
-        public bool TryComplete(byte[] key) => entries.TryRemove(key, out _);
+        public bool TryComplete(byte[] key)
+        {
+            if (!entries.TryRemove(key, out _))
+            {
+                return false;
+            }
+
+            counter.OnCleanupComplete();
+            return true;
+        }
 
         /// <summary>
         /// Iterate the pending work, so a consumer can service the whole backlog in one pass.

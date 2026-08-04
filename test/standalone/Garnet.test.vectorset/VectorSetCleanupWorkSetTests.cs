@@ -19,25 +19,37 @@ namespace Garnet.test
         private static byte[] Key(string s) => Encoding.UTF8.GetBytes(s);
 
         [Test]
-        public void AddedWorkIsPendingUntilCompleted()
+        public void AddAndCompleteTrackTheEntry()
         {
-            var workSet = new VectorSetCleanupWorkSet<int>();
-
-            ClassicAssert.IsFalse(workSet.Contains(Key("a")));
-            ClassicAssert.IsFalse(workSet.TryComplete(Key("a")));
+            var counter = new VectorSetCleanupWorkCounter();
+            var workSet = new VectorSetCleanupWorkSet<int>(counter);
 
             ClassicAssert.IsTrue(workSet.TryAdd(Key("a"), 1));
             ClassicAssert.IsTrue(workSet.Contains(Key("a")));
-            ClassicAssert.IsFalse(workSet.TryAdd(Key("a"), 2));
+            ClassicAssert.AreEqual(1, counter.Inflight);
 
             ClassicAssert.IsTrue(workSet.TryComplete(Key("a")));
             ClassicAssert.IsFalse(workSet.Contains(Key("a")));
+            ClassicAssert.AreEqual(0, counter.Inflight);
+
+            ClassicAssert.IsFalse(workSet.TryComplete(Key("a")));
+        }
+
+        [Test]
+        public void DuplicateAddRegistersNothing()
+        {
+            var counter = new VectorSetCleanupWorkCounter();
+            var workSet = new VectorSetCleanupWorkSet<int>(counter);
+
+            ClassicAssert.IsTrue(workSet.TryAdd(Key("a"), 1));
+            ClassicAssert.IsFalse(workSet.TryAdd(Key("a"), 2));
+            ClassicAssert.AreEqual(1, counter.Inflight);
         }
 
         [Test]
         public void EntriesCanBeEnumerated()
         {
-            var workSet = new VectorSetCleanupWorkSet<int>();
+            var workSet = new VectorSetCleanupWorkSet<int>(new VectorSetCleanupWorkCounter());
 
             _ = workSet.TryAdd(Key("a"), 1);
             _ = workSet.TryAdd(Key("b"), 2);
@@ -54,7 +66,7 @@ namespace Garnet.test
         [Test]
         public async Task WaitForCompletionBlocksUntilTheEntryIsCompleted()
         {
-            var workSet = new VectorSetCleanupWorkSet<int>();
+            var workSet = new VectorSetCleanupWorkSet<int>(new VectorSetCleanupWorkCounter());
 
             _ = workSet.TryAdd(Key("a"), 1);
 
