@@ -224,3 +224,7 @@ BenchmarkDotNet.Artifacts/
 # Helm chart artifacts
 .cr-release-packages/
 libs/native/bftree-garnet/target/
+
+# TLA+ model checker output (LightEpoch formal verification)
+libs/storage/Tsavorite/cs/test/epoch/formal-verification/tla/states/
+libs/storage/Tsavorite/cs/test/epoch/formal-verification/tla/generated-*.cfg

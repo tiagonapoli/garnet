@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Garnet.LightEpoch.test</AssemblyName>
+    <RootNamespace>Tsavorite.test.epoch</RootNamespace>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>../../../../../../Garnet.snk</AssemblyOriginatorKeyFile>
+    <DelaySign>false</DelaySign>
+    <IsPackable>false</IsPackable>
+    <NoWarn>1701;1702;1591;IDE0130;IDE0065;IDE0007;IDE0048</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- formal-verification/ holds herd7 and TLA+ models plus the self-contained
+         herd7/capture console project; none of it belongs in this test assembly. -->
+    <Compile Remove="formal-verification/**" />
+    <None Remove="formal-verification/**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="NUnit" />
+    <PackageReference Include="NUnit3TestAdapter">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\core\Tsavorite.core.csproj" />
+    <ProjectReference Include="..\..\..\..\..\..\playground\LightEpochLitmus\LightEpochLitmus.csproj" />
+  </ItemGroup>
+
+</Project>

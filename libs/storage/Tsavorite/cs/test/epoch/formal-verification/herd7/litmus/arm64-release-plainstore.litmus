@@ -1,0 +1,16 @@
+AArch64 arm64-release-plainstore
+(* Counterfactual, NOT emitted by any shipped variant.
+   Once lce becomes the slot-ownership word (the fix), Release must clear tid
+   BEFORE lce and the lce clear must carry release ordering. This file shows
+   what happens if that clear were a plain STR: the two stores may be observed
+   out of order, so a thread that wins the claim CAS and writes its own tid can
+   have it wiped by the departing thread's tid clear.
+   Violated when the slot is claimed (lce=1) but its tid was erased. *)
+{ 0:X0=tid; 0:X1=lce; 1:X0=lce; 1:X1=tid; }
+ P0            | P1              ;
+ STR WZR,[X0]  | MOV X2,#0       ;
+ STR XZR,[X1]  | MOV X3,#1       ;
+               | CASAL X2,X3,[X0];
+               | MOV W4,#2       ;
+               | STR W4,[X1]     ;
+exists (lce=1 /\ tid=0)
