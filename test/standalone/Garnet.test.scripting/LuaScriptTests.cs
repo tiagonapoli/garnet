@@ -1811,16 +1811,21 @@ return retArray";
 
             var fullCommands = allCommands.Where(static kv => kv.Value.Flags.HasFlag(RespCommandFlags.NoScript));
 
-            foreach (var (cmd, _) in fullCommands)
+            foreach (var (cmd, info) in fullCommands)
             {
-                var exc = ClassicAssert.Throws<RedisServerException>(() => db.ScriptEvaluate($"redis.call('{cmd}')"));
+                // Arity is validated during parsing, so pad the call out to the declared minimum
+                var args = string.Concat(Enumerable.Repeat(", 'x'", Math.Abs(info.Arity) - 1));
+
+                var exc = ClassicAssert.Throws<RedisServerException>(() => db.ScriptEvaluate($"redis.call('{cmd}'{args})"));
                 ClassicAssert.True(exc.Message.StartsWith("ERR This Redis command is not allowed from script"), $"Allowed NoScript command: {cmd}");
             }
 
-            var subCommands = allCommands.Where(static kv => (kv.Value.SubCommands?.Length ?? 0) > 0).SelectMany(static kv => kv.Value.SubCommands.Where(static t => t.Flags.HasFlag(RespCommandFlags.NoScript)).Select(t => (kv.Key, t.Name.Split('|')[1])));
-            foreach (var (cmd, subCmd) in subCommands)
+            var subCommands = allCommands.Where(static kv => (kv.Value.SubCommands?.Length ?? 0) > 0).SelectMany(static kv => kv.Value.SubCommands.Where(static t => t.Flags.HasFlag(RespCommandFlags.NoScript)).Select(t => (kv.Key, t.Name.Split('|')[1], t.Arity)));
+            foreach (var (cmd, subCmd, arity) in subCommands)
             {
-                var exc = ClassicAssert.Throws<RedisServerException>(() => db.ScriptEvaluate($"redis.call('{cmd}', '{subCmd}')"));
+                var args = string.Concat(Enumerable.Repeat(", 'x'", Math.Abs(arity) - 2));
+
+                var exc = ClassicAssert.Throws<RedisServerException>(() => db.ScriptEvaluate($"redis.call('{cmd}', '{subCmd}'{args})"));
                 ClassicAssert.True(exc.Message.StartsWith("ERR This Redis command is not allowed from script"), $"Allowed NoScript command: {cmd}|{subCmd}");
             }
         }

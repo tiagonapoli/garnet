@@ -70,7 +70,7 @@ namespace Garnet.test
 
             // Check RUNTXP without id
             var e = Assert.Throws<RedisServerException>(() => db.Execute("RUNTXP"));
-            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.RUNTXP));
+            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.RUNTXP).ToLowerInvariant());
             ClassicAssert.AreEqual(expectedErrorMessage, e.Message);
 
             string readkey = "readkey";

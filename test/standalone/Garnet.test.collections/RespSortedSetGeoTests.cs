@@ -544,7 +544,7 @@ namespace Garnet.test
 
             // Check GEOADD without members
             var response = lightClientRequest.SendCommandChunks("GEOADD Sicily NX", bytesSent);
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.GEOADD))}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.GEOADD).ToLowerInvariant())}\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommandChunks("GEOADD Sicily NX XX CH", bytesSent);
@@ -694,11 +694,11 @@ namespace Garnet.test
         {
             using var lightClientRequest = TestUtils.CreateRequest();
             var response = lightClientRequest.SendCommands("GEOADD Sicily 13.361389 38.115556", "PING");
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "GEOADD")}\r\n+PONG\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "geoadd")}\r\n+PONG\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommandChunks("GEOADD Sicily 13.361389 38.115556", bytesSent);
-            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "GEOADD")}\r\n";
+            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "geoadd")}\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
@@ -712,7 +712,7 @@ namespace Garnet.test
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommand("GEOSEARCH Sicily FROMMEMBER a BYRADIUS 1");
-            expectedResponse = "-ERR wrong number of arguments for 'GEOSEARCH' command\r\n";
+            expectedResponse = "-ERR wrong number of arguments for 'geosearch' command\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommand("GEOSEARCH Sicily FROMLONLAT 15 37 FROMMEMBER a BYRADIUS 1 km");
@@ -752,7 +752,7 @@ namespace Garnet.test
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommand("GEORADIUS Sicily 15 37 100 km STORE");
-            expectedResponse = "-ERR wrong number of arguments for 'GEORADIUS' command\r\n";
+            expectedResponse = "-ERR wrong number of arguments for 'georadius' command\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommand("GEORADIUSBYMEMBER Sicily member lotsa km");

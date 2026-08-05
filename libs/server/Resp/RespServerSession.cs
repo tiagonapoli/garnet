@@ -1223,7 +1223,7 @@ namespace Garnet.server
             if ((arity > 0 && count != arity - 1) ||
                 (arity < 0 && count < -arity - 1))
             {
-                while (!RespWriteUtils.TryWriteError(string.Format(CmdStrings.GenericErrWrongNumArgs, cmdName), ref dcurr, dend))
+                while (!RespWriteUtils.TryWriteError(string.Format(CmdStrings.GenericErrWrongNumArgs, cmdName.ToLowerInvariant()), ref dcurr, dend))
                     SendAndReset();
 
                 return false;

@@ -59,7 +59,7 @@ namespace Garnet.test
         public void PingErrorMessageTest()
         {
             using var lightClientRequest = TestUtils.CreateRequest();
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, $"{nameof(RespCommand.PING)}")}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.PING).ToLowerInvariant())}\r\n";
             var response = lightClientRequest.SendCommand("PING HELLO WORLD", 1);
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
@@ -68,7 +68,7 @@ namespace Garnet.test
         public void EchoWithNoMessageReturnErrorTest()
         {
             using var lightClientRequest = TestUtils.CreateRequest();
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, $"{nameof(RespCommand.ECHO)}")}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.ECHO).ToLowerInvariant())}\r\n";
             var response = lightClientRequest.SendCommand("ECHO", 1);
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
@@ -77,7 +77,7 @@ namespace Garnet.test
         public void EchoWithMessagesReturnErrorTest()
         {
             using var lightClientRequest = TestUtils.CreateRequest();
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, $"{nameof(RespCommand.ECHO)}")}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.ECHO).ToLowerInvariant())}\r\n";
             var response = lightClientRequest.SendCommand("ECHO HELLO WORLD", 1);
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
@@ -98,7 +98,7 @@ namespace Garnet.test
         public void EchoTwoCommandsTest()
         {
             using var lightClientRequest = TestUtils.CreateRequest();
-            var wrongNumMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, $"{nameof(RespCommand.ECHO)}");
+            var wrongNumMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.ECHO).ToLowerInvariant());
             var expectedResponse = $"-{wrongNumMessage}\r\n$5\r\nHELLO\r\n";
             var response = lightClientRequest.SendCommands("ECHO HELLO WORLD WORLD2", "ECHO HELLO", 1, 1);
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
@@ -119,7 +119,7 @@ namespace Garnet.test
         public void TimeWithReturnErrorTest()
         {
             using var lightClientRequest = TestUtils.CreateRequest();
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.TIME))}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.TIME).ToLowerInvariant())}\r\n";
             var response = lightClientRequest.SendCommand("TIME HELLO");
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
@@ -654,8 +654,7 @@ namespace Garnet.test
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
             var db = redis.GetDatabase(0);
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("CONFIG"));
-            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs,
-                $"{nameof(RespCommand.CONFIG)}");
+            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.CONFIG).ToLowerInvariant());
             ClassicAssert.AreEqual(expectedMessage, ex.Message);
         }
 
@@ -665,8 +664,7 @@ namespace Garnet.test
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
             var db = redis.GetDatabase(0);
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("CONFIG", "GET"));
-            var expectedMessage = Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs,
-                $"{nameof(RespCommand.CONFIG)}|{nameof(CmdStrings.GET)}"));
+            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, $"{nameof(RespCommand.CONFIG)}|{nameof(CmdStrings.GET)}".ToLowerInvariant());
             ClassicAssert.AreEqual(expectedMessage, ex.Message);
         }
         #endregion

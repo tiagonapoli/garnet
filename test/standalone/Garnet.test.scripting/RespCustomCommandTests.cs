@@ -1081,7 +1081,7 @@ namespace Garnet.test
             }
             catch (RedisServerException rse)
             {
-                ClassicAssert.AreEqual(Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs, "REGISTERCS")), rse.Message);
+                ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "registercs"), rse.Message);
             }
             ClassicAssert.IsNull(resp);
 

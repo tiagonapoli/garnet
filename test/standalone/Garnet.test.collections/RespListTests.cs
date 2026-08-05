@@ -893,7 +893,7 @@ namespace Garnet.test
         {
             using var lightClientRequest = TestUtils.CreateRequest();
             var response = lightClientRequest.SendCommands("LINSERT mykey", "PING", 1, 1);
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "LINSERT")}\r\n+PONG\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "linsert")}\r\n+PONG\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
@@ -1013,7 +1013,7 @@ namespace Garnet.test
             using var lightClientRequest = TestUtils.CreateRequest();
             _ = lightClientRequest.SendCommand("RPUSH mylist one two three");
             var response = lightClientRequest.SendCommand("LSET mylist a");
-            var expectedResponse = "-ERR wrong number of arguments for 'LSET'";
+            var expectedResponse = "-ERR wrong number of arguments for 'lset'";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 

@@ -557,7 +557,7 @@ namespace Garnet.test
 
             // Check HRANDFIELD with wrong number of arguments
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("HRANDFIELD", hashKey, 3, "WITHVALUES", "bla"));
-            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.HRANDFIELD));
+            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.HRANDFIELD).ToLowerInvariant());
             ClassicAssert.IsNotNull(ex);
             ClassicAssert.AreEqual(expectedMessage, ex.Message);
 
@@ -681,7 +681,7 @@ namespace Garnet.test
 
             // HSCAN without key
             var e = Assert.Throws<RedisServerException>(() => db.Execute("HSCAN"));
-            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(HashOperation.HSCAN));
+            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(HashOperation.HSCAN).ToLowerInvariant());
             ClassicAssert.AreEqual(expectedErrorMessage, e.Message);
 
             // HSCAN without parameters
@@ -1866,7 +1866,7 @@ namespace Garnet.test
         }
         #endregion
 
-        private static string FormatWrongNumOfArgsError(string commandName) => $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, commandName)}\r\n";
+        private static string FormatWrongNumOfArgsError(string commandName) => $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, commandName.ToLowerInvariant())}\r\n";
     }
 
 }
