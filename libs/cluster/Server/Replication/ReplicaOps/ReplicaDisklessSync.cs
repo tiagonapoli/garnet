@@ -118,6 +118,10 @@ namespace Garnet.cluster
                         {
                             vectorManager?.ResumeCleanup();
                         }
+
+                        // Drain Vector Set cleanup before streaming, or it can delete a namespace the stream writes into.
+                        if (vectorManager != null)
+                            await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
                     }
 
                     // Suspend background tasks that may interfere with AOF
@@ -237,6 +241,9 @@ namespace Garnet.cluster
 
                 // Before advertising updated replication offset, wait for Vector Set ops to finish
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForVectorOperationsToComplete();
+
+                // Drain Vector Set cleanup before advertising the offset, or it can delete a streamed namespace.
+                AsyncUtils.BlockingWait(storeWrapper.DefaultDatabase.VectorManager?.WaitForCleanupCompleteAsync() ?? Task.CompletedTask);
 
                 this.replicationOffset = _replicationOffset;
 

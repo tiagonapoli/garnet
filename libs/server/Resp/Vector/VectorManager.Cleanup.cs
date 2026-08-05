@@ -86,6 +86,7 @@ namespace Garnet.server
             }
         }
 
+        private readonly VectorSetCleanupWorkCounter cleanupWorkCounter = new();
         private readonly VectorSetCleanupWorkChannel<object> cleanupTaskChannel;
         private readonly VectorSetCleanupWorkChannel<(ulong Context, TaskCompletionSource MarkCompleted)> requestCleanupTaskChannel;
         private readonly VectorSetCleanupWorkChannel<object> requestDropTaskChannel;
@@ -137,13 +138,22 @@ namespace Garnet.server
             while (await requestDropTaskChannel.WaitToReadAsync().ConfigureAwait(false))
             {
                 // Every pass services the whole of requestedDrops, so the backlog collapses into one pass
-                requestDropTaskChannel.DrainPending();
+                using var batch = requestDropTaskChannel.ReadAllAvailable();
 
                 // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
                 using var dropSession = (RespServerSession)getTempSession();
                 if (dropSession.activeDbId != dbId && !dropSession.TrySwitchActiveDatabaseSession(dbId))
                 {
                     throw new GarnetException($"Could not switch VectorManager cleanup session to {dbId}, initialization failed");
+                }
+
+                if (!requestedDrops.IsEmpty)
+                {
+                    // Sync on purpose: ActiveThreadSession below is [ThreadStatic], so the pause must not
+                    // hop pool threads. VSTHRD103 would rewrite this to await ResetAndWaitAsync.
+#pragma warning disable VSTHRD103
+                    ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.VectorSet_Pause_In_Native_Index_Drop);
+#pragma warning restore VSTHRD103
                 }
 
                 ActiveThreadSession = dropSession.storageSession;
@@ -205,6 +215,10 @@ namespace Garnet.server
 
                 var completions = new List<TaskCompletionSource>();
 
+                // Disposed at the end of this iteration, after cleanupTaskChannel.TryPublish below has
+                // registered the successor, so the count cannot dip to zero mid-handoff.
+                using var batch = requestCleanupTaskChannel.ReadAllAvailable();
+
                 try
                 {
                     // TODO: this doesn't work with non-RESP impls... which maybe we don't care about?
@@ -219,8 +233,8 @@ namespace Garnet.server
                     var needsUpdate = false;
                     lock (this)
                     {
-                        // Read all pending requests so we can do one update
-                        while (requestCleanupTaskChannel.TryRead(out var t))
+                        // One update for every request the batch owns
+                        foreach (var t in batch.Items)
                         {
                             if (t.MarkCompleted != null)
                             {
@@ -292,11 +306,13 @@ namespace Garnet.server
         {
             while (await cleanupTaskChannel.WaitToReadAsync().ConfigureAwait(false))
             {
-                // Each item is one outstanding scan
-                if (!cleanupTaskChannel.TryRead(out _))
+                // Each item is one outstanding scan; the lease completes it on every exit path
+                if (!cleanupTaskChannel.TryAcquire(out var acquired))
                 {
                     continue;
                 }
+
+                using var lease = acquired;
 
                 await cleanupGate.WaitAsync().ConfigureAwait(false);
 
@@ -312,9 +328,6 @@ namespace Garnet.server
                     // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
                     //
                     // So we use to different contexts, one to scan (strings) and one to delete (vectors)
-                    ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
-                    ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
-
                     ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_1);
 
                     HashSet<ulong> needCleanup = null;
@@ -341,6 +354,18 @@ namespace Garnet.server
                         // Previous run already got here, so bail
                         continue;
                     }
+
+                    // Sync on purpose: the ref locals below cannot cross an await (CS9217).
+                    // VSTHRD103 would rewrite this to await ResetAndWaitAsync.
+#pragma warning disable VSTHRD103
+                    ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.VectorSet_Pause_In_Cleanup_Scan);
+#pragma warning restore VSTHRD103
+
+                    // Scan context needs to know how to handle objects and all callbacks, while VectorSessionFunctions is intentionally kept svelte
+                    //
+                    // So we use to different contexts, one to scan (strings) and one to delete (vectors)
+                    ref var scanCtx = ref cleanupSession.storageSession.stringBasicContext;
+                    ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
 
                     PostDropCleanupFunctions callbacks = new(cleanupSession.storageSession, needCleanup);
 
@@ -428,6 +453,12 @@ namespace Garnet.server
         }
 
         /// <summary>
+        /// Block until the whole cleanup pipeline has finished. Call at store-emptying boundaries (FLUSH,
+        /// replica full sync) AFTER the store is emptied, and never while cleanup is paused.
+        /// </summary>
+        public Task WaitForCleanupCompleteAsync() => cleanupWorkCounter.WaitAllCleanupsAsync();
+
+        /// <summary>
         /// Called when a Vector Set is discovered (typically via compaction) to _potentially_ be deleted.
         /// 
         /// Contexts and keys are retained for a final liveliness check when checkpointing completes.
@@ -457,7 +488,10 @@ namespace Garnet.server
         public unsafe void CheckpointCompleted()
         {
             _ = Interlocked.Increment(ref postCheckpointTasksRunning);
-            _ = Task.Run(() => QueueCleanups(this));
+
+            // The discovery pass is itself cleanup work: it can still be feeding the request-cleanup
+            // channel, so it must be visible to a drain until it ends.
+            _ = cleanupWorkCounter.RunCountedTaskAsync(this, QueueCleanups);
 
             static void QueueCleanups(VectorManager self)
             {

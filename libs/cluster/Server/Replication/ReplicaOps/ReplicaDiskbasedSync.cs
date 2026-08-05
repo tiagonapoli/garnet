@@ -150,6 +150,10 @@ namespace Garnet.cluster
                         vectorManager?.ResumeCleanup();
                     }
 
+                    // Drain Vector Set cleanup before streaming, or it can delete a namespace the stream writes into.
+                    if (vectorManager != null)
+                        await vectorManager.WaitForCleanupCompleteAsync().ConfigureAwait(false);
+
                     // Suspend background tasks that may interfere with AOF
                     await storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
 
