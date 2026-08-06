@@ -143,7 +143,6 @@ namespace Garnet.server
                 replayBatchContext.RecordLength = recordLength;
                 replayBatchContext.CurrentAddress = currentAddress;
                 replayBatchContext.NextAddress = nextAddress;
-                replayBatchContext.IsProtected = isProtected;
 
                 // Rendezvous 1 (ready): publish the page context above, then meet every replay task at the
                 // barrier so they may scan the page. The leader is a participant, hence the shared barrier.
