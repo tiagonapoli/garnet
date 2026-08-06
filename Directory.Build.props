@@ -64,9 +64,16 @@
            configuration from the toolbar dropdown (declared in Garnet.slnx).
        Effect: builds a single target framework and skips analyzers, code-style
        enforcement, and XML doc generation. Placed at the end of the file so it
-       overrides the defaults set above. -->
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug-Fast' or '$(Configuration)' == 'Release-Fast'">
-    <FastDev Condition="'$(TF_BUILD)' != 'true' and '$(GITHUB_ACTIONS)' != 'true'">true</FastDev>
+       overrides the defaults set above.
+
+       TF_BUILD is set by Azure Pipelines (.azure/pipelines), GITHUB_ACTIONS by
+       GitHub Actions (.github/workflows). FastDev is gated through the derived
+       FastDevEnabled property rather than by resetting FastDev, because
+       -p:FastDev=true arrives as an MSBuild global property that a PropertyGroup
+       cannot override. -->
+  <PropertyGroup>
+    <FastDev Condition="'$(FastDev)' == '' and ('$(Configuration)' == 'Debug-Fast' or '$(Configuration)' == 'Release-Fast')">true</FastDev>
+    <FastDevEnabled Condition="'$(FastDev)' == 'true' and '$(TF_BUILD)' != 'true' and '$(GITHUB_ACTIONS)' != 'true'">true</FastDevEnabled>
   </PropertyGroup>
 
   <!-- Custom configuration names don't get the SDK's automatic Debug/Release
@@ -80,7 +87,7 @@
     <Optimize>true</Optimize>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(FastDev)' == 'true' and '$(TF_BUILD)' != 'true' and '$(GITHUB_ACTIONS)' != 'true'">
+  <PropertyGroup Condition="'$(FastDevEnabled)' == 'true'">
     <TargetFrameworks>net10.0</TargetFrameworks>
     <RunAnalyzers>false</RunAnalyzers>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
