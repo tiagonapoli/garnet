@@ -24,6 +24,20 @@ cd garnet
 dotnet build -c Release
 ```
 
+### Fast local builds
+
+For a tighter inner loop there is an opt-in `FastDev` profile that builds only `net10.0` and skips analyzers, code-style enforcement, XML doc generation, and warnings-as-errors.
+
+```bash
+dotnet build Garnet.slnx -c Release-Fast
+# equivalent to
+dotnet build Garnet.slnx -p:FastDev=true
+```
+
+In Visual Studio, pick the `Debug-Fast` or `Release-Fast` solution configuration from the toolbar dropdown.
+
+`FastDev` is force-disabled when `TF_BUILD` or `GITHUB_ACTIONS` is set, so CI always runs the full multi-targeted, analyzer-enabled build. Use a plain `Debug` or `Release` build before submitting a pull request.
+
 # Run our Test Suite
 
 As a sanity check, you can run our test suite. The command to run tests in Release mode for .NET 10 target with verbose output to console is shown below (make sure you are in the root folder of the repo).
