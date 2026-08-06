@@ -61,6 +61,31 @@ memory-ordering defect. `AcquireCurrentEpoch` now announces with
 `Volatile.Write` would **not** be sufficient: a release store gives no
 StoreLoad ordering and does not drain the store buffer.
 
+### Scope: this model omits the callers, and the callers masked it
+
+`MainTso` models the barrier in isolation. In context the hazard was **masked
+rather than absent**, so this was hardening, not a live bug fix:
+
+- `RespServerSession.TryConsumeMessages` calls `AcquireCurrentEpoch()` and then
+  immediately `networkSender.EnterAndGetResponseObject()`, which takes a
+  `SpinLock`. That `Interlocked` acquire is a full fence and drained the
+  announce before `ProcessMessages` could read the config. Both the plain TCP
+  (`GarnetTcpNetworkSender`) and TLS (`NetworkHandler` -> `networkSender.Enter()`)
+  paths do this.
+- `CLUSTER FORGET`, `CLUSTER RESET`, the gossip merge and
+  `ClusterSlotVerify.CanOperateOnKey` re-acquire but do not read the config
+  afterwards.
+- `ClusterSlotVerify.WaitForSlotToStabalize` does read the config immediately
+  after re-acquiring with no fence between — the one unmasked instance — but its
+  loop condition re-reads, so a stale read costs an extra iteration rather than
+  a stale serve.
+
+The fence was therefore load-bearing but incidental: nothing documented it,
+nothing tested it, and `EmbeddedNetworkSender.EnterAndGetResponseObject` is an
+empty method with no lock at all. Fencing the announce makes the ordering a
+property of the epoch protocol rather than a side effect of how an unrelated
+component happens to lock.
+
 ## `GarnetEpochPeerBumper` — the release window (open)
 
 `UnsafeBumpAndWaitForEpochTransitionAsync` releases the caller's epoch so it

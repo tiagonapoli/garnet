@@ -202,9 +202,15 @@ namespace Garnet.cluster
         /// x86-TSO forbids both sides reading the stale value only when both fence between their store and their
         /// load. The changer already fences (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/> when
         /// publishing the config, <see cref="Interlocked.Increment(ref long)"/> when bumping). With a plain store
-        /// here the announce can still sit in this core's store buffer while the scan reads the slot as 0, takes
-        /// this session for idle, and reports the config transition complete — after which the session goes on to
+        /// here the announce could sit in this core's store buffer while the scan reads the slot as 0, takes this
+        /// session for idle, and reports the config transition complete — after which the session would go on to
         /// serve commands from the pre-transition <see cref="ClusterConfig"/> snapshot it already loaded.
+        ///
+        /// On the batch path that hazard was masked rather than absent: <c>TryConsumeMessages</c> calls
+        /// <c>networkSender.EnterAndGetResponseObject</c> immediately after announcing, and that takes a
+        /// <see cref="System.Threading.SpinLock"/>, whose <see cref="Interlocked"/> acquire drained the announce
+        /// before any config read. Fencing here makes the ordering a property of the epoch protocol instead of a
+        /// side effect of how an unrelated component happens to lock.
         ///
         /// Reading <see cref="ClusterProvider.GarnetCurrentEpoch"/> before the exchange is safe: a stale (lower)
         /// epoch only makes the scan wait for this session for longer.
