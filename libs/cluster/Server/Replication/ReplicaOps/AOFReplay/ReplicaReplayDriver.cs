@@ -109,17 +109,16 @@ namespace Garnet.cluster
             }
             else
             {
-                ConsumeSchedulePage(record, recordLength, currentAddress, nextAddress, isProtected);
+                ConsumeSchedulePage(record, recordLength, currentAddress, nextAddress);
             }
         }
 
-        private unsafe void ConsumeSchedulePage(byte* record, int recordLength, long currentAddress, long nextAddress, bool isProtected)
+        private unsafe void ConsumeSchedulePage(byte* record, int recordLength, long currentAddress, long nextAddress)
         {
             replayBatchContext.Record = record;
             replayBatchContext.RecordLength = recordLength;
             replayBatchContext.CurrentAddress = currentAddress;
             replayBatchContext.NextAddress = nextAddress;
-            replayBatchContext.IsProtected = isProtected;
 
             // Rendezvous 1 (ready): the page context above is published before the leader arrives, so
             // once this returns every replay task has met at the barrier and may scan the page.
