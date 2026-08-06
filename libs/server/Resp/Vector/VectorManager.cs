@@ -205,15 +205,15 @@ namespace Garnet.server
             vectorSetLocks = new(vectorSetReplayCount);
 
             this.getTempSession = getTempSession;
-            cleanupTaskChannel = new();
-            requestCleanupTaskChannel = new();
-            requestDropTaskChannel = new();
+            cleanupTaskChannel = new(cleanupWorkCounter);
+            requestCleanupTaskChannel = new(cleanupWorkCounter);
+            requestDropTaskChannel = new(cleanupWorkCounter);
 
             cleanupTask = RunCleanupTaskAsync();
             requestCleanupTask = RunRequestCleanupTaskAsync();
             requestDropTask = RunRequestDropTaskAsync();
 
-            requestedDrops = new();
+            requestedDrops = new(cleanupWorkCounter);
 
             potentiallyDeleted = [];
 

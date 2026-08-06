@@ -60,6 +60,12 @@ namespace Garnet.server
             public readonly bool IsEmpty
             => inUse == 0 && migrating == 0 && cleaningUp == 0;
 
+            /// <summary>
+            /// Bitmask of the contexts in this block reserved for any reason (in use, cleaning up, or migrating).
+            /// </summary>
+            internal readonly ulong ReservedMask => inUse | cleaningUp | migrating;
+
+
             public readonly bool IsInUse(bool allowZero, ushort context)
             {
                 Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
