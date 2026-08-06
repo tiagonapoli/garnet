@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.networking;
@@ -32,7 +33,12 @@ namespace Garnet.cluster
         unsafe byte* dcurr, dend;
         long _localCurrentEpoch = 0;
 
-        public long LocalCurrentEpoch => _localCurrentEpoch;
+        /// <summary>
+        /// The Garnet epoch this session announced when it entered its current batch, or 0 if it is between batches.
+        /// Read by <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/> from another thread, in a spin
+        /// loop, so it must not be cached across iterations.
+        /// </summary>
+        public long LocalCurrentEpoch => Volatile.Read(ref _localCurrentEpoch);
 
         /// <summary>
         /// Indicates if this is a session that allows for reads and writes
@@ -182,8 +188,34 @@ namespace Garnet.cluster
         {
             this.userHandle = userHandle;
         }
-        public void AcquireCurrentEpoch() => _localCurrentEpoch = clusterProvider.GarnetCurrentEpoch;
-        public void ReleaseCurrentEpoch() => _localCurrentEpoch = 0;
+
+        /// <summary>
+        /// Announce this session as active at the current Garnet epoch.
+        /// </summary>
+        /// <remarks>
+        /// The announce is a locked RMW rather than a plain store because it forms one half of a store-buffer
+        /// (SB) pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
+        /// <code>
+        ///   session : STORE _localCurrentEpoch ; LOAD  currentConfig
+        ///   changer : STORE currentConfig      ; LOAD  _localCurrentEpoch
+        /// </code>
+        /// x86-TSO forbids both sides reading the stale value only when both fence between their store and their
+        /// load. The changer already fences (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/> when
+        /// publishing the config, <see cref="Interlocked.Increment(ref long)"/> when bumping). With a plain store
+        /// here the announce can still sit in this core's store buffer while the scan reads the slot as 0, takes
+        /// this session for idle, and reports the config transition complete — after which the session goes on to
+        /// serve commands from the pre-transition <see cref="ClusterConfig"/> snapshot it already loaded.
+        ///
+        /// Reading <see cref="ClusterProvider.GarnetCurrentEpoch"/> before the exchange is safe: a stale (lower)
+        /// epoch only makes the scan wait for this session for longer.
+        /// </remarks>
+        public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, clusterProvider.GarnetCurrentEpoch);
+
+        /// <summary>
+        /// Announce this session as idle. A release store, so the config reads this batch performed cannot sink
+        /// past it and be attributed to a session the scan has already cleared.
+        /// </summary>
+        public void ReleaseCurrentEpoch() => Volatile.Write(ref _localCurrentEpoch, 0);
 
         /// <summary>
         /// Release epoch, wait for config transition and re-acquire the epoch
