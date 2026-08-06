@@ -11,7 +11,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -1777,12 +1777,12 @@ namespace Garnet.test
                     ClassicAssert.AreEqual(1, iters);
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }
@@ -1831,12 +1831,12 @@ namespace Garnet.test
                     ClassicAssert.AreEqual(7, iters);
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }
@@ -1884,12 +1884,12 @@ namespace Garnet.test
                     }
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }
@@ -1954,12 +1954,12 @@ namespace Garnet.test
                     ClassicAssert.AreEqual(1, iters);
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }
@@ -2087,12 +2087,12 @@ namespace Garnet.test
                     ClassicAssert.AreEqual(8, iters);
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }
@@ -2219,12 +2219,12 @@ namespace Garnet.test
                     }
 
                     BasicContext<
-                        Garnet.common.VectorElementKey,
+                        Garnet.Core.VectorElementKey,
                         Garnet.server.VectorInput,
                         Garnet.server.VectorOutput,
                         long, Garnet.server.VectorSessionFunctions,
-                        Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
+                        Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+                        Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>
                     > ignored = default;
                     batch.CompletePending(ref ignored);
                 }

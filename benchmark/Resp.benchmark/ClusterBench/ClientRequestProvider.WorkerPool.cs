@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using StackExchange.Redis;
 
 namespace Resp.benchmark

@@ -9,7 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

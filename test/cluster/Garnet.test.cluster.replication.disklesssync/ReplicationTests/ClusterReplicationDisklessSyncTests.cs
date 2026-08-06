@@ -4,7 +4,7 @@
 using System;
 using System.Collections.Generic;
 #if DEBUG
-using Garnet.common;
+using Garnet.Core;
 #endif
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;

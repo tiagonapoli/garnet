@@ -11,7 +11,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;

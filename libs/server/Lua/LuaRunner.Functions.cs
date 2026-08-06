@@ -13,7 +13,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Garnet.common;
+using Garnet.Core;
 using KeraLua;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;

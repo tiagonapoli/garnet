@@ -3,7 +3,7 @@
 
 using System.Net;
 using Embedded.server;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 
 namespace Resp.benchmark

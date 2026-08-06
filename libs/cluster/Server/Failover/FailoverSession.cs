@@ -5,7 +5,7 @@ using System;
 using System.Net;
 using System.Threading;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet.cluster

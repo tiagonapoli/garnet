@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using CommandLine;
-using Garnet.common;
+using Garnet.Core;
 
 namespace MetricsMonitor
 {

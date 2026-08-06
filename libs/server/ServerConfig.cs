@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet.server

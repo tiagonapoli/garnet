@@ -12,7 +12,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using Garnet.cluster;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using Garnet.server;
 using Garnet.server.Auth.Settings;

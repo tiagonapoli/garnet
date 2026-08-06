@@ -3,8 +3,8 @@
 
 using System;
 using System.Text;
-using Garnet.common;
-using Garnet.common.Parsing;
+using Garnet.Core;
+using Garnet.Core.Parsing;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 

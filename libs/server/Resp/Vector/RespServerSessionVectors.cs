@@ -4,7 +4,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 namespace Garnet.server

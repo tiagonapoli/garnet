@@ -17,7 +17,7 @@ using StackExchange.Redis;
 
 
 #if DEBUG
-using Garnet.common;
+using Garnet.Core;
 #endif
 
 namespace Garnet.test.cluster

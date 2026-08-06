@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using BenchmarkDotNet.Attributes;
-using Garnet.common;
+using Garnet.Core;
 
 namespace BDN.benchmark.Auth
 {

@@ -8,7 +8,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 

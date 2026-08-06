@@ -3,7 +3,7 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

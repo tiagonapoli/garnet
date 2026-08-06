@@ -9,7 +9,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;

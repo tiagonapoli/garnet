@@ -3,7 +3,7 @@
 
 using System.Net;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 
 namespace MigrateBench

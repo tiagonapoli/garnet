@@ -5,7 +5,7 @@
 
 using System.Net;
 using System.Net.Security;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using Garnet.server;
 using Microsoft.Extensions.Logging;

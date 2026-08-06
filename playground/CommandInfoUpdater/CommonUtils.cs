@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using System.Reflection;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

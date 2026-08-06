@@ -15,7 +15,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using Azure.Identity;
 using CommandLine;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Garnet.server.Auth.Aad;
 using Garnet.server.Auth.Settings;

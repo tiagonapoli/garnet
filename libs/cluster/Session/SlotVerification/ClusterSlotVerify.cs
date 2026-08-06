@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Tsavorite.core;
 

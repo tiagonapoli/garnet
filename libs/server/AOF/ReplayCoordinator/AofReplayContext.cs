@@ -3,7 +3,7 @@
 
 using System;
 using System.Collections.Generic;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 
 namespace Garnet.server

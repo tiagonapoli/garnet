@@ -3,7 +3,7 @@
 
 using System.Collections.Generic;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

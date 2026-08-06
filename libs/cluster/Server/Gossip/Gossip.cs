@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 
@@ -24,7 +24,7 @@ namespace Garnet.cluster
         public TimeSpan clusterTimeout
             => clusterProvider.storeWrapper.runtimeConfig.GetTimeSpan(ServerConfigType.CLUSTER_NODE_TIMEOUT);
         private volatile int numActiveTasks = 0;
-        private readonly common.ReaderWriterLock activeMergeLock;
+        private readonly Core.ReaderWriterLock activeMergeLock;
         public readonly GarnetClusterConnectionStore clusterConnectionStore;
 
         public GossipStats gossipStats;

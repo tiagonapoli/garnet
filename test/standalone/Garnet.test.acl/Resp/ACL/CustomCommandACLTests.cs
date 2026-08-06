@@ -6,7 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Garnet.server.ACL;
 using NUnit.Framework;

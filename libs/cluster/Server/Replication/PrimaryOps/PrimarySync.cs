@@ -6,7 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 #if DEBUG
-using Garnet.common;
+using Garnet.Core;
 #endif
 using Garnet.server;
 using Microsoft.Extensions.Logging;

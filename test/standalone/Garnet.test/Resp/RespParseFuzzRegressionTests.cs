@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
-using Garnet.common.Parsing;
+using Garnet.Core.Parsing;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

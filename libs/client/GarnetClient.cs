@@ -12,7 +12,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using HdrHistogram;
 using Microsoft.Extensions.Logging;

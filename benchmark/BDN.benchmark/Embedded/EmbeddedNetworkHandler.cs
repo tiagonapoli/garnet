@@ -4,7 +4,7 @@
 #nullable disable
 
 using System.Diagnostics;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using Microsoft.Extensions.Logging;
 

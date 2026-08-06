@@ -5,7 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using Garnet.cluster;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

@@ -104,11 +104,11 @@ namespace Garnet.cluster
                 try
                 {
                     var input = new UnifiedInput(RespCommand.MIGRATE);
-                    input.arg1 = session.NetworkBufferSettings.sendBufferSize - common.NetworkBufferSettings.SendBufferOverheadReserve;
+                    input.arg1 = session.NetworkBufferSettings.sendBufferSize - Core.NetworkBufferSettings.SendBufferOverheadReserve;
 
                     VectorInput vectorInput = new();
                     vectorInput.AlignmentExpected = true; // We're moving DiskANN sourced data, so alignment is expected
-                    vectorInput.MaxMigrationHeapAllocationSize = session.NetworkBufferSettings.sendBufferSize - common.NetworkBufferSettings.SendBufferOverheadReserve;
+                    vectorInput.MaxMigrationHeapAllocationSize = session.NetworkBufferSettings.sendBufferSize - Core.NetworkBufferSettings.SendBufferOverheadReserve;
 
                     foreach (var (ns, key, hasNs) in sketch.argSliceVector)
                     {

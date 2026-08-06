@@ -3,7 +3,7 @@
 
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using Garnet.server;
 using Garnet.server.ACL;

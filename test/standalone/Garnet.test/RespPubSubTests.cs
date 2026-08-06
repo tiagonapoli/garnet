@@ -7,7 +7,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;

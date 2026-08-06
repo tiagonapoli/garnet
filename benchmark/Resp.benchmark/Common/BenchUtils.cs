@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Net.Security;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Garnet.server.TLS;
 using StackExchange.Redis;

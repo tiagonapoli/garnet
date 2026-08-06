@@ -8,7 +8,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;

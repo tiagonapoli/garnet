@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

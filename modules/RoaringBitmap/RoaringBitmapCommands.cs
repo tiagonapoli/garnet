@@ -3,7 +3,7 @@
 
 using System.Buffers.Text;
 using System.Diagnostics;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Tsavorite.core;
 

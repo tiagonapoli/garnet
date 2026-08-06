@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\metrics\HdrHistogram\HdrHistogram.csproj" />
-    <ProjectReference Include="..\common\Garnet.common.csproj" />
+    <ProjectReference Include="..\core\Garnet.Core.csproj" />
     <ProjectReference Include="..\storage\Tsavorite\cs\src\core\Tsavorite.core.csproj" />
   </ItemGroup>
 

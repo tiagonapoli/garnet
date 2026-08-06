@@ -9,7 +9,7 @@ using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 #if DEBUG
 using Garnet.server;
 #endif

@@ -6,8 +6,8 @@ using System.Diagnostics;
 using System.Numerics.Tensors;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
-using Garnet.common;
-using Garnet.common.Numerics;
+using Garnet.Core;
+using Garnet.Core.Numerics;
 
 namespace Garnet.server
 {

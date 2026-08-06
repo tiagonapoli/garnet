@@ -3,7 +3,7 @@
 
 using BenchmarkDotNet.Attributes;
 using Embedded.server;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Garnet.server.Auth;
 

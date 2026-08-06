@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Resp.benchmark
 {

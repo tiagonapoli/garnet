@@ -7,7 +7,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 namespace Garnet.server

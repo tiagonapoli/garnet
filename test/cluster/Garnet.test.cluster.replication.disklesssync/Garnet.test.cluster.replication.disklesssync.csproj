@@ -37,7 +37,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\libs\client\Garnet.client.csproj" />
     <ProjectReference Include="..\..\..\libs\cluster\Garnet.cluster.csproj" />
-    <ProjectReference Include="..\..\..\libs\common\Garnet.common.csproj" />
+    <ProjectReference Include="..\..\..\libs\core\Garnet.Core.csproj" />
     <ProjectReference Include="..\..\..\libs\host\Garnet.host.csproj" />
     <ProjectReference Include="..\..\..\libs\server\Garnet.server.csproj" />
     <ProjectReference Include="..\..\..\libs\storage\Tsavorite\cs\src\devices\AzureStorageDevice\Tsavorite.devices.AzureStorageDevice.csproj" />

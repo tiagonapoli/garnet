@@ -4,7 +4,7 @@
 using System;
 using System.Linq;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

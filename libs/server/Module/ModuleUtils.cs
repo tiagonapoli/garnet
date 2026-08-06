@@ -9,7 +9,7 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

@@ -4,7 +4,7 @@
 using System;
 using System.Linq;
 using System.Security.Cryptography;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

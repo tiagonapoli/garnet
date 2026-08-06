@@ -6,8 +6,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using Garnet.common;
-using Garnet.common.Parsing;
+using Garnet.Core;
+using Garnet.Core.Parsing;
 using Tsavorite.core;
 
 namespace Garnet.server

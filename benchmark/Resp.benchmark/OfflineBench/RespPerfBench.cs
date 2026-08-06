@@ -6,7 +6,7 @@ using System.Net;
 using System.Text;
 using Embedded.server;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using StackExchange.Redis;
 
@@ -58,8 +58,8 @@ namespace Resp.benchmark
                         foreach (var slotRange in slotRanges)
                         {
                             var clusterAddSlotsRange = Encoding.ASCII.GetBytes($"*4\r\n$7\r\nCLUSTER\r\n$13\r\nADDSLOTSRANGE\r\n" +
-                                $"${Garnet.common.NumUtils.CountDigits(slotRange.Item1)}\r\n{slotRange.Item1}\r\n" +
-                                $"${Garnet.common.NumUtils.CountDigits(slotRange.Item2)}\r\n{slotRange.Item2}\r\n");
+                                $"${Garnet.Core.NumUtils.CountDigits(slotRange.Item1)}\r\n{slotRange.Item1}\r\n" +
+                                $"${Garnet.Core.NumUtils.CountDigits(slotRange.Item2)}\r\n{slotRange.Item2}\r\n");
                             fixed (byte* req = clusterAddSlotsRange)
                                 _ = sessions[0].TryConsumeMessages(req, clusterAddSlotsRange.Length);
                         }

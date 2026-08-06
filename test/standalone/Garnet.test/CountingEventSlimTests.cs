@@ -5,7 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 

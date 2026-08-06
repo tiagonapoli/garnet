@@ -5,7 +5,7 @@ using System;
 using System.Buffers;
 using System.Diagnostics;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

@@ -3,7 +3,7 @@
 
 using System;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 

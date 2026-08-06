@@ -3,7 +3,7 @@
 
 using System;
 using System.Linq;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 namespace Garnet.server

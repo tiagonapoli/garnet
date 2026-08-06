@@ -7,7 +7,7 @@ using System.Linq;
 using System.Numerics.Tensors;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

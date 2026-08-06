@@ -5,7 +5,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using Embedded.server;
 using Garnet.cluster;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 
 namespace BDN.benchmark.Cluster.ConsistentRead

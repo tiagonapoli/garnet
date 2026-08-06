@@ -3,7 +3,7 @@
 
 using System.Collections.Generic;
 using System.Reflection;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.resources;
 using Microsoft.Extensions.Logging;
 

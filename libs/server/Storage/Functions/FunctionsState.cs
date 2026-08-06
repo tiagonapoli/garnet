@@ -3,7 +3,7 @@
 
 using System;
 using System.Buffers;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 

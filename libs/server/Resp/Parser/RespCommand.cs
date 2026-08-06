@@ -8,8 +8,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Text;
-using Garnet.common;
-using Garnet.common.Parsing;
+using Garnet.Core;
+using Garnet.Core.Parsing;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet.server

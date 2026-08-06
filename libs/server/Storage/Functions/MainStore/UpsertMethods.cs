@@ -4,7 +4,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 using static Garnet.server.SessionFunctionsUtils;
 

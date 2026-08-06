@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 
 namespace MigrateBench

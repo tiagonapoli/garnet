@@ -28,7 +28,7 @@ In the following list, we describe the C\# projects part of the Garnet Visual St
         * **Description:** Clients that can be used with Garnet server with limited functionality.
      * Garnet.cluster project
         * **Description:** The Garnet Cluster implementation.
-    * Garnet.common project
+    * Garnet.Core project
         * **Description:** Network layer implementation and common tools used for requests and responses processing.
     * Garnet.host project
         * **Description:** The hosting class that instantiates the Garnet server.

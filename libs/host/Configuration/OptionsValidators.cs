@@ -10,7 +10,7 @@ using System.Reflection;
 using System.Security;
 using System.Text;
 using System.Text.RegularExpressions;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

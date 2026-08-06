@@ -7,25 +7,25 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using Garnet.cluster;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 // The receive-side ProcessRecord takes a ref StringBasicContext; declare the alias locally so the
 // test can pass a default (it is only dereferenced on stream completion, which these tests avoid).
 using StringBasicContext = Tsavorite.core.BasicContext<
-    Garnet.common.FixedSpanByteKey,
+    Garnet.Core.FixedSpanByteKey,
     Garnet.server.StringInput,
     Garnet.server.StringOutput,
     long, Garnet.server.MainSessionFunctions,
-    Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
-    Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.common.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>>;
+    Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>,
+    Tsavorite.core.ObjectAllocator<Tsavorite.core.StoreFunctions<Garnet.Core.GarnetKeyComparer, Garnet.server.GarnetRecordTriggers>>>;
 
 namespace Garnet.test.cluster
 {
     /// <summary>
     /// Component tests for <see cref="RangeIndexMigrationReceiveState"/> focused on the
-    /// dispose-vs-in-flight-<c>ProcessRecord</c> race that <see cref="Garnet.common.CooperativeDisposeGuard"/>
+    /// dispose-vs-in-flight-<c>ProcessRecord</c> race that <see cref="Garnet.Core.CooperativeDisposeGuard"/>
     /// guards. A receiving node may dispose its <c>ClusterSession</c> (on one networking thread)
     /// while a migration chunk is still being processed (on another, e.g. the FastMigrate
     /// <c>Task.Run</c> path) — the disposal must never run concurrently with, nor abort, an

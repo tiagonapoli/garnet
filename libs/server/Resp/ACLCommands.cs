@@ -3,7 +3,7 @@
 
 using System;
 using System.Diagnostics;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server.ACL;
 using Garnet.server.Auth;
 using Garnet.server.Auth.Settings;

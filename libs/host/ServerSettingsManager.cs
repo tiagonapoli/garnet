@@ -9,7 +9,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using CommandLine;
 using CommandLine.Text;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet

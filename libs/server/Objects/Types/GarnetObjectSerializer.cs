@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 namespace Garnet.server

@@ -7,7 +7,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Linq;
 using System.Security.Claims;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server.Auth.Aad;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;

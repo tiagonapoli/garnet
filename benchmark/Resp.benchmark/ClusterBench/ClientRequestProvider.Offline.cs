@@ -6,7 +6,7 @@ using System.Net;
 using System.Numerics;
 using System.Text;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using StackExchange.Redis;
 
 namespace Resp.benchmark

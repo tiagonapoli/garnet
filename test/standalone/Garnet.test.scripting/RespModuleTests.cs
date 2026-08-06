@@ -53,7 +53,7 @@ namespace Garnet.test
                 Path.Combine(runtimePath, "System.Private.CoreLib.dll"),
                 Path.Combine(runtimePath, "System.Runtime.dll"),
                 Path.Combine(binPath, "Garnet.server.dll"),
-                Path.Combine(binPath, "Garnet.common.dll"),
+                Path.Combine(binPath, "Garnet.Core.dll"),
                 Path.Combine(binPath, "Tsavorite.core.dll"),
             };
 

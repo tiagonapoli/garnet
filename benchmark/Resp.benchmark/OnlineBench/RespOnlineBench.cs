@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Runtime.CompilerServices;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using HdrHistogram;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;

@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using BDN.benchmark.CustomProcs;
 using Embedded.server;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 
 namespace BDN.benchmark.Cluster

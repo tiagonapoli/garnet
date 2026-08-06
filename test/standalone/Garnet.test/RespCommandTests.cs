@@ -7,7 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -602,7 +602,7 @@ namespace Garnet.test
             var namespaces = new[]
             {
                 "Tsavorite.core",
-                "Garnet.common",
+                "Garnet.Core",
                 "Garnet.server",
                 "System",
                 "System.Buffers",
@@ -620,7 +620,7 @@ namespace Garnet.test
                 Path.Combine(runtimePath, "System.Private.CoreLib.dll"),
                 Path.Combine(runtimePath, "System.Runtime.dll"),
                 Path.Combine(binPath, "Tsavorite.core.dll"),
-                Path.Combine(binPath, "Garnet.common.dll"),
+                Path.Combine(binPath, "Garnet.Core.dll"),
                 Path.Combine(binPath, "Garnet.server.dll"),
             };
 

@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using StackExchange.Redis;
 
 namespace Garnet.test.cluster

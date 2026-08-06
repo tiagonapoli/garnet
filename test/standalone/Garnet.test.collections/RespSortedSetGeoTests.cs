@@ -5,7 +5,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;

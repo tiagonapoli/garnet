@@ -4,8 +4,8 @@
 using System.Buffers.Text;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Garnet.common;
-using Garnet.common.Parsing;
+using Garnet.Core;
+using Garnet.Core.Parsing;
 using Tsavorite.core;
 
 namespace Garnet.server

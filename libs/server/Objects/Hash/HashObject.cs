@@ -8,7 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 #if NET9_0_OR_GREATER

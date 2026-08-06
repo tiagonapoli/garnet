@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using Garnet.common;
+using Garnet.Core;
 
 using Limit = (int offset, int count);
 

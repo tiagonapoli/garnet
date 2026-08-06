@@ -5,7 +5,7 @@
 using System.Diagnostics;
 #endif
 using System.Runtime.CompilerServices;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

@@ -3,7 +3,7 @@
 
 using System;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Tsavorite.core;
 
 namespace Garnet.cluster

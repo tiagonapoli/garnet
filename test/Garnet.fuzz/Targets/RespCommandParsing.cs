@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 using System.Text;
-using Garnet.common.Parsing;
+using Garnet.Core.Parsing;
 using Garnet.server;
 
 namespace Garnet.fuzz.Targets

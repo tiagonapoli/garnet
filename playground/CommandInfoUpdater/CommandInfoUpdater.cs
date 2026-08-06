@@ -4,7 +4,7 @@
 using System.Collections.ObjectModel;
 using System.Net;
 using System.Runtime.CompilerServices;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

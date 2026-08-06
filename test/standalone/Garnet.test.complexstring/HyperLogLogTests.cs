@@ -1424,7 +1424,7 @@ namespace Garnet.test
             var corruptedRleSize = (ushort)(availablePayload + 50); // Exceeds actual available space
             BinaryPrimitives.WriteUInt16LittleEndian(hllValue.AsSpan(16, 2), corruptedRleSize);
 
-            // Step 3: Reconstruct dump with valid CRC using Garnet.common.Crc64
+            // Step 3: Reconstruct dump with valid CRC using Garnet.Core.Crc64
             byte[] encodedLength = hllValue.Length < 64
                 ? [(byte)(hllValue.Length & 0x3F)]
                 : hllValue.Length < 16384
@@ -1441,7 +1441,7 @@ namespace Garnet.test
             rdbVersion.CopyTo(payloadWithoutCrc.AsSpan(1 + encodedLength.Length + hllValue.Length, rdbVersion.Length));
 
             // Calculate CRC64 using Garnet's implementation (CRC64-Jones polynomial)
-            var crc64 = Garnet.common.Crc64.Hash(payloadWithoutCrc);
+            var crc64 = Garnet.Core.Crc64.Hash(payloadWithoutCrc);
 
             // Build final dump with valid CRC
             var craftedDump = new byte[payloadWithoutCrc.Length + 8];

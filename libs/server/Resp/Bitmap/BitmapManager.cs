@@ -3,7 +3,7 @@
 
 using System;
 using System.Runtime.CompilerServices;
-using Garnet.common;
+using Garnet.Core;
 
 #pragma warning disable IDE0054 // Use compound assignment
 #pragma warning disable IDE1006 // Naming Styles

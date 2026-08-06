@@ -12,7 +12,7 @@ using Garnet.client;
 using Garnet.server;
 
 #if DEBUG
-using Garnet.common;
+using Garnet.Core;
 #endif
 
 using Microsoft.Extensions.Logging;

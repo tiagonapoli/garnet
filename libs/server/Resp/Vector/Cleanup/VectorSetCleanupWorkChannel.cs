@@ -3,7 +3,7 @@
 
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

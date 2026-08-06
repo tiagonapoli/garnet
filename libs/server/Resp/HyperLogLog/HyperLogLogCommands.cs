@@ -3,7 +3,7 @@
 
 //#define HLL_SINGLE_PFADD_ENABLED
 
-using Garnet.common;
+using Garnet.Core;
 
 namespace Garnet.server
 {

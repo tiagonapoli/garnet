@@ -10,7 +10,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server.ACL;
 using Garnet.server.Auth.Settings;
 using Garnet.server.Lua;

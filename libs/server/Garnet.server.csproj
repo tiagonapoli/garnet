@@ -11,7 +11,7 @@
     <ProjectReference Include="..\..\libs\storage\Tsavorite\cs\src\core\Tsavorite.core.csproj" />
     <ProjectReference Include="..\..\metrics\HdrHistogram\HdrHistogram.csproj" />
     <ProjectReference Include="..\client\Garnet.client.csproj" />
-    <ProjectReference Include="..\common\Garnet.common.csproj" />
+    <ProjectReference Include="..\core\Garnet.Core.csproj" />
     <ProjectReference Include="..\resources\Garnet.resources.csproj" />
     <ProjectReference Include="..\..\libs\native\bftree-garnet\BfTreeInterop.csproj" />
   </ItemGroup>

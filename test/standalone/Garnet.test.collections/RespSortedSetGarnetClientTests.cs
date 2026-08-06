@@ -11,7 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Garnet.client;
 using Garnet.client.GarnetClientAPI;
-using Garnet.common;
+using Garnet.Core;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;

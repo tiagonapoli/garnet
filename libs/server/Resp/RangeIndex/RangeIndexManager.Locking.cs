@@ -6,7 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server.BfTreeInterop;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;

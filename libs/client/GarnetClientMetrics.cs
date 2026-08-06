@@ -3,7 +3,7 @@
 
 using System;
 using System.Globalization;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 using HdrHistogram;
 

@@ -4,7 +4,7 @@
 using System.Text;
 using BenchmarkDotNet.Attributes;
 using Garnet.cluster;
-using Garnet.common;
+using Garnet.Core;
 
 namespace BDN.benchmark.Cluster
 {

@@ -4,7 +4,7 @@
 using System;
 using System.IO;
 using System.Text;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

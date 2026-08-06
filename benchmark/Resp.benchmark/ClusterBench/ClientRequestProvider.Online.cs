@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Net;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 
 namespace Resp.benchmark
 {

@@ -9,7 +9,7 @@ WORKDIR /src
 # Copy csproj and restore as distinct layers
 COPY libs/client/*.csproj libs/client/
 COPY libs/cluster/*.csproj libs/cluster/
-COPY libs/common/*.csproj libs/common/
+COPY libs/core/*.csproj libs/core/
 COPY libs/host/*.csproj libs/host/
 COPY libs/server/*.csproj libs/server/
 COPY libs/native/bftree-garnet/*.csproj libs/native/bftree-garnet/

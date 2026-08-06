@@ -1426,13 +1426,13 @@ public sealed partial class RangeIndexManager
 
 #### 7c. `RangeIndexManager.Locking.cs` — Lock management
 
-> The locking pattern uses a striped `ReadOptimizedLock` (from `Garnet.common`) for
+> The locking pattern uses a striped `ReadOptimizedLock` (from `Garnet.Core`) for
 > concurrent access, with stripe count based on `Environment.ProcessorCount`. Key hash
 > (via `unifiedBasicContext.GetKeyHash(key)`) selects the stripe.
 > `ReadRangeIndex()` acquires a shared lock; `ReadOrCreateRangeIndex()` promotes to
 > exclusive if the key doesn't exist, creates the BfTree, then downgrades to shared.
 >
-> `ReadOptimizedLock` is defined in `libs/common/Synchronization/ReadOptimizedLock.cs`
+> `ReadOptimizedLock` is defined in `libs/core/Synchronization/ReadOptimizedLock.cs`
 > (shared with VectorSet). It provides shared/exclusive locking with
 > `AcquireSharedLock(keyHash, out token)`,
 > `TryPromoteSharedLock(keyHash, sharedToken, out exclusiveToken)`,

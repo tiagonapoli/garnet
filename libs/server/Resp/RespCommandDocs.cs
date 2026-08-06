@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json.Serialization;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server.Resp;
 using Microsoft.Extensions.Logging;
 

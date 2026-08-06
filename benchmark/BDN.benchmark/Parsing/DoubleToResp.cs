@@ -4,7 +4,7 @@
 using System.Globalization;
 using System.Runtime.InteropServices;
 using BenchmarkDotNet.Attributes;
-using Garnet.common;
+using Garnet.Core;
 
 namespace BDN.benchmark.Parsing
 {

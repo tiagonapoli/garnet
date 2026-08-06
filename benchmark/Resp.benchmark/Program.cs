@@ -4,7 +4,7 @@
 using System.Net;
 using CommandLine;
 using Garnet.client;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 

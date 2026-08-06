@@ -3,7 +3,7 @@
 
 using System.Text;
 using Garnet.cluster.Server.Replication;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
 

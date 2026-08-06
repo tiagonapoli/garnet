@@ -3,7 +3,7 @@
 
 using System.Text;
 using BenchmarkDotNet.Attributes;
-using Garnet.common;
+using Garnet.Core;
 
 namespace BDN.benchmark.Parsing
 {

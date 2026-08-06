@@ -5,7 +5,7 @@ using System;
 using System.Diagnostics;
 using System.Text;
 using System.Threading;
-using Garnet.common;
+using Garnet.Core;
 using Garnet.networking;
 
 namespace Garnet.client

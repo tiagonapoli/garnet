@@ -122,7 +122,7 @@ Component prefixes (use when change is scoped):
 - `[Cluster]` — Cluster/replication/sharding (`libs/cluster/`)
 - `[Objects]` — Object types: Hash, List, Set, SortedSet (`libs/server/Objects/`)
 - `[API]` — Garnet API surface (`libs/server/API/`)
-- `[Network]` — Networking/TLS (`libs/common/Networking/`)
+- `[Network]` — Networking/TLS (`libs/core/Networking/`)
 - `[Config]` — Configuration/options (`libs/host/Configuration/`)
 - `[Tests]` — Test-only changes
 - `[Docs]` — Documentation-only changes

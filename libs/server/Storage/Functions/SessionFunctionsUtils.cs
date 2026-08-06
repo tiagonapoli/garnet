@@ -4,7 +4,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using Garnet.common;
+using Garnet.Core;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 

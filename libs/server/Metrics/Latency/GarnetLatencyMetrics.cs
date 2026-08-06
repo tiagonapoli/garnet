@@ -5,7 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using Garnet.common;
+using Garnet.Core;
 using HdrHistogram;
 
 namespace Garnet.server
