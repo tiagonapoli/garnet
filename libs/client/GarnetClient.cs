@@ -16,6 +16,7 @@ using Garnet.common;
 using Garnet.networking;
 using HdrHistogram;
 using Microsoft.Extensions.Logging;
+using Tsavorite.core;
 
 namespace Garnet.client
 {

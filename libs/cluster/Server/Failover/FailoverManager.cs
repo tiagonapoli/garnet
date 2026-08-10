@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server;
 using Microsoft.Extensions.Logging;
+using Tsavorite.core;
 
 namespace Garnet.cluster
 {
@@ -26,13 +27,13 @@ namespace Garnet.cluster
         /// <summary>
         /// Shared epoch instance for failover GarnetClient connections
         /// </summary>
-        readonly client.LightEpoch epoch;
+        readonly LightEpoch epoch;
 
         public FailoverManager(ClusterProvider clusterProvider, ILogger logger = null)
         {
             this.clusterProvider = clusterProvider;
             this.logger = logger;
-            this.epoch = new client.LightEpoch();
+            this.epoch = new LightEpoch();
         }
 
         public void Dispose()
