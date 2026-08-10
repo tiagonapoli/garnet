@@ -142,6 +142,28 @@ namespace Garnet.test
         }
 
         [Test]
+        public void AllVectorSetCommandsCanReadIndex()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            var res = db.Execute("VADD", ["foo", "VALUES", "3", "1.0", "2.0", "3.0", "e1"]);
+            ClassicAssert.AreEqual(1, (int)res);
+
+            // Reading the index record must work for every command IsVectorSetCommand accepts, otherwise the
+            // read throws and takes the whole session down with it
+            ClassicAssert.AreEqual(1, (int)db.Execute("VCARD", ["foo"]));
+            ClassicAssert.IsTrue(db.VectorSetContains("foo", "e1"));
+            ClassicAssert.IsFalse(db.VectorSetContains("foo", "nope"));
+
+            _ = db.Execute("VLINKS", ["foo", "e1"]);
+            _ = db.Execute("VRANDMEMBER", ["foo"]);
+
+            // The connection has to still be usable
+            ClassicAssert.AreEqual("PONG", (string)db.Execute("PING"));
+        }
+
+        [Test]
         public void VADD()
         {
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
