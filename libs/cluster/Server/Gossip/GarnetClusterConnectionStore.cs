@@ -6,10 +6,10 @@ using System.Collections.Generic;
 using System.Net;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Garnet.client;
 using Garnet.common;
 using Garnet.server.TLS;
 using Microsoft.Extensions.Logging;
+using Tsavorite.core;
 
 namespace Garnet.cluster
 {
