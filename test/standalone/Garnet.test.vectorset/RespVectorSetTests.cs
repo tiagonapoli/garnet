@@ -2669,6 +2669,62 @@ namespace Garnet.test
         }
 
         [Test]
+        public void VINFOResp3()
+        {
+            using var redisResp3 = ConnectionMultiplexer.Connect(TestUtils.GetConfig(protocol: RedisProtocol.Resp3));
+            var dbResp3 = redisResp3.GetDatabase();
+
+            ClassicAssert.IsTrue((bool)dbResp3.Execute("VADD", ["foo", "VALUES", "3", "1.0", "2.0", "3.0", "elem", "NOQUANT"]));
+
+            var resp3Raw = dbResp3.Execute("VINFO", ["foo"]);
+            ClassicAssert.AreEqual(ResultType.Map, resp3Raw.Resp3Type);
+
+            var resp3 = resp3Raw.ToDictionary();
+            ClassicAssert.AreEqual(7, resp3.Count);
+            ClassicAssert.AreEqual("f32", (string)resp3["quant-type"]);
+            ClassicAssert.AreEqual("l2", (string)resp3["distance-metric"]);
+            ClassicAssert.AreEqual("3", (string)resp3["input-vector-dimensions"]);
+            ClassicAssert.AreEqual("0", (string)resp3["reduced-dimensions"]);
+            ClassicAssert.AreEqual("200", (string)resp3["build-exploration-factor"]);
+            ClassicAssert.AreEqual("16", (string)resp3["num-links"]);
+            ClassicAssert.AreEqual("1", (string)resp3["size"]);
+
+            // Resp2 keeps the flattened array encoding of the same pairs
+            using var redisResp2 = ConnectionMultiplexer.Connect(TestUtils.GetConfig(protocol: RedisProtocol.Resp2));
+            var resp2Raw = redisResp2.GetDatabase().Execute("VINFO", ["foo"]);
+            ClassicAssert.AreEqual(ResultType.Array, resp2Raw.Resp2Type);
+
+            var resp2 = (RedisValue[])resp2Raw;
+            ClassicAssert.AreEqual(14, resp2.Length);
+
+            for (var i = 0; i < resp2.Length; i += 2)
+            {
+                ClassicAssert.AreEqual((string)resp3[resp2[i]], (string)resp2[i + 1]);
+            }
+        }
+
+        [Test]
+        public void VREMResp3()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(protocol: RedisProtocol.Resp3));
+            var db = redis.GetDatabase();
+
+            ClassicAssert.IsTrue((bool)db.Execute("VADD", ["foo", "VALUES", "3", "1.0", "2.0", "3.0", "elem", "NOQUANT"]));
+
+            var removed = db.Execute("VREM", ["foo", "elem"]);
+            ClassicAssert.AreEqual(ResultType.Boolean, removed.Resp3Type);
+            ClassicAssert.IsTrue((bool)removed);
+
+            // Removing again, an unknown element, and a missing key all report false
+            foreach (var args in new object[][] { ["foo", "elem"], ["foo", "nosuchelem"], ["nosuchkey", "elem"] })
+            {
+                var res = db.Execute("VREM", args);
+                ClassicAssert.AreEqual(ResultType.Boolean, res.Resp3Type);
+                ClassicAssert.IsFalse((bool)res);
+            }
+        }
+
+        [Test]
         public void VGETATTR_NotFound()
         {
             var vectorSetKey = "foo";
