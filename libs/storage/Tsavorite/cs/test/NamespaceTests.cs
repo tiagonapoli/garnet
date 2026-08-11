@@ -235,6 +235,38 @@ namespace Tsavorite.test
             Assert.Throws<TsavoriteException>(() => bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default));
         }
 
+        [TestCase("80")]
+        [TestCase("a2")]
+        [TestCase("01020304")]
+        public void CopyToTailPreservesExtendedNamespace(string namespaceHex)
+        {
+            Setup(new() { PageSize = 1L << 12, LogMemorySize = 1L << 13, SegmentSize = 1L << 22 }, TestDeviceType.LocalMemory);
+
+            var key = new KeyWithNamespaceStruct { kfield1 = 13, kfield2 = 14, namespaceArr = Convert.FromHexString(namespaceHex) };
+            var value = new ValueStruct { vfield1 = key.kfield1, vfield2 = key.kfield2 };
+            Assert.That(bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default).IsCompletedSuccessfully, Is.True);
+            store.Log.FlushAndEvict(wait: true);
+
+            var tailBefore = store.Log.TailAddress;
+            InputStruct input = default;
+            OutputStruct output = default;
+            ReadOptions readOptions = new() { CopyOptions = new(ReadCopyFrom.AllImmutable, ReadCopyTo.MainLog) };
+            var status = bContext.Read(key, ref input, ref output, ref readOptions, out _);
+            Assert.That(status.IsPending, Is.True);
+            (status, output) = CompletePendingResult();
+
+            Assert.That(status.Found, Is.True);
+            Assert.That(status.Record.Copied, Is.True);
+            Assert.That(store.Log.TailAddress, Is.GreaterThan(tailBefore));
+            Assert.That(output.value.vfield1, Is.EqualTo(value.vfield1));
+            Assert.That(output.value.vfield2, Is.EqualTo(value.vfield2));
+
+            output = default;
+            status = bContext.Read(key, ref input, ref output);
+            Assert.That(status.IsPending, Is.False);
+            Assert.That(status.Found, Is.True);
+        }
+
         [Test]
         public async Task RecoveryAsync([Values(0, 1, 4, (int)sbyte.MaxValue)] int namespaceSize, [Values] TestDeviceType deviceType)
         {
