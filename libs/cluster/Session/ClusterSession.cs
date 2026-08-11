@@ -34,10 +34,10 @@ namespace Garnet.cluster
         long _localCurrentEpoch = 0;
 
         /// <summary>
-        /// Epoch announced by this session, or 0 when idle. Scanned from another thread in a spin loop,
-        /// so it must not be cached across iterations.
+        /// Epoch announced by this session, or 0 when idle. Acquire fence: scanned from another thread in a
+        /// spin loop, so it must not be cached across iterations.
         /// </summary>
-        public long LocalCurrentEpoch => Volatile.Read(ref _localCurrentEpoch);
+        public long LocalCurrentEpochAcquireFence => Volatile.Read(ref _localCurrentEpoch);
 
         /// <summary>
         /// Indicates if this is a session that allows for reads and writes
@@ -189,18 +189,16 @@ namespace Garnet.cluster
         }
 
         /// <summary>
-        /// Announce this session as active at the current Garnet epoch. The announce is a locked RMW because it
-        /// is the store half of an SB pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
-        /// with a plain store the announce could sit in the store buffer while the scan reads the slot as 0, take
-        /// this session for idle, and complete the transition while the session still serves the old config.
-        /// A stale (lower) read of <see cref="ClusterProvider.GarnetCurrentEpoch"/> is safe: it only makes the
-        /// scan wait longer.
+        /// Announce this session as active at the current Garnet epoch. The announce is a locked RMW because it is
+        /// the store half of an SB pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
+        /// with a plain store it could sit in the store buffer while the scan reads the slot as 0 and completes
+        /// the transition, leaving this session serving the old config.
         /// </summary>
         public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, Volatile.Read(ref clusterProvider.GarnetCurrentEpoch));
 
         /// <summary>
-        /// Announce this session as idle. A release store, so this batch's config reads cannot sink past it and be
-        /// attributed to a session the scan has already cleared.
+        /// Announce this session as idle. A release memory barrier, so this batch's config reads cannot sink past
+        /// it and be attributed to a session the scan has already cleared.
         /// </summary>
         public void ReleaseCurrentEpoch() => Volatile.Write(ref _localCurrentEpoch, 0);
 
