@@ -37,6 +37,12 @@ namespace Tsavorite.core
 
         internal bool IsEmpty => objectArray.Count == 0;
 
+        /// <summary>Whether <paramref name="objectId"/> refers to a slot that has been allocated in this map.</summary>
+        /// <remarks>Only callers that obtain an id from untrusted memory (e.g. a record walk over raw page bytes) need this;
+        /// an id read from a record that is known to be well-formed is always in range.</remarks>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool IsValidObjectId(int objectId) => (uint)objectId < (uint)objectArray.Count;
+
         /// <summary>Reserve a slot and return its ID.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int Allocate()

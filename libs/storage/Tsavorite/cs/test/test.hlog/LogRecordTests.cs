@@ -426,6 +426,42 @@ namespace Tsavorite.test.LogRecordTests
             Assert.That(valueAddress, Is.EqualTo(keyAddress + keyLength));
         }
 
+        [Test]
+        [Category(LogRecordCategory), Category(SmokeTestCategory)]
+        public void HasValidObjectIdsRejectsIdsOutsideTheMap()
+        {
+            const int keyLength = LogSettings.MaxInlineKeySizeLimit + 1;
+            const int valueLength = 32;
+
+            var sizeInfo = new RecordSizeInfo()
+            {
+                FieldInfo = new() { KeySize = keyLength, ValueSize = valueLength }
+            };
+            PopulateBoundarySizeInfo(ref sizeInfo, maxInlineKey: LogSettings.MaxInlineKeySizeLimit, maxInlineValue: LogSettings.MaxInlineValueSizeLimit);
+            Assert.That(sizeInfo.KeyIsInline, Is.False);
+
+            nativePointer = (long)NativeMemory.AlignedAlloc((nuint)sizeInfo.AllocatedInlineRecordSize, Constants.kCacheLineBytes);
+            ref var dataHeader = ref *(RecordDataHeader*)(nativePointer + RecordInfo.Size);
+            _ = dataHeader.Initialize(in sizeInfo, out var keyAddress, out _ /*nsAddr*/, out _ /*valueAddress*/, nativePointer);
+            var logRecord = new LogRecord(nativePointer, objectIdMap) { InfoRef = RecordInfo.InitialValid };
+
+            // Bytes that are not a record can carry the overflow indicator with an arbitrary id; the empty map resolves none of them.
+            Assert.That(objectIdMap.IsEmpty, Is.True);
+            foreach (var garbageId in new[] { 0, 1, int.MaxValue, ObjectIdMap.InvalidObjectId, int.MinValue, unchecked((int)0xbeba2333) })
+            {
+                *(int*)keyAddress = garbageId;
+                Assert.That(logRecord.HasValidObjectIds, Is.False, $"objectId {garbageId} must not resolve in an empty map");
+            }
+
+            // An id handed out by the map resolves, and only ids below Count do.
+            var objectId = objectIdMap.Allocate();
+            *(int*)keyAddress = objectId;
+            Assert.That(logRecord.HasValidObjectIds, Is.True);
+
+            *(int*)keyAddress = objectIdMap.Count;
+            Assert.That(logRecord.HasValidObjectIds, Is.False, "objectId at Count is one past the last allocated slot");
+        }
+
         private void InitializeRecord<TKey>(TKey key, Span<byte> value, ref RecordSizeInfo sizeInfo, out LogRecord logRecord, out long expectedFillerLength, out long eTag, out long expiration)
             where TKey : IKey
 #if NET9_0_OR_GREATER

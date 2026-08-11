@@ -1772,6 +1772,40 @@ namespace Tsavorite.core
             return recordSize + keyLength + (int)valueLength;
         }
 
+        /// <summary>Whether every object id in this record resolves to an allocated slot of the record page's <see cref="ObjectIdMap"/>.</summary>
+        /// <remarks>Callers that decode raw page memory (e.g. the eviction record walk) must check this before touching heap fields:
+        /// bytes that are not a record can carry the overflow/object indicator bits with an arbitrary id, and dereferencing that id
+        /// faults. Records reached through the hash index are always well-formed and need not check.</remarks>
+        public readonly bool HasValidObjectIds
+        {
+            get
+            {
+                var localDataHeader = DataHeader;
+                var hasKeyId = localDataHeader.KeyIsOverflow;
+                var hasValueId = localDataHeader.ValueIsOverflow || localDataHeader.ValueIsObject;
+
+                if (objectIdMap is null)
+                    return !hasKeyId && !hasValueId;
+
+                if (hasKeyId)
+                {
+                    var (_ /*keyLength*/, keyAddress) = localDataHeader.GetKeyFieldInfo(physicalAddress);
+                    if (!objectIdMap.IsValidObjectId(*(int*)keyAddress))
+                        return false;
+                }
+
+                if (hasValueId)
+                {
+                    var (_ /*valueLength*/, valueAddress) = localDataHeader.GetValueFieldInfo(physicalAddress);
+                    var valueObjectId = *(int*)valueAddress;
+                    if (valueObjectId != ObjectIdMap.InvalidObjectId && !objectIdMap.IsValidObjectId(valueObjectId))
+                        return false;
+                }
+
+                return true;
+            }
+        }
+
         public readonly long CalculateHeapMemorySize()
         {
             long size = 0;

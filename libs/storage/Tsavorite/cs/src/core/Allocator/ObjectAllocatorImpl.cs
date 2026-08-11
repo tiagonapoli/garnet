@@ -418,6 +418,16 @@ namespace Tsavorite.core
                     continue;
                 }
 
+                // The walk decodes raw page bytes, so a record whose object ids are out of range for this page's map means alignment
+                // with real record boundaries has been lost; everything from here to the end of the range is garbage as well. Stop
+                // rather than dereference the ids, which faults, and rather than hand the record to OnEvict.
+                if (!logRecord.HasValidObjectIds)
+                {
+                    logger?.LogError("EvictRecordsInRange stopping at {address}: record has object ids that are out of range for page {page} (map count {mapCount}); range [{startAddress}, {endAddress}), source {source}, isRecovery {isRecovery}",
+                        address, GetPage(address), objectIdMap.Count, startAddress, endAddress, source, isRecovery);
+                    break;
+                }
+
                 // Decrement the record's heap contribution in a single call.
                 // For non-tombstoned records, CalculateHeapMemorySize returns key + value heap.
                 // For tombstoned records, it returns 0 (by design), but the key overflow is still
