@@ -56,7 +56,7 @@ namespace Garnet.cluster
         /// <summary>
         /// Shared epoch instance for connection store
         /// </summary>
-        readonly client.LightEpoch epoch;
+        readonly LightEpoch epoch;
 
         /// <summary>
         /// Constructor
@@ -105,7 +105,7 @@ namespace Garnet.cluster
                 currentConfig = new();
             }
 
-            this.epoch = new client.LightEpoch();
+            this.epoch = new LightEpoch();
             clusterConnectionStore = new GarnetClusterConnectionStore(epoch, logger: logger);
             InitLocal(clusterEndpoint.Address.ToString(), clusterEndpoint.Port, recoverConfig);
             logger?.LogInformation("{NodeInfoStartup}", CurrentConfig.GetClusterInfo(clusterProvider).TrimEnd('\n'));
