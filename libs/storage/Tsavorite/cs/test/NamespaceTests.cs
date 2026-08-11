@@ -200,6 +200,41 @@ namespace Tsavorite.test
             AssertCompleted(new(OperationStatus.INPLACE_UPDATED_RECORD), delStatus);
         }
 
+        [TestCase("7f", 0)]
+        [TestCase("80", 1)]
+        [TestCase("a2", 1)]
+        [TestCase("8001", 2)]
+        [TestCase("01020304", 4)]
+        public void ImmutableDeleteEncodesNamespaceWithoutCorruptingRecordLength(string namespaceHex, int expectedExtendedNamespaceSize)
+        {
+            Setup(new() { PageSize = 1L << 12, LogMemorySize = 1L << 13, SegmentSize = 1L << 22 }, TestDeviceType.LocalMemory);
+
+            var key = new KeyWithNamespaceStruct { kfield1 = 13, kfield2 = 14, namespaceArr = Convert.FromHexString(namespaceHex) };
+            var value = new ValueStruct { vfield1 = 23, vfield2 = 24 };
+            Assert.That(bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default).IsCompletedSuccessfully, Is.True);
+
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var tombstoneAddress = store.Log.TailAddress;
+            Assert.That(bContext.Delete(key, Empty.Default).IsCompletedSuccessfully, Is.True);
+
+            var tombstone = new LogRecord(store.hlogBase.GetPhysicalAddress(tombstoneAddress));
+            Assert.That(tombstone.Info.Tombstone, Is.True);
+            Assert.That(tombstone.DataHeader.ExtendedNamespaceLength, Is.EqualTo(expectedExtendedNamespaceSize));
+            Assert.That(tombstone.NamespaceBytes.SequenceEqual(key.NamespaceBytes), Is.True);
+            Assert.That(store.Log.TailAddress, Is.EqualTo(tombstoneAddress + tombstone.AllocatedSize));
+        }
+
+        [TestCase("")]
+        [TestCase("00")]
+        public void InvalidNamespaceEncodingIsRejected(string namespaceHex)
+        {
+            Setup(new() { PageSize = 1L << 12, LogMemorySize = 1L << 13, SegmentSize = 1L << 22 }, TestDeviceType.LocalMemory);
+
+            var key = new KeyWithNamespaceStruct { kfield1 = 13, kfield2 = 14, namespaceArr = Convert.FromHexString(namespaceHex) };
+            var value = new ValueStruct { vfield1 = 23, vfield2 = 24 };
+            Assert.Throws<TsavoriteException>(() => bContext.Upsert(key, SpanByte.FromPinnedVariable(ref value), Empty.Default));
+        }
+
         [Test]
         public async Task RecoveryAsync([Values(0, 1, 4, (int)sbyte.MaxValue)] int namespaceSize, [Values] TestDeviceType deviceType)
         {

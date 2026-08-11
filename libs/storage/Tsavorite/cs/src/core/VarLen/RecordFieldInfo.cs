@@ -1,6 +1,8 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
+
 namespace Tsavorite.core
 {
     /// <summary>
@@ -44,6 +46,28 @@ namespace Tsavorite.core
 
         /// <summary><see cref="RecordDataHeader.RecordType"/> for the record - defaults to 0.</summary>
         public byte RecordType;
+
+        internal static int GetExtendedNamespaceSize<TKey>(in TKey key)
+            where TKey : IKey
+#if NET9_0_OR_GREATER
+                , allows ref struct
+#endif
+        {
+            if (!key.HasNamespace)
+                return 0;
+
+            return GetExtendedNamespaceSize(key.NamespaceBytes);
+        }
+
+        internal static int GetExtendedNamespaceSize(ReadOnlySpan<byte> namespaceBytes)
+        {
+            if (namespaceBytes.IsEmpty)
+                throw new TsavoriteException("HasNamespace is true but NamespaceBytes is empty");
+            if (namespaceBytes.Length == 1 && namespaceBytes[0] == 0)
+                throw new TsavoriteException("The single-byte namespace value 0 is reserved");
+
+            return namespaceBytes.Length == 1 && namespaceBytes[0] <= RecordDataHeader.MaximumSingleByteNamespaceValue ? 0 : namespaceBytes.Length;
+        }
 
         /// <inheritdoc/>
         public override string ToString()

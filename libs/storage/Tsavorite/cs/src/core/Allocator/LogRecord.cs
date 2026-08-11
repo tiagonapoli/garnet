@@ -532,6 +532,10 @@ namespace Tsavorite.core
                 , allows ref struct
 #endif
         {
+            var hasNamespace = key.HasNamespace;
+            var namespaceBytes = hasNamespace ? key.NamespaceBytes : default;
+            ValidateNamespaceSize(hasNamespace, namespaceBytes, in sizeInfo);
+
             // Build the full RDH in a local (Initialize folds indicator bits + lengths + namespace + recordType + FillerWords
             // into a SINGLE atomic word write at the end). We pass `physicalAddress` as baseAddress and the returned addresses
             // are within it (NOT addresses based on the stack variable). Any record-split work for over-large filler writes the
@@ -562,12 +566,8 @@ namespace Tsavorite.core
             // Serialize namespace, if any
             //
             // Since TKey is generic, the hope is this whole branch gets elided when using a no-namespace key type
-            if (key.HasNamespace)
-            {
-                var namespaceBytes = key.NamespaceBytes;
-
+            if (hasNamespace)
                 namespaceBytes.CopyTo(new Span<byte>((byte*)namespaceAddress, namespaceBytes.Length));
-            }
 
             // Initialize Value metadata (no value data yet; that's done in ISessionFunctions).
             if (!sizeInfo.ValueIsInline)
@@ -606,6 +606,10 @@ namespace Tsavorite.core
                 , allows ref struct
 #endif
         {
+            var hasNamespace = key.HasNamespace;
+            var namespaceBytes = hasNamespace ? key.NamespaceBytes : default;
+            ValidateNamespaceSize(hasNamespace, namespaceBytes, in sizeInfo);
+
             // Build the full RDH in a local; SpanByteAllocator records are always inline keys + inline values, so
             // sizeInfo.KeyIsInline and sizeInfo.ValueIsInline must both be true (Initialize encodes both). We pass
             // `physicalAddress` as baseAddress and the returned addresses are within it (NOT addresses based on the stack variable).
@@ -623,11 +627,18 @@ namespace Tsavorite.core
             // Serialize namespace, if any
             //
             // Since TKey is generic, the hope is this whole branch gets elided when using a no-namespace key type
-            if (key.HasNamespace)
-            {
-                var namespaceBytes = key.NamespaceBytes;
+            if (hasNamespace)
                 namespaceBytes.CopyTo(new Span<byte>((byte*)namespaceAddress, namespaceBytes.Length));
-            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ValidateNamespaceSize(bool hasNamespace, ReadOnlySpan<byte> namespaceBytes, in RecordSizeInfo sizeInfo)
+        {
+            var expectedExtendedNamespaceSize = hasNamespace ? RecordFieldInfo.GetExtendedNamespaceSize(namespaceBytes) : 0;
+            if (sizeInfo.FieldInfo.ExtendedNamespaceSize != expectedExtendedNamespaceSize)
+                ThrowTsavoriteException($"Extended namespace size {sizeInfo.FieldInfo.ExtendedNamespaceSize} does not match namespace bytes length {namespaceBytes.Length}");
+
+            Debug.Assert(sizeInfo.FieldInfo.ExtendedNamespaceSize == expectedExtendedNamespaceSize);
         }
 
         /// <summary>A ref to the record header</summary>

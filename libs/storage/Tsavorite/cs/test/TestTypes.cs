@@ -509,19 +509,6 @@ namespace Tsavorite.test
 #if NET9_0_OR_GREATER
                 , allows ref struct
 #endif
-        {
-            if (!key.HasNamespace)
-            {
-                return 0;
-            }
-
-            var nsBytes = key.NamespaceBytes;
-            if (nsBytes.Length > 1 || nsBytes[0] > 127)
-            {
-                return nsBytes.Length;
-            }
-
-            return 0;
-        }
+            => RecordFieldInfo.GetExtendedNamespaceSize(in key);
     }
 }

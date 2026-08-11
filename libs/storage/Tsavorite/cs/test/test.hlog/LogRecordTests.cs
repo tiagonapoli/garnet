@@ -426,6 +426,22 @@ namespace Tsavorite.test.LogRecordTests
             Assert.That(valueAddress, Is.EqualTo(keyAddress + keyLength));
         }
 
+        [Test]
+        [Category(LogRecordCategory), Category(SmokeTestCategory)]
+        public void InitializeRecordRejectsMismatchedNamespaceSizeBeforePublishingHeader()
+        {
+            var key = new KeyWithNamespaceStruct { kfield1 = 13, kfield2 = 14, namespaceArr = [0x80] };
+            var sizeInfo = new RecordSizeInfo() { FieldInfo = new() { KeySize = key.KeyBytes.Length, ValueSize = sizeof(long) } };
+            PopulateBoundarySizeInfo(ref sizeInfo, maxInlineKey: LogSettings.MaxInlineKeySizeLimit, maxInlineValue: LogSettings.MaxInlineValueSizeLimit);
+
+            nativePointer = (long)NativeMemory.AlignedAlloc((nuint)sizeInfo.AllocatedInlineRecordSize, Constants.kCacheLineBytes);
+            NativeMemory.Clear((void*)nativePointer, (nuint)sizeInfo.AllocatedInlineRecordSize);
+            var logRecord = new LogRecord(nativePointer);
+
+            Assert.Throws<TsavoriteException>(() => logRecord.InitializeRecord(key, in sizeInfo));
+            Assert.That(logRecord.DataHeader.word, Is.Zero);
+        }
+
         private void InitializeRecord<TKey>(TKey key, Span<byte> value, ref RecordSizeInfo sizeInfo, out LogRecord logRecord, out long expectedFillerLength, out long eTag, out long expiration)
             where TKey : IKey
 #if NET9_0_OR_GREATER
