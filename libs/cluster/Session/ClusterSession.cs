@@ -34,8 +34,7 @@ namespace Garnet.cluster
         long _localCurrentEpoch = 0;
 
         /// <summary>
-        /// Epoch announced by this session, or 0 when idle. Acquire fence: scanned from another thread in a
-        /// spin loop, so it must not be cached across iterations.
+        /// Epoch announced by this session, or 0 when idle.
         /// </summary>
         public long LocalCurrentEpochAcquireFence => Volatile.Read(ref _localCurrentEpoch);
 
@@ -189,16 +188,14 @@ namespace Garnet.cluster
         }
 
         /// <summary>
-        /// Announce this session as active at the current Garnet epoch. The announce is a locked RMW because it is
-        /// the store half of an SB pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
-        /// with a plain store it could sit in the store buffer while the scan reads the slot as 0 and completes
-        /// the transition, leaving this session serving the old config.
+        /// Announce this session as active at the current Garnet epoch. Locked RMW, not a plain store: the
+        /// announce must be visible before this session reads the config, or a concurrent config transition can
+        /// complete without seeing it.
         /// </summary>
         public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, Volatile.Read(ref clusterProvider.GarnetCurrentEpoch));
 
         /// <summary>
-        /// Announce this session as idle. A release memory barrier, so this batch's config reads cannot sink past
-        /// it and be attributed to a session the scan has already cleared.
+        /// Announce this session as idle.
         /// </summary>
         public void ReleaseCurrentEpoch() => Volatile.Write(ref _localCurrentEpoch, 0);
 

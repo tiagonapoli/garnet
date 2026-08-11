@@ -371,6 +371,7 @@ namespace Garnet.cluster
                     var sessions = ((GarnetServerTcp)server).ActiveClusterSessions();
                     foreach (var s in sessions)
                     {
+                        // s.LocalCurrentEpochAcquireFence is a volatile read (acquire memory barrier)
                         var entryEpoch = s.LocalCurrentEpochAcquireFence;
                         // Retry if at least one session has not yet caught up to the current epoch.
                         if (entryEpoch != 0 && entryEpoch < currentEpoch)
