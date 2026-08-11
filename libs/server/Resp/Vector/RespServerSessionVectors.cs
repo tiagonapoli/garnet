@@ -1599,7 +1599,7 @@ namespace Garnet.server
                 _ => throw new GarnetException($"Invalid VectorDistanceMetricType: {distanceMetricType}"),
             };
 
-            WriteArrayLength(14);
+            WriteMapLength(7);
             WriteSimpleString("quant-type"u8);
             WriteSimpleString(quantTypeSpan);
             WriteSimpleString("distance-metric"u8);
@@ -1827,10 +1827,7 @@ namespace Garnet.server
             }
             else
             {
-                var resp = res == GarnetStatus.OK ? 1 : 0;
-
-                while (!RespWriteUtils.TryWriteInt32(resp, ref dcurr, dend))
-                    SendAndReset();
+                WriteBoolean(res == GarnetStatus.OK);
             }
 
             return true;
