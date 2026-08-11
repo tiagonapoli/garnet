@@ -47,7 +47,7 @@ namespace Garnet.server
         /// <summary>
         /// Local current epoch
         /// </summary>
-        long LocalCurrentEpochAcquireFence { get; }
+        long LocalCurrentEpoch { get; }
 
         /// <summary>
         /// Acquire epoch

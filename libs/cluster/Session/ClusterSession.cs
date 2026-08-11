@@ -36,7 +36,7 @@ namespace Garnet.cluster
         /// <summary>
         /// Epoch announced by this session, or 0 when idle.
         /// </summary>
-        public long LocalCurrentEpochAcquireFence => Volatile.Read(ref _localCurrentEpoch);
+        public long LocalCurrentEpoch => Volatile.Read(ref _localCurrentEpoch);
 
         /// <summary>
         /// Indicates if this is a session that allows for reads and writes
@@ -188,9 +188,7 @@ namespace Garnet.cluster
         }
 
         /// <summary>
-        /// Announce this session as active at the current Garnet epoch. Locked RMW, not a plain store: the
-        /// announce must be visible before this session reads the config, or a concurrent config transition can
-        /// complete without seeing it.
+        /// Announce this session as active at the current Garnet epoch. Memory barrier is required to ensure correctness.
         /// </summary>
         public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, Volatile.Read(ref clusterProvider.GarnetCurrentEpoch));
 
