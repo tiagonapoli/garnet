@@ -34,9 +34,8 @@ namespace Garnet.cluster
         long _localCurrentEpoch = 0;
 
         /// <summary>
-        /// The Garnet epoch this session announced when it entered its current batch, or 0 if it is between batches.
-        /// Read by <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/> from another thread, in a spin
-        /// loop, so it must not be cached across iterations.
+        /// Epoch announced by this session, or 0 when idle. Scanned from another thread in a spin loop,
+        /// so it must not be cached across iterations.
         /// </summary>
         public long LocalCurrentEpoch => Volatile.Read(ref _localCurrentEpoch);
 
@@ -190,36 +189,18 @@ namespace Garnet.cluster
         }
 
         /// <summary>
-        /// Announce this session as active at the current Garnet epoch.
+        /// Announce this session as active at the current Garnet epoch. The announce is a locked RMW because it
+        /// is the store half of an SB pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
+        /// with a plain store the announce could sit in the store buffer while the scan reads the slot as 0, take
+        /// this session for idle, and complete the transition while the session still serves the old config.
+        /// A stale (lower) read of <see cref="ClusterProvider.GarnetCurrentEpoch"/> is safe: it only makes the
+        /// scan wait longer.
         /// </summary>
-        /// <remarks>
-        /// The announce is a locked RMW rather than a plain store because it forms one half of a store-buffer
-        /// (SB) pattern with <see cref="ClusterProvider.BumpAndWaitForEpochTransitionAsync"/>:
-        /// <code>
-        ///   session : STORE _localCurrentEpoch ; LOAD  currentConfig
-        ///   changer : STORE currentConfig      ; LOAD  _localCurrentEpoch
-        /// </code>
-        /// x86-TSO forbids both sides reading the stale value only when both fence between their store and their
-        /// load. The changer already fences (<see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/> when
-        /// publishing the config, <see cref="Interlocked.Increment(ref long)"/> when bumping). With a plain store
-        /// here the announce could sit in this core's store buffer while the scan reads the slot as 0, takes this
-        /// session for idle, and reports the config transition complete — after which the session would go on to
-        /// serve commands from the pre-transition <see cref="ClusterConfig"/> snapshot it already loaded.
-        ///
-        /// On the batch path that hazard was masked rather than absent: <c>TryConsumeMessages</c> calls
-        /// <c>networkSender.EnterAndGetResponseObject</c> immediately after announcing, and that takes a
-        /// <see cref="System.Threading.SpinLock"/>, whose <see cref="Interlocked"/> acquire drained the announce
-        /// before any config read. Fencing here makes the ordering a property of the epoch protocol instead of a
-        /// side effect of how an unrelated component happens to lock.
-        ///
-        /// Reading <see cref="ClusterProvider.GarnetCurrentEpoch"/> before the exchange is safe: a stale (lower)
-        /// epoch only makes the scan wait for this session for longer.
-        /// </remarks>
-        public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, clusterProvider.GarnetCurrentEpoch);
+        public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, Volatile.Read(ref clusterProvider.GarnetCurrentEpoch));
 
         /// <summary>
-        /// Announce this session as idle. A release store, so the config reads this batch performed cannot sink
-        /// past it and be attributed to a session the scan has already cleared.
+        /// Announce this session as idle. A release store, so this batch's config reads cannot sink past it and be
+        /// attributed to a session the scan has already cleared.
         /// </summary>
         public void ReleaseCurrentEpoch() => Volatile.Write(ref _localCurrentEpoch, 0);
 
