@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.networking;
@@ -32,7 +33,10 @@ namespace Garnet.cluster
         unsafe byte* dcurr, dend;
         long _localCurrentEpoch = 0;
 
-        public long LocalCurrentEpoch => _localCurrentEpoch;
+        /// <summary>
+        /// Epoch announced by this session, or 0 when idle.
+        /// </summary>
+        public long LocalCurrentEpoch => Volatile.Read(ref _localCurrentEpoch);
 
         /// <summary>
         /// Indicates if this is a session that allows for reads and writes
@@ -182,8 +186,16 @@ namespace Garnet.cluster
         {
             this.userHandle = userHandle;
         }
-        public void AcquireCurrentEpoch() => _localCurrentEpoch = clusterProvider.GarnetCurrentEpoch;
-        public void ReleaseCurrentEpoch() => _localCurrentEpoch = 0;
+
+        /// <summary>
+        /// Announce this session as active at the current Garnet epoch. Memory barrier is required to ensure correctness.
+        /// </summary>
+        public void AcquireCurrentEpoch() => Interlocked.Exchange(ref _localCurrentEpoch, Volatile.Read(ref clusterProvider.GarnetCurrentEpoch));
+
+        /// <summary>
+        /// Announce this session as idle.
+        /// </summary>
+        public void ReleaseCurrentEpoch() => Volatile.Write(ref _localCurrentEpoch, 0);
 
         /// <summary>
         /// Release epoch, wait for config transition and re-acquire the epoch
