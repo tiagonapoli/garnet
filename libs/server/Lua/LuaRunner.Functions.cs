@@ -2978,7 +2978,18 @@ namespace Garnet.server
             }
             else
             {
-                var (parsedCommand, badArg) = PrepareAndCheckRespRequest(ref state, respServerSession, scratchBufferBuilder, info, cmdSpan, luaArgCount);
+                // The synthetic request is padded up to the arity of the command being checked, so a provided
+                // subcommand needs the subcommand's arity - the parent's is shorter and would parse as invalid
+                var argCountInfo = info;
+                if (providesSubCommand && state.Type(2) is LuaType.String or LuaType.Number)
+                {
+                    state.KnownStringToBuffer(2, out var subCmdSpan);
+                    var subCmdName = $"{cmdStr.ToUpperInvariant()}|{Encoding.UTF8.GetString(subCmdSpan).ToUpperInvariant()}";
+                    if (RespCommandsInfo.TryGetRespCommandInfo(subCmdName, out var subInfo, externalOnly: false, includeSubCommands: true))
+                        argCountInfo = subInfo;
+                }
+
+                var (parsedCommand, badArg) = PrepareAndCheckRespRequest(ref state, respServerSession, scratchBufferBuilder, argCountInfo, cmdSpan, luaArgCount);
 
                 if (badArg)
                 {

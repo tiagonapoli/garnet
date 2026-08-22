@@ -621,6 +621,49 @@ namespace Garnet.test
         }
 
         [Test]
+        [TestCase("GET")]
+        [TestCase("GET key1 key2")]
+        [TestCase("SET")]
+        [TestCase("SET key1")]
+        [TestCase("DEL")]
+        [TestCase("APPEND key1")]
+        [TestCase("GETSET key1")]
+        [TestCase("SETEX key1")]
+        [TestCase("GETRANGE key1")]
+        [TestCase("SETRANGE key1")]
+        public void CommandWithInvalidArityReturnsError(string command)
+        {
+            var lightClientRequest = TestUtils.CreateRequest();
+
+            // Populate the session parse state so an unchecked handler would read a stale argument slot
+            var response = lightClientRequest.SendCommand("SET stalekey stalevalue");
+            TestUtils.AssertEqualUpToExpectedLength("+OK\r\n", response);
+
+            var commandName = command.Split(' ')[0];
+            response = lightClientRequest.SendCommand(command);
+            TestUtils.AssertEqualUpToExpectedLength($"-ERR wrong number of arguments for '{commandName.ToLowerInvariant()}' command\r\n", response);
+
+            // The connection stays usable and in sync after the error
+            response = lightClientRequest.SendCommand("GET stalekey");
+            TestUtils.AssertEqualUpToExpectedLength("$10\r\nstalevalue\r\n", response);
+        }
+
+        [Test]
+        public void InvalidArityAbortsTransaction()
+        {
+            var lightClientRequest = TestUtils.CreateRequest();
+
+            var response = lightClientRequest.SendCommand("MULTI");
+            TestUtils.AssertEqualUpToExpectedLength("+OK\r\n", response);
+
+            response = lightClientRequest.SendCommand("GET");
+            TestUtils.AssertEqualUpToExpectedLength("-ERR wrong number of arguments for 'get' command\r\n", response);
+
+            response = lightClientRequest.SendCommand("EXEC");
+            TestUtils.AssertEqualUpToExpectedLength("-EXECABORT Transaction discarded because of previous errors.\r\n", response);
+        }
+
+        [Test]
         public void SetExpiry()
         {
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
@@ -4444,7 +4487,7 @@ namespace Garnet.test
                 // No args
                 {
                     var exc = ClassicAssert.Throws<RedisServerException>(() => mainDB.Execute("CLIENT", "KILL"));
-                    ClassicAssert.AreEqual("ERR wrong number of arguments for 'CLIENT|KILL' command", exc.Message);
+                    ClassicAssert.AreEqual("ERR wrong number of arguments for 'client|kill' command", exc.Message);
                 }
 
                 // Old style, not a known client

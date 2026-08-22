@@ -70,8 +70,12 @@ namespace Garnet.test
             ReadOnlySpan<RespCommand> vectorSetCommands = [RespCommand.VADD, RespCommand.VCARD, RespCommand.VDIM, RespCommand.VEMB, RespCommand.VGETATTR, RespCommand.VINFO, RespCommand.VISMEMBER, RespCommand.VLINKS, RespCommand.VRANDMEMBER, RespCommand.VREM, RespCommand.VSETATTR, RespCommand.VSIM];
             foreach (var cmd in vectorSetCommands)
             {
+                // Arity is validated during parsing, so pad the call out to the declared minimum
+                ClassicAssert.True(RespCommandsInfo.TryGetRespCommandInfo(cmd.ToString(), out var cmdInfo));
+                var args = Enumerable.Repeat((object)"x", Math.Abs(cmdInfo.Arity) - 1).ToArray();
+
                 // Should all fault before any validation
-                var exc = ClassicAssert.Throws<RedisServerException>(() => db.Execute(cmd.ToString()));
+                var exc = ClassicAssert.Throws<RedisServerException>(() => db.Execute(cmd.ToString(), args));
                 ClassicAssert.AreEqual("ERR Vector Set (preview) commands are not enabled", exc.Message);
             }
         }
@@ -288,17 +292,17 @@ namespace Garnet.test
 
             // Bad arity
             var exc1 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD"));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc1.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc1.Message);
             var exc2 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey]));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc2.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc2.Message);
             var exc3 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey, "FP32"]));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc3.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc3.Message);
             var exc4 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey, "VALUES"]));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc4.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc4.Message);
             var exc5 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey, "VALUES", "1"]));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc5.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc5.Message);
             var exc6 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey, "VALUES", "1", "1.0"]));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'VADD' command", exc6.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'vadd' command", exc6.Message);
 
             // Reduce after vector
             var exc7 = ClassicAssert.Throws<RedisServerException>(() => db.Execute("VADD", [vectorSetKey, "VALUES", "2", "1.0", "2.0", "bar", "REDUCE", "1"]));

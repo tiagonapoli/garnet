@@ -145,7 +145,7 @@ namespace Garnet.server
 
                 if (invalidNumArgs)
                 {
-                    var err = string.Format(CmdStrings.GenericErrWrongNumArgs, RespCommandsInfo.GetRespCommandName(cmd));
+                    var err = string.Format(CmdStrings.GenericErrWrongNumArgs, RespCommandsInfo.GetRespCommandName(cmd).ToLowerInvariant());
                     while (!RespWriteUtils.TryWriteError(err, ref dcurr, dend))
                         SendAndReset();
                     txnManager.Abort();

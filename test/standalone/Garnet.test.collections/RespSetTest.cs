@@ -228,7 +228,7 @@ namespace Garnet.test
 
             // SSCAN without key
             var e = Assert.Throws<RedisServerException>(() => db.Execute("SSCAN"));
-            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(Garnet.server.SetOperation.SSCAN));
+            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(Garnet.server.SetOperation.SSCAN).ToLowerInvariant());
             ClassicAssert.AreEqual(expectedErrorMessage, e.Message);
 
             // Use setscan on non existing key
@@ -381,7 +381,7 @@ namespace Garnet.test
             ClassicAssert.IsTrue(members.OrderBy(x => x).SequenceEqual(redisValues1.OrderBy(x => x)));
 
             var e = Assert.Throws<RedisServerException>(() => db.SetCombine(SetOperation.Union, []));
-            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "SUNION"), e.Message);
+            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "sunion"), e.Message);
         }
 
         [Test]
@@ -459,7 +459,7 @@ namespace Garnet.test
 
 
             var e = Assert.Throws<RedisServerException>(() => db.SetCombine(SetOperation.Intersect, []));
-            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "SINTER"), e.Message);
+            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "sinter"), e.Message);
         }
 
         [Test]
@@ -664,7 +664,7 @@ namespace Garnet.test
 
             // Check ZRANDMEMBER with wrong number of arguments
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("SRANDMEMBER", key, 3, "bla"));
-            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.SRANDMEMBER));
+            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.SRANDMEMBER).ToLowerInvariant());
             ClassicAssert.IsNotNull(ex);
             ClassicAssert.AreEqual(expectedMessage, ex.Message);
 
@@ -938,7 +938,7 @@ namespace Garnet.test
 
             // Missing arguments
             response = lightClientRequest.SendCommand("SISMEMBER myset");
-            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "SISMEMBER")}\r\n";
+            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "sismember")}\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             // Extra arguments
@@ -1297,7 +1297,7 @@ namespace Garnet.test
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
 
             response = lightClientRequest.SendCommand("SUNION");
-            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "SUNION")}\r\n";
+            expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "sunion")}\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
@@ -1357,7 +1357,7 @@ namespace Garnet.test
         {
             var lightClientRequest = TestUtils.CreateRequest();
             var response = lightClientRequest.SendCommand("SINTER");
-            var expectedResponse = "-ERR wrong number of arguments for 'SINTER' command\r\n";
+            var expectedResponse = "-ERR wrong number of arguments for 'sinter' command\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
@@ -1366,7 +1366,7 @@ namespace Garnet.test
         {
             var lightClientRequest = TestUtils.CreateRequest();
             var response = lightClientRequest.SendCommand("SINTERSTORE");
-            var expectedResponse = "-ERR wrong number of arguments for 'SINTERSTORE' command\r\n";
+            var expectedResponse = "-ERR wrong number of arguments for 'sinterstore' command\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
@@ -1391,7 +1391,7 @@ namespace Garnet.test
         {
             var lightClientRequest = TestUtils.CreateRequest();
             var response = lightClientRequest.SendCommand("SINTERSTORE key");
-            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "SINTERSTORE")}\r\n";
+            var expectedResponse = $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, "sinterstore")}\r\n";
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
