@@ -990,7 +990,7 @@ namespace Garnet.test
             return configOptions;
         }
 
-        public static GarnetClient GetGarnetClient(EndPoint endpoint = null, bool useTLS = false, bool recordLatency = false, client.LightEpoch epoch = null)
+        public static GarnetClient GetGarnetClient(EndPoint endpoint = null, bool useTLS = false, bool recordLatency = false, Tsavorite.core.LightEpoch epoch = null)
         {
             SslClientAuthenticationOptions sslOptions = null;
             if (useTLS)
@@ -1351,21 +1351,6 @@ using System.Threading.Tasks;
                 Tsavorite.core.LightEpoch.ResetAllInstances();
                 logger?.LogError("Tsavorite.core.LightEpoch instances still active: {count}", count);
                 failMsg += $"Tsavorite.core.LightEpoch instances still active: {count}";
-            }
-
-            var count2 = client.LightEpoch.ActiveInstanceCount();
-            if (count2 != 0)
-            {
-                // Reset all instances to avoid impacting other tests
-                client.LightEpoch.ResetAllInstances();
-                logger?.LogError("Garnet.client.LightEpoch instances still active: {count2}", count2);
-
-                if (!string.IsNullOrEmpty(failMsg))
-                {
-                    failMsg += Environment.NewLine;
-                }
-
-                failMsg += $"Garnet.client.LightEpoch instances still active: {count2}";
             }
 
             if (failTestOnLeak && !string.IsNullOrEmpty(failMsg))

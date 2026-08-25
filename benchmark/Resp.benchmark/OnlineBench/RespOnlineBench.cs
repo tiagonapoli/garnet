@@ -53,7 +53,7 @@ namespace Resp.benchmark
         IConnectionMultiplexer redis;
         GarnetClient garnetClient;
 
-        readonly LightEpoch epoch = new();
+        readonly Tsavorite.core.LightEpoch epoch = new();
         readonly Stopwatch epochWatch = new();
 
         readonly ILogger logger;
