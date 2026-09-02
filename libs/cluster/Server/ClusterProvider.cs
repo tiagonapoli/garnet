@@ -357,7 +357,8 @@ namespace Garnet.cluster
         /// <summary>
         /// Bump Garnet epoch
         /// </summary>
-        internal void BumpCurrentEpoch() => Interlocked.Increment(ref GarnetCurrentEpoch);
+        /// <returns>The epoch value this call published.</returns>
+        internal long BumpCurrentEpoch() => Interlocked.Increment(ref GarnetCurrentEpoch);
 
         /// <summary>
         /// Wait for config transition
@@ -365,9 +366,7 @@ namespace Garnet.cluster
         /// <returns></returns>
         internal async Task<bool> BumpAndWaitForEpochTransitionAsync()
         {
-            BumpCurrentEpoch();
-            // Acquire latest bumped epoch
-            var currentEpoch = GarnetCurrentEpoch;
+            var currentEpoch = BumpCurrentEpoch();
             foreach (var server in storeWrapper.Servers)
             {
                 while (true)
@@ -377,6 +376,7 @@ namespace Garnet.cluster
                     var sessions = ((GarnetServerTcp)server).ActiveClusterSessions();
                     foreach (var s in sessions)
                     {
+                        // s.LocalCurrentEpoch is a volatile read (acquire memory barrier)
                         var entryEpoch = s.LocalCurrentEpoch;
                         // Retry if at least one session has not yet caught up to the current epoch.
                         if (entryEpoch != 0 && entryEpoch < currentEpoch)
