@@ -2379,7 +2379,7 @@ namespace Garnet.test
             var db = redis.GetDatabase(0);
 
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("BITCOUNT", "mykey", "0"));
-            ClassicAssert.AreEqual("ERR wrong number of arguments for 'BITCOUNT' command", ex.Message);
+            ClassicAssert.AreEqual("ERR wrong number of arguments for 'bitcount' command", ex.Message);
         }
 
         [Test, Order(34)]

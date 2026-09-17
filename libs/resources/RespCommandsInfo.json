@@ -125,7 +125,7 @@
   {
     "Command": "ASYNC",
     "Name": "ASYNC",
-    "Arity": 1,
+    "Arity": 2,
     "Flags": "NoMulti, NoScript, ReadOnly",
     "AclCategories": "Slow"
   },
@@ -617,7 +617,7 @@
         "Command": "CLUSTER_ADVANCE_TIME",
         "Name": "CLUSTER|ADVANCE_TIME",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 4,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -625,7 +625,7 @@
         "Command": "CLUSTER_APPENDLOG",
         "Name": "CLUSTER|APPENDLOG",
         "IsInternal": true,
-        "Arity": 6,
+        "Arity": -7,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -674,7 +674,7 @@
         "Command": "CLUSTER_DELKEYSINSLOT",
         "Name": "CLUSTER|DELKEYSINSLOT",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -682,7 +682,7 @@
         "Command": "CLUSTER_DELKEYSINSLOTRANGE",
         "Name": "CLUSTER|DELKEYSINSLOTRANGE",
         "IsInternal": true,
-        "Arity": -3,
+        "Arity": -4,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -704,7 +704,7 @@
         "Command": "CLUSTER_ENDPOINT",
         "Name": "CLUSTER|ENDPOINT",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -719,7 +719,7 @@
         "Command": "CLUSTER_FAILREPLICATIONOFFSET",
         "Name": "CLUSTER|FAILREPLICATIONOFFSET",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -727,7 +727,7 @@
         "Command": "CLUSTER_FAILSTOPWRITES",
         "Name": "CLUSTER|FAILSTOPWRITES",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -742,7 +742,7 @@
       {
         "Command": "CLUSTER_FORGET",
         "Name": "CLUSTER|FORGET",
-        "Arity": 3,
+        "Arity": -3,
         "Flags": "Admin, NoAsyncLoading, Stale",
         "AclCategories": "Admin, Dangerous, Slow"
       },
@@ -760,7 +760,7 @@
         "Command": "CLUSTER_GOSSIP",
         "Name": "CLUSTER|GOSSIP",
         "IsInternal": true,
-        "Arity": -2,
+        "Arity": -3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -785,7 +785,7 @@
         "Command": "CLUSTER_INITIATE_REPLICA_SYNC",
         "Name": "CLUSTER|INITIATE_REPLICA_SYNC",
         "IsInternal": true,
-        "Arity": 6,
+        "Arity": 7,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -807,14 +807,14 @@
         "Command": "CLUSTER_MIGRATE",
         "Name": "CLUSTER|MIGRATE",
         "IsInternal": true,
-        "Arity": 4,
+        "Arity": 6,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
       {
         "Command": "CLUSTER_MLOG_KEY_TIME",
         "Name": "CLUSTER|MLOG_KEY_TIME",
-        "Arity": -2,
+        "Arity": -3,
         "Flags": "Admin, NoMulti, NoScript, ReadOnly",
         "AclCategories": "Admin, Slow, Garnet"
       },
@@ -875,7 +875,7 @@
       {
         "Command": "CLUSTER_REPLICATE",
         "Name": "CLUSTER|REPLICATE",
-        "Arity": 3,
+        "Arity": -3,
         "Flags": "Admin, NoAsyncLoading, Stale",
         "AclCategories": "Admin, Dangerous, Slow"
       },
@@ -883,7 +883,7 @@
         "Command": "CLUSTER_RESERVE",
         "Name": "CLUSTER|RESERVE",
         "IsInternal": true,
-        "Arity": 4,
+        "Arity": -4,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Garnet"
       },
@@ -898,7 +898,7 @@
         "Command": "CLUSTER_SEND_CKPT_FILE_SEGMENT",
         "Name": "CLUSTER|SEND_CKPT_FILE_SEGMENT",
         "IsInternal": true,
-        "Arity": 6,
+        "Arity": 7,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -906,7 +906,7 @@
         "Command": "CLUSTER_SEND_CKPT_METADATA",
         "Name": "CLUSTER|SEND_CKPT_METADATA",
         "IsInternal": true,
-        "Arity": 4,
+        "Arity": 5,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -928,7 +928,7 @@
         "Command": "CLUSTER_SETSLOTSRANGE",
         "Name": "CLUSTER|SETSLOTSRANGE",
         "IsInternal": true,
-        "Arity": -4,
+        "Arity": -5,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -956,7 +956,7 @@
         "Command": "CLUSTER_SLOTSTATE",
         "Name": "CLUSTER|SLOTSTATE",
         "IsInternal": true,
-        "Arity": 2,
+        "Arity": 3,
         "Flags": "Admin, NoMulti, NoScript",
         "AclCategories": "Admin, Dangerous, Slow, Garnet"
       },
@@ -1248,7 +1248,7 @@
   {
     "Command": "DELIFGREATER",
     "Name": "DELIFGREATER",
-    "Arity": 2,
+    "Arity": 3,
     "FirstKey": 1,
     "LastKey": 1,
     "Step": 1,
@@ -3922,7 +3922,7 @@
   {
     "Command": "REGISTERCS",
     "Name": "REGISTERCS",
-    "Arity": -5,
+    "Arity": -7,
     "Flags": "Admin, NoMulti, NoScript, ReadOnly",
     "FirstKey": 1,
     "LastKey": 1,

@@ -1167,15 +1167,21 @@ namespace Garnet.server
             cmd = FastParseCommand(out count);
 
             // If we have not found a command, continue parsing on slow path
+            var invalidArity = false;
             if (cmd == RespCommand.NONE)
             {
                 var cmdStartOffset = readHead; // Save position before ArrayParseCommand advances it
                 cmd = ArrayParseCommand(writeErrorOnFailure, ref count, ref success);
                 if (!success) return cmd;
 
+                // Only the slow path validates arity: both fast paths match the RESP array element count
+                // as part of the command signature, so they cannot resolve a command with an invalid one.
+                // The error itself is written further below, once the whole command has been consumed.
+                invalidArity = !IsBuiltinCommandArityValid(cmd, count);
+
                 // Update MRU cache for commands resolved by hash table.
                 // Exclude custom commands — they have runtime-registered names.
-                if (Vector128.IsHardwareAccelerated &&
+                if (Vector128.IsHardwareAccelerated && !invalidArity &&
                     cmd != RespCommand.INVALID && cmd != RespCommand.NONE &&
                     cmd != RespCommand.CustomTxn && cmd != RespCommand.CustomProcedure &&
                     cmd != RespCommand.CustomRawStringCmd && cmd != RespCommand.CustomObjCmd)
@@ -1203,6 +1209,18 @@ namespace Garnet.server
                 }
             }
             endReadHead = (int)(ptr - recvBufferPtr);
+
+            if (invalidArity)
+            {
+                if (writeErrorOnFailure)
+                {
+                    var err = string.Format(CmdStrings.GenericErrWrongNumArgs, RespCommandsInfo.GetRespCommandName(cmd, logger).ToLowerInvariant());
+                    while (!RespWriteUtils.TryWriteError(err, ref dcurr, dend))
+                        SendAndReset();
+                }
+
+                return RespCommand.INVALID;
+            }
 
             if (storeWrapper.serverOptions.EnableAOF && storeWrapper.serverOptions.WaitForCommit)
                 HandleAofCommitMode(cmd);
@@ -1337,6 +1355,43 @@ namespace Garnet.server
         }
 
         /// <summary>
+        /// Validates the argument count of a built-in command against its declared arity.
+        /// </summary>
+        /// <remarks>
+        /// Only the slow parse path needs this gate: both fast paths match the RESP array element
+        /// count as part of the command signature, so a command dispatched through them always has
+        /// a valid arity. While a transaction is being queued, <c>NetworkSKIP</c> runs the equivalent
+        /// check and additionally aborts the transaction, so the command is left untouched here.
+        /// </remarks>
+        /// <param name="cmd">Command resolved by the hash lookup.</param>
+        /// <param name="count">Number of arguments remaining after the command name (and subcommand token, if any) was consumed.</param>
+        /// <returns>True if the argument count is acceptable for the command.</returns>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private bool IsBuiltinCommandArityValid(RespCommand cmd, int count)
+        {
+            if (cmd is RespCommand.INVALID or RespCommand.NONE or RespCommand.CustomTxn or RespCommand.CustomProcedure
+                    or RespCommand.CustomRawStringCmd or RespCommand.CustomObjCmd)
+                return true;
+
+            if (txnManager.state == TxnState.Started)
+                return true;
+
+            if (!RespCommandsInfo.TryGetSimpleRespCommandInfo(cmd, out var cmdInfo, logger) || cmdInfo.Arity == 0)
+                return true;
+
+            // Arity counts the command name, which the parser has already consumed, as well as the
+            // subcommand token where applicable. BITOP's operation argument is consumed the same way.
+            var expectedArgs = Math.Abs((int)cmdInfo.Arity) - 1;
+            if (cmdInfo.IsSubCommand || cmd == RespCommand.BITOP)
+                expectedArgs--;
+
+            if (expectedArgs < 0)
+                return true;
+
+            return cmdInfo.Arity > 0 ? count == expectedArgs : count >= expectedArgs;
+        }
+
+        /// <summary>
         /// Hash-based command lookup. Extracts the command name from the RESP buffer,
         /// looks it up in the static hash table, and handles subcommand dispatch.
         /// </summary>
@@ -1406,7 +1461,7 @@ namespace Garnet.server
             {
                 specificErrorMessage = parentCmd == RespCommand.BITOP
                     ? CmdStrings.RESP_SYNTAX_ERROR
-                    : Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs, parentCmd.ToString()));
+                    : Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs, parentCmd.ToString().ToLowerInvariant()));
                 return RespCommand.INVALID;
             }
 

@@ -566,7 +566,7 @@ namespace Garnet.server
             // Check if we have a wrong number of arguments
             if (argNumError)
             {
-                error = Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs, command.ToString()));
+                error = Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrWrongNumArgs, command.ToString().ToLowerInvariant()));
                 return false;
             }
 

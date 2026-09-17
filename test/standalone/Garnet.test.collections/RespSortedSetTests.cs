@@ -972,7 +972,7 @@ namespace Garnet.test
 
             // ZSCAN without key
             var e = Assert.Throws<RedisServerException>(() => db.Execute("ZSCAN"));
-            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(SortedSetOperation.ZSCAN));
+            var expectedErrorMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(SortedSetOperation.ZSCAN).ToLowerInvariant());
             ClassicAssert.AreEqual(expectedErrorMessage, e.Message);
 
             // Use sortedsetscan on non existing key
@@ -1854,7 +1854,7 @@ namespace Garnet.test
 
             // Test error cases
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("ZINTERSTORE", "dest"));
-            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "ZINTERSTORE"), ex.Message);
+            ClassicAssert.AreEqual(string.Format(CmdStrings.GenericErrWrongNumArgs, "zinterstore"), ex.Message);
         }
 
         [Test]
@@ -4717,7 +4717,7 @@ namespace Garnet.test
 
             // Check ZRANDMEMBER with wrong number of arguments
             var ex = Assert.Throws<RedisServerException>(() => db.Execute("ZRANDMEMBER", key, 3, "WITHSCORES", "bla"));
-            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.ZRANDMEMBER));
+            var expectedMessage = string.Format(CmdStrings.GenericErrWrongNumArgs, nameof(RespCommand.ZRANDMEMBER).ToLowerInvariant());
             ClassicAssert.IsNotNull(ex);
             ClassicAssert.AreEqual(expectedMessage, ex.Message);
 
@@ -5205,7 +5205,7 @@ namespace Garnet.test
             TestUtils.AssertEqualUpToExpectedLength(expectedResponse, response);
         }
 
-        private static string FormatWrongNumOfArgsError(string commandName) => $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, commandName)}\r\n";
+        private static string FormatWrongNumOfArgsError(string commandName) => $"-{string.Format(CmdStrings.GenericErrWrongNumArgs, commandName.ToLowerInvariant())}\r\n";
 
         [Test]
         [TestCase(2, "ZINTER 2 zset1 zset2", Description = "Basic intersection")]
