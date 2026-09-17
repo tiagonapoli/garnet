@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Embedded.server;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
@@ -3236,6 +3237,94 @@ namespace Garnet.test
 
             var sim = (RedisResult[])db.Execute("VSIM", [Key, "FP32", MemoryMarshal.Cast<float, byte>(query).ToArray(), "COUNT", "10", "EF", "64"]);
             ClassicAssert.IsNotEmpty(sim);
+        }
+
+        /// <summary>
+        /// End-to-end: VREM of an element whose records were evicted to disk must still succeed. The Tsavorite
+        /// delete reports <c>status.Found == false</c> for a disk-resident record, so the delete callback must
+        /// treat a completed-but-not-found delete as success rather than gating on <c>status.Found</c>.
+        /// </summary>
+        [Test]
+        public void VREMOnDiskFlushedElementSucceeds()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const string Key = nameof(VREMOnDiskFlushedElementSucceeds);
+            var target = new byte[] { 2, 0, 0, 0 };
+
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "1.0", "1.0", "1.0", "1.0", new byte[] { 1, 0, 0, 0 }, "NOQUANT"]));
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "2.0", "2.0", "2.0", "2.0", target, "NOQUANT"]));
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "3.0", "3.0", "3.0", "3.0", new byte[] { 3, 0, 0, 0 }, "NOQUANT"]));
+
+            // Force every namespaced record (and the index stub) onto disk so the VREM delete callback runs against
+            // disk-resident records (status.Found == false).
+            var store = server.Provider.StoreWrapper.store;
+            store.Log.FlushAndEvict(wait: true);
+            ClassicAssert.AreEqual(store.Log.TailAddress, store.Log.HeadAddress, "the whole main log should have been evicted to disk");
+
+            // VREM an element whose records are on disk: must succeed (return 1) despite the not-found delete.
+            var removed = (int)db.Execute("VREM", [Key, target]);
+            ClassicAssert.AreEqual(1, removed, "VREM of a disk-flushed element must succeed");
+
+            // Removing it again must now report not-found, and the set must remain usable.
+            var removedAgain = (int)db.Execute("VREM", [Key, target]);
+            ClassicAssert.AreEqual(0, removedAgain, "second VREM of the same element must report not-found");
+
+            // The set must stay consistent: a similarity search returns both survivors and never the removed one.
+            var neighbors = (byte[][])db.Execute("VSIM", [Key, "VALUES", "4", "0.0", "0.0", "0.0", "0.0", "COUNT", "5", "EF", "128"]);
+            ClassicAssert.AreEqual(2, neighbors.Length, "VSIM should return both surviving elements");
+            ClassicAssert.IsFalse(neighbors.Any(n => n.SequenceEqual(target)), "the removed element must not appear in similarity results");
+        }
+
+        /// <summary>
+        /// Same disk-evicted removal as <see cref="VREMOnDiskFlushedElementSucceeds"/>, but driven straight through
+        /// <see cref="VectorManager.TryRemove"/>/<c>Service.Remove</c> so the fix is pinned at that layer: before the
+        /// fix it returned <see cref="VectorManagerResult.MissingElement"/>, after it returns <see cref="VectorManagerResult.OK"/>.
+        /// </summary>
+        [Test]
+        public void VREMOnDiskFlushedElement_ServiceRemoveSucceeds()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const string Key = nameof(VREMOnDiskFlushedElement_ServiceRemoveSucceeds);
+            var target = new byte[] { 2, 0, 0, 0 };
+
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "1.0", "1.0", "1.0", "1.0", new byte[] { 1, 0, 0, 0 }, "NOQUANT"]));
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "2.0", "2.0", "2.0", "2.0", target, "NOQUANT"]));
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [Key, "VALUES", "4", "3.0", "3.0", "3.0", "3.0", new byte[] { 3, 0, 0, 0 }, "NOQUANT"]));
+
+            var store = server.Provider.StoreWrapper.store;
+            store.Log.FlushAndEvict(wait: true);
+            ClassicAssert.AreEqual(store.Log.TailAddress, store.Log.HeadAddress, "the whole main log should have been evicted to disk");
+
+            var session = new RespServerSession(0, new EmbeddedNetworkSender(), server.Provider.StoreWrapper, null, null, false);
+            var vectorManager = server.Provider.StoreWrapper.DefaultDatabase.VectorManager;
+            var keyBytes = Encoding.ASCII.GetBytes(Key);
+
+            // First removal targets a disk-resident element: Service.Remove must report success.
+            var removeResult = TryRemoveThroughService(vectorManager, session.storageSession, keyBytes, target);
+            ClassicAssert.AreEqual(VectorManagerResult.OK, removeResult, "Service.Remove must succeed for a disk-flushed element");
+
+            // The element is now gone from the graph, so a second removal genuinely misses.
+            var secondResult = TryRemoveThroughService(vectorManager, session.storageSession, keyBytes, target);
+            ClassicAssert.AreEqual(VectorManagerResult.MissingElement, secondResult, "removing an absent element must report MissingElement");
+
+            // Mirrors VectorStoreOps.VectorSetRemove: hold the shared index lock (which also binds ActiveThreadSession
+            // for the delete callback) while calling TryRemove, but skip RESP encoding and AOF replication.
+            static VectorManagerResult TryRemoveThroughService(VectorManager vectorManager, StorageSession storageSession, ReadOnlySpan<byte> key, ReadOnlySpan<byte> element)
+            {
+                var input = new StringInput(RespCommand.VREM, ref storageSession.parseState);
+                Span<byte> indexSpan = stackalloc byte[VectorManager.IndexSizeBytes];
+
+                using (vectorManager.ReadVectorIndex(storageSession, key, ref input, indexSpan, out var status))
+                {
+                    ClassicAssert.AreEqual(GarnetStatus.OK, status, "the flushed index must still be readable");
+
+                    return vectorManager.TryRemove(indexSpan, element);
+                }
+            }
         }
 
         [Test]
