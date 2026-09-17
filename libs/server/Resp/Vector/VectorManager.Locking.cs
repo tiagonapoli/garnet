@@ -485,6 +485,8 @@ namespace Garnet.server
 
                             if (!needsRecreate)
                             {
+                                ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Before_Create_Metadata_Persist);
+
                                 UpdateContextMetadata(ref storageSession.vectorBasicContext);
                             }
                         }
