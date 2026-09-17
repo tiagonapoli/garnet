@@ -9,6 +9,7 @@ using Garnet.common;
 using HdrHistogram;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
+using Tsavorite.core;
 
 
 namespace Resp.benchmark
@@ -416,7 +417,7 @@ namespace Resp.benchmark
             var sskeyLen = sskey.Length;
 
             var exactSize = 13 + RespWriteUtils.GetBulkStringLength(keyLen) + RespWriteUtils.GetBulkStringLength(valueLen);
-            var size = (int)Utility.PreviousPowerOf2(exactSize);
+            var size = (int)Garnet.client.Utility.PreviousPowerOf2(exactSize);
             if (exactSize > size) size *= 2;
 
             var onResponseDelegate = new LightClient.OnResponseDelegateUnsafe(ReqGen.OnResponse);

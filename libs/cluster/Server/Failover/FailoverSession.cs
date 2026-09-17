@@ -7,6 +7,7 @@ using System.Threading;
 using Garnet.client;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
+using Tsavorite.core;
 
 namespace Garnet.cluster
 {
