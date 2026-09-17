@@ -161,6 +161,21 @@ namespace Garnet.server
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void WriteBoolean(bool value)
+        {
+            if (respProtocolVersion >= 3)
+            {
+                while (!(value ? RespWriteUtils.TryWriteTrue(ref dcurr, dend) : RespWriteUtils.TryWriteFalse(ref dcurr, dend)))
+                    SendAndReset();
+            }
+            else
+            {
+                while (!RespWriteUtils.TryWriteInt32(value ? 1 : 0, ref dcurr, dend))
+                    SendAndReset();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void WriteMapLength(int count)
         {
             if (respProtocolVersion >= 3)
