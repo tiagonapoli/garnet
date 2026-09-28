@@ -488,21 +488,32 @@ namespace Tsavorite.core
         /// <param name="valueObjectSerializer">Serializer used to deserialize an object value.</param>
         /// <param name="transientObjectIdMap">Transient object-id map for the deserialized record's overflow/object slots.</param>
         /// <param name="storeFunctions">The store functions.</param>
+        /// <exception cref="InvalidDataException">The record header or a declared field extends beyond the serialized record.</exception>
         public static DiskLogRecord Deserialize<TStoreFunctions>(PinnedSpanByte recordSpan, IObjectSerializer<IHeapObject> valueObjectSerializer, ObjectIdMap transientObjectIdMap,
             TStoreFunctions storeFunctions)
             where TStoreFunctions : IStoreFunctions
         {
+            if (recordSpan.Length < Constants.FixedHeaderSize)
+                throw new InvalidDataException("Serialized record is shorter than its header");
+
             // Serialize() did not change the KeyIsInline/ValueIsInline/ValueIsObject bits. A non-inline record's out-of-line
             // components follow the inline portion (compacted to RoundUp(ActualSize)): each overflow key/value is preceded by its
             // 4-byte length; an object value is the tail (its length derived from the record span). Create a transient logRecord to
             // decode the layout and populate the overflow/object slots.
             var ptr = recordSpan.ToPointer();
             var serializedLogRecord = new LogRecord((long)ptr, transientObjectIdMap);
+            if (serializedLogRecord.Info.IsNull)
+                throw new InvalidDataException("Serialized record has a null record header");
+            if (serializedLogRecord.ActualSize > recordSpan.Length)
+                throw new InvalidDataException("Serialized record exceeds its payload");
+
             if (serializedLogRecord.DataHeader.RecordIsInline)
                 return new(serializedLogRecord);
 
             var dataHeader = serializedLogRecord.DataHeader;
             var offset = RoundUp(serializedLogRecord.ActualSize, Constants.kRecordAlignment);
+            if (offset > recordSpan.Length)
+                throw new InvalidDataException("Serialized record inline portion exceeds its payload");
 
             // Note: Similar logic to this is in ObjectLogReader.ReadObjects.
             var keyWasSet = false;
@@ -510,8 +521,7 @@ namespace Tsavorite.core
             {
                 if (dataHeader.KeyIsOverflow)
                 {
-                    var keyLength = BinaryPrimitives.ReadInt32LittleEndian(recordSpan.ReadOnlySpan.Slice(offset));
-                    offset += sizeof(int);
+                    var keyLength = ReadOverflowLength(recordSpan.ReadOnlySpan, ref offset);
                     // This assignment also allocates the slot in ObjectIdMap. The RecordDataHeader length info stays ObjectIdSize.
                     serializedLogRecord.KeyOverflow = new OverflowByteArray(keyLength, startOffset: 0, endOffset: 0, zeroInit: false);
                     recordSpan.ReadOnlySpan.Slice(offset, keyLength).CopyTo(serializedLogRecord.KeyOverflow.Span);
@@ -521,8 +531,7 @@ namespace Tsavorite.core
 
                 if (dataHeader.ValueIsOverflow)
                 {
-                    var valueLength = BinaryPrimitives.ReadInt32LittleEndian(recordSpan.ReadOnlySpan.Slice(offset));
-                    offset += sizeof(int);
+                    var valueLength = ReadOverflowLength(recordSpan.ReadOnlySpan, ref offset);
                     // This assignment also allocates the slot in ObjectIdMap. The RecordDataHeader length info stays ObjectIdSize.
                     serializedLogRecord.ValueOverflow = new OverflowByteArray(valueLength, startOffset: 0, endOffset: 0, zeroInit: false);
                     recordSpan.ReadOnlySpan.Slice(offset, valueLength).CopyTo(serializedLogRecord.ValueOverflow.Span);
@@ -544,6 +553,19 @@ namespace Tsavorite.core
                 serializedLogRecord.OnDeserializationError(keyWasSet);
                 throw;
             }
+        }
+
+        private static int ReadOverflowLength(ReadOnlySpan<byte> record, ref int offset)
+        {
+            if (record.Length - offset < sizeof(int))
+                throw new InvalidDataException("Serialized record is missing an overflow length");
+
+            var length = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(offset));
+            offset += sizeof(int);
+            if (length < 0 || length > record.Length - offset)
+                throw new InvalidDataException("Serialized record overflow field exceeds its payload");
+
+            return length;
         }
 
         /// <summary>
