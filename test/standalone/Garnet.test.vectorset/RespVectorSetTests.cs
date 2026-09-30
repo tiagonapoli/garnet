@@ -77,6 +77,38 @@ namespace Garnet.test
         }
 
         [Test]
+        public void ScanTypeDistinguishesVectorSetsFromStrings()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase();
+
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", ["scan:vector", "VALUES", "3", "1", "0", "0", "first", "NOQUANT"]));
+            ClassicAssert.IsTrue(db.StringSet("scan:string", "value"));
+            db.HashSet("scan:hash", [new HashEntry("field", "value")]);
+
+            ClassicAssert.AreEqual("vectorset", (string)db.Execute("TYPE", "scan:vector"));
+            ClassicAssert.AreEqual("string", (string)db.Execute("TYPE", "scan:string"));
+            CollectionAssert.AreEquivalent(new[] { "scan:vector" }, ScanKeys("vectorset"));
+            CollectionAssert.AreEquivalent(new[] { "scan:string" }, ScanKeys("string"));
+            CollectionAssert.AreEquivalent(new[] { "scan:hash" }, ScanKeys("hash"));
+
+            HashSet<string> ScanKeys(string type)
+            {
+                var keys = new HashSet<string>();
+                var cursor = "0";
+                do
+                {
+                    var response = (RedisResult[])db.Execute("SCAN", [cursor, "MATCH", "scan:*", "TYPE", type]);
+                    cursor = (string)response[0];
+                    foreach (var key in (RedisResult[])response[1])
+                        keys.Add((string)key);
+                } while (cursor != "0");
+
+                return keys;
+            }
+        }
+
+        [Test]
         public void WrongTypeForVectorSetOpsOnNonVectorSetKeys()
         {
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());

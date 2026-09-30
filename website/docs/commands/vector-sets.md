@@ -264,7 +264,8 @@ Re-running `DEL key` (or letting expiration / `FLUSHDB` cover it) finishes the c
 
 Standard key-management commands work on Vector Set keys:
 
-- `TYPE key` currently reports `string` for Vector Set keys (a dedicated reply name is not yet wired up).
+- `TYPE key` reports `vectorset` for Vector Set keys. Use `SCAN cursor TYPE vectorset` to iterate Vector Set keys;
+  `SCAN cursor TYPE string` does not include them.
 - `EXPIRE` / `PEXPIRE` / `EXPIREAT` / `PERSIST` / `TTL` / `PTTL` set, query, and clear TTLs the same way as any
   other key. When a Vector Set key expires, the vector index is dropped in the background, matching the behavior
   of explicit `DEL`.
