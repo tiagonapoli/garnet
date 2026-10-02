@@ -102,6 +102,12 @@ namespace Garnet.cluster
 
             void Process(BasicGarnetApi basicGarnetApi, byte[] input, bool replaceOption, bool vectorSetOption)
             {
+                if (input.Length < sizeof(int))
+                {
+                    logger?.LogError("Rejected migrated payload without a key count");
+                    throw new GarnetException("Malformed migrated payload: missing key count");
+                }
+
                 var currentConfig = clusterProvider.clusterManager.CurrentConfig;
                 byte migrateState = 0;
 
@@ -112,6 +118,12 @@ namespace Garnet.cluster
 
                     var keyCount = *(int*)payloadPtr;
                     payloadPtr += sizeof(int);
+                    if (keyCount < 0)
+                    {
+                        logger?.LogError("Rejected migrated payload with negative key count: {KeyCount}", keyCount);
+                        throw new GarnetException("Malformed migrated payload: negative key count");
+                    }
+
                     var i = 0;
 
                     TrackImportProgress(keyCount, keyCount == 0);
@@ -126,11 +138,20 @@ namespace Garnet.cluster
                             // Vector Sets need special handling
                             while (i < keyCount)
                             {
+                                if (payloadPtr >= payloadEndPtr)
+                                {
+                                    logger?.LogError("Rejected migrated payload missing a Vector Set record kind");
+                                    throw new GarnetException("Malformed migrated payload: missing record kind");
+                                }
+
                                 var kind = (MigrationRecordSpanType)(*payloadPtr);
                                 payloadPtr++;
 
                                 if (!RespReadUtils.GetSerializedRecordSpan(out var payloadRaw, ref payloadPtr, payloadEndPtr))
-                                    return;
+                                {
+                                    logger?.LogError("Rejected malformed Vector Set migrated record frame");
+                                    throw new GarnetException("Malformed Vector Set migrated record frame");
+                                }
 
                                 if (kind != MigrationRecordSpanType.VectorSetIndex)
                                     throw new InvalidOperationException($"Unexpected {nameof(MigrationRecordSpanType)}: {kind}");
@@ -154,6 +175,12 @@ namespace Garnet.cluster
                         {
                             while (i < keyCount)
                             {
+                                if (payloadPtr >= payloadEndPtr)
+                                {
+                                    logger?.LogError("Rejected migrated payload missing a record kind");
+                                    throw new GarnetException("Malformed migrated payload: missing record kind");
+                                }
+
                                 var kind = (MigrationRecordSpanType)(*payloadPtr);
                                 payloadPtr++;
 
@@ -163,13 +190,21 @@ namespace Garnet.cluster
                                     // [int chunkLength | continuation][chunk bytes]. GetSerializedRecordSpan cannot read these
                                     // because the continuation flag makes the length read as negative.
                                     if (payloadPtr + sizeof(int) > payloadEndPtr)
-                                        return;
+                                    {
+                                        logger?.LogError("Rejected migrated chunk without a length prefix");
+                                        throw new GarnetException("Malformed migrated chunk: missing length prefix");
+                                    }
+
                                     var rawChunkLength = *(int*)payloadPtr;
                                     payloadPtr += sizeof(int);
                                     var moreChunksFollow = (rawChunkLength & ChunkedRecordConstants.ContinuationFlag) != 0;
                                     var chunkLength = rawChunkLength & ~ChunkedRecordConstants.ContinuationFlag;
-                                    if (chunkLength < 0 || payloadPtr + chunkLength > payloadEndPtr)
-                                        return;
+                                    if (chunkLength > payloadEndPtr - payloadPtr)
+                                    {
+                                        logger?.LogError("Rejected migrated chunk extending beyond its payload");
+                                        throw new GarnetException("Malformed migrated chunk: length exceeds payload");
+                                    }
+
                                     var chunkSpan = new ReadOnlySpan<byte>(payloadPtr, chunkLength);
                                     payloadPtr += chunkLength;
 
@@ -189,7 +224,7 @@ namespace Garnet.cluster
                                         {
                                             if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord) || diskLogRecord.Info.IsNull)
                                             {
-                                                logger?.LogWarning("Rejected malformed or null chunked migrated log record");
+                                                logger?.LogError("Rejected malformed or null chunked migrated log record");
                                                 throw new GarnetException("Malformed or null chunked migrated log record");
                                             }
 
@@ -218,7 +253,10 @@ namespace Garnet.cluster
                                 }
 
                                 if (!RespReadUtils.GetSerializedRecordSpan(out var payloadRaw, ref payloadPtr, payloadEndPtr))
-                                    return;
+                                {
+                                    logger?.LogError("Rejected malformed migrated record frame");
+                                    throw new GarnetException("Malformed migrated record frame");
+                                }
 
                                 // An error has occurred
                                 if (migrateState > 0)
@@ -283,10 +321,9 @@ namespace Garnet.cluster
                                         continue;
                                     }
 
-                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer,
-                                            transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord) || diskLogRecord.Info.IsNull)
+                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord) || diskLogRecord.Info.IsNull)
                                     {
-                                        logger?.LogWarning("Rejected malformed or null migrated log record");
+                                        logger?.LogError("Rejected malformed or null migrated log record");
                                         throw new GarnetException("Malformed or null migrated log record");
                                     }
 

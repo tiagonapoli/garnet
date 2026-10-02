@@ -21,6 +21,18 @@ namespace Garnet.test.cluster
     [TestFixture(false), NonParallelizable]
     public class ClusterMigrateSecurityTests(bool UseTLS)
     {
+        public enum MalformedPayload
+        {
+            TruncatedKeyCount,
+            NegativeKeyCount,
+            MissingRecordKind,
+            MissingVectorSetKind,
+            MissingRecordLength,
+            MissingVectorSetRecordLength,
+            MissingChunkLength,
+            OversizedChunk
+        }
+
         const int DeclaredValueLength = 1024;   // what the malformed header claims
         const int ProvidedValueLength = 8;      // what actually follows in the framed record
 
@@ -95,6 +107,42 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual("PONG", pong.ToString());
         }
 
+        [TestCase(MalformedPayload.TruncatedKeyCount)]
+        [TestCase(MalformedPayload.NegativeKeyCount)]
+        [TestCase(MalformedPayload.MissingRecordKind)]
+        [TestCase(MalformedPayload.MissingVectorSetKind)]
+        [TestCase(MalformedPayload.MissingRecordLength)]
+        [TestCase(MalformedPayload.MissingVectorSetRecordLength)]
+        [TestCase(MalformedPayload.MissingChunkLength)]
+        [TestCase(MalformedPayload.OversizedChunk)]
+        [Category("CLUSTER")]
+        public void ClusterMigrateRejectsMalformedPayload(MalformedPayload malformed)
+        {
+            context.CreateInstances(defaultShards, useTLS: UseTLS);
+            context.CreateConnection(useTLS: UseTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(logger: context.logger);
+
+            var sourceNodeId = context.clusterTestUtils.GetNodeIdFromNode(1, context.logger);
+            var targetEndpoint = context.clusterTestUtils.GetEndPoint(2);
+            byte[] payload = malformed switch
+            {
+                MalformedPayload.TruncatedKeyCount => [1, 0, 0],
+                MalformedPayload.NegativeKeyCount => [255, 255, 255, 255],
+                MalformedPayload.MissingRecordKind or MalformedPayload.MissingVectorSetKind => [1, 0, 0, 0],
+                MalformedPayload.MissingRecordLength => [1, 0, 0, 0, (byte)MigrationRecordSpanType.LogRecord],
+                MalformedPayload.MissingVectorSetRecordLength => [1, 0, 0, 0, (byte)MigrationRecordSpanType.VectorSetIndex],
+                MalformedPayload.MissingChunkLength => [1, 0, 0, 0, (byte)MigrationRecordSpanType.ChunkedLogRecord],
+                MalformedPayload.OversizedChunk => [1, 0, 0, 0, (byte)MigrationRecordSpanType.ChunkedLogRecord, 20, 0, 0, 0],
+                _ => throw new ArgumentOutOfRangeException(nameof(malformed))
+            };
+
+            var vectorSet = malformed is MalformedPayload.MissingVectorSetKind or MalformedPayload.MissingVectorSetRecordLength;
+            SendRaw(targetEndpoint, BuildMigratePayloadCommand(sourceNodeId, payload, vectorSet));
+
+            var pong = context.clusterTestUtils.GetMultiplexer().GetServer(targetEndpoint).Execute("PING");
+            ClassicAssert.AreEqual("PONG", pong.ToString());
+        }
+
         /// <summary>
         /// Builds a CLUSTER MIGRATE command carrying one inline log record whose header declares a value far larger
         /// than the bytes actually present in the framed record.
@@ -133,13 +181,17 @@ namespace Garnet.test.cluster
             }
             Array.Copy(record, 0, payload, sizeof(int) + 1 + sizeof(int), record.Length);
 
-            // CLUSTER MIGRATE <sourceNodeId> <replace=F> <vectorSet=F> <payload>
+            return BuildMigratePayloadCommand(sourceNodeId, payload);
+        }
+
+        static byte[] BuildMigratePayloadCommand(string sourceNodeId, byte[] payload, bool vectorSet = false)
+        {
             return BuildRespArray(
                 "CLUSTER"u8.ToArray(),
                 "MIGRATE"u8.ToArray(),
                 Encoding.ASCII.GetBytes(sourceNodeId),
                 "F"u8.ToArray(),
-                "F"u8.ToArray(),
+                vectorSet ? "T"u8.ToArray() : "F"u8.ToArray(),
                 payload);
         }
 
