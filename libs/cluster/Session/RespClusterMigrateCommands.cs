@@ -37,21 +37,15 @@ namespace Garnet.cluster
         {
             var reassembler = chunkedRecordReassembler;
             var headerSpan = PinnedSpanByte.FromPinnedPointer(headerPtr, reassembler.InlineSize);
-            diskLogRecord = default;
-            if (new LogRecord(headerPtr).Info.IsNull)
-                return false;
-
             if (reassembler.RecordIsInline)
                 return DiskLogRecord.TryDeserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord);
 
-            // Non-inline: deserialize the streamed object value (if any) from its chunks, then assign the pre-populated pieces.
-            IHeapObject valueObject = null;
-            if (reassembler.IsObjectValue)
-                valueObject = (IHeapObject)storeWrapper.GarnetObjectSerializer.Deserialize(reassembler.ObjectValueSequence());
-
-            diskLogRecord = DiskLogRecord.CompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
-                valueObject, transientObjectIdMap);
-            return true;
+            // Non-inline: defer object deserialization until the inline header is validated.
+            Func<IHeapObject> deserializeValueObject = reassembler.IsObjectValue
+                ? () => (IHeapObject)storeWrapper.GarnetObjectSerializer.Deserialize(reassembler.ObjectValueSequence())
+                : null;
+            return DiskLogRecord.TryCompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
+                deserializeValueObject, transientObjectIdMap, out diskLogRecord);
         }
 
         /// <summary>

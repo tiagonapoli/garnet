@@ -328,7 +328,7 @@ namespace Tsavorite.core
         /// with a continuation flag that is clear only on the record's last chunk. The receiver (<c>ChunkedRecordReassembler</c>)
         /// routes the stream by component using <see cref="GetChunkedRecordInlineSize"/>, the record header, and the overflow length
         /// prefixes, populating the overflow key/value buffers directly and streaming any object value, then builds the record via
-        /// <see cref="TryDeserialize"/> (fully-inline) or <see cref="CompleteDeserializeChunkedRecord"/> (out-of-line components).
+        /// <see cref="TryDeserialize"/> (fully-inline) or <see cref="TryCompleteDeserializeChunkedRecord"/> (out-of-line components).
         /// </summary>
         /// <typeparam name="TSourceLogRecord">The source log record type.</typeparam>
         /// <typeparam name="TContext">Per-record caller state threaded through the chunker to its consumer on every drain.</typeparam>
@@ -599,7 +599,7 @@ namespace Tsavorite.core
         /// <summary>
         /// Build a <see cref="DiskLogRecord"/> from a chunked record whose out-of-line components were reassembled by the receiver
         /// (see <c>ChunkedRecordReassembler</c>) directly into their final buffers: the pre-populated overflow key and/or value,
-        /// and/or the already-deserialized object value (which can exceed 2 GB). <paramref name="headerSpan"/> holds only the
+        /// and/or the streamed object value (which can exceed 2 GB). <paramref name="headerSpan"/> holds only the
         /// inline portion (its length is <see cref="GetChunkedRecordInlineSize"/>) - the overflow bytes are NOT in it. Assigns
         /// each present component directly (no re-allocation or copy). The RDH length fields are left untouched (the out-of-line
         /// lengths rode in 4-byte wire length prefixes, which the receiver already consumed).
@@ -607,31 +607,44 @@ namespace Tsavorite.core
         /// <param name="headerSpan">The record's inline portion.</param>
         /// <param name="keyOverflow">The pre-populated overflow key (used only when the RDH marks the key overflow).</param>
         /// <param name="valueOverflow">The pre-populated overflow value (used only when the RDH marks the value overflow).</param>
-        /// <param name="valueObject">The already-deserialized object value (used only when the RDH marks the value an object).</param>
+        /// <param name="deserializeValueObject">Deserializes the object value after header validation (used only when the RDH marks the value an object).</param>
         /// <param name="transientObjectIdMap">Transient object-id map for the deserialized record's overflow/object slots.</param>
-        public static DiskLogRecord CompleteDeserializeChunkedRecord(PinnedSpanByte headerSpan, OverflowByteArray keyOverflow, OverflowByteArray valueOverflow,
-            IHeapObject valueObject, ObjectIdMap transientObjectIdMap)
+        /// <param name="diskLogRecord">The completed record, or default if validation fails.</param>
+        /// <returns>False if the header is null, invalid, or missing an overflow component.</returns>
+        public static bool TryCompleteDeserializeChunkedRecord(PinnedSpanByte headerSpan, OverflowByteArray keyOverflow, OverflowByteArray valueOverflow,
+            Func<IHeapObject> deserializeValueObject, ObjectIdMap transientObjectIdMap, out DiskLogRecord diskLogRecord)
         {
+            diskLogRecord = default;
+            if (headerSpan.Length < Constants.FixedHeaderSize)
+                return false;
+
             var ptr = headerSpan.ToPointer();
             var serializedLogRecord = new LogRecord((long)ptr, transientObjectIdMap);
-            Debug.Assert(!serializedLogRecord.DataHeader.RecordIsInline, "CompleteDeserializeChunkedRecord is only for a non-inline record");
+            if (serializedLogRecord.Info.IsNull || serializedLogRecord.DataHeader.RecordIsInline || serializedLogRecord.ActualSize > headerSpan.Length)
+                return false;
+
+            var dataHeader = serializedLogRecord.DataHeader;
+            if ((dataHeader.KeyIsOverflow && keyOverflow.IsEmpty) || (dataHeader.ValueIsOverflow && valueOverflow.IsEmpty) ||
+                (dataHeader.ValueIsObject && deserializeValueObject is null))
+                return false;
 
             var keyWasSet = false;
             try
             {
-                if (serializedLogRecord.DataHeader.KeyIsOverflow)
+                if (dataHeader.KeyIsOverflow)
                 {
                     // Assign the pre-populated overflow key directly (allocates the ObjectIdMap slot; no re-alloc/copy).
                     serializedLogRecord.KeyOverflow = keyOverflow;
                     keyWasSet = true;
                 }
 
-                if (serializedLogRecord.DataHeader.ValueIsOverflow)
+                if (dataHeader.ValueIsOverflow)
                     serializedLogRecord.ValueOverflow = valueOverflow; // assign the pre-populated overflow value directly
-                else if (serializedLogRecord.DataHeader.ValueIsObject)
-                    serializedLogRecord.ValueObject = valueObject;     // assign the already-deserialized object value
+                else if (dataHeader.ValueIsObject)
+                    serializedLogRecord.ValueObject = deserializeValueObject();
 
-                return new(serializedLogRecord);
+                diskLogRecord = new(serializedLogRecord);
+                return true;
             }
             catch
             {

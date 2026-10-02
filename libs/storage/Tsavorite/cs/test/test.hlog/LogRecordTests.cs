@@ -217,6 +217,78 @@ namespace Tsavorite.test.LogRecordTests
             }
         }
 
+        [Test]
+        public void TryCompleteDeserializeChunkedRecordRejectsNullBeforeObjectDeserialization()
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetValueIsObject();
+                var called = false;
+                IHeapObject DeserializeValueObject()
+                {
+                    called = true;
+                    return null;
+                }
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, default, default, DeserializeValueObject, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+                Assert.That(called, Is.False);
+            }
+        }
+
+        [TestCase(RecordInfo.Size)]
+        [TestCase(Constants.FixedHeaderSize)]
+        public void TryCompleteDeserializeChunkedRecordRejectsTruncatedHeader(int length)
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, default, default, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void TryCompleteDeserializeChunkedRecordRejectsMissingOverflow(bool missingKey)
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                var key = missingKey ? default : OverflowByteArray.AllocateData(1);
+                var value = missingKey ? OverflowByteArray.AllocateData(1) : default;
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, key, value, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [Test]
+        public void TryCompleteDeserializeChunkedRecordAcceptsOverflowFields()
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var key = OverflowByteArray.AllocateData(1);
+                key.Span[0] = 42;
+                var value = OverflowByteArray.AllocateData(1);
+                value.Span[0] = 43;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, key, value, null, objectIdMap, out var deserialized), Is.True);
+                Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
+                deserialized.Dispose();
+            }
+        }
+
         static void UpdateRecordSizeInfo(ref RecordSizeInfo sizeInfo, int keySize = -1, int valueSize = -1)
         {
             if (keySize > 0)
