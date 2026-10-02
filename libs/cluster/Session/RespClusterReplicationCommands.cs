@@ -565,7 +565,7 @@ namespace Garnet.cluster
                         if (!RespReadUtils.GetSerializedRecordSpan(out var recordSpan, ref payloadPtr, payloadEndPtr))
                             return false;
 
-                        if (!DiskLogRecord.TryDeserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                        if (!DiskLogRecord.TryDeserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord))
                         {
                             logger?.LogWarning("Rejected malformed or null replicated log record");
                             return false;

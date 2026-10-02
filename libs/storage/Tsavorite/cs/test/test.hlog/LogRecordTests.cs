@@ -77,7 +77,7 @@ namespace Tsavorite.test.LogRecordTests
                 header.ValueLength = valueLength;
 
                 var payload = PinnedSpanByte.FromPinnedPointer(ptr, payloadLength);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.False);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
                 Assert.That(deserialized.IsSet, Is.False);
             }
         }
@@ -102,7 +102,7 @@ namespace Tsavorite.test.LogRecordTests
                 }
 
                 var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.False);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
                 Assert.That(deserialized.IsSet, Is.False);
             }
         }
@@ -133,7 +133,7 @@ namespace Tsavorite.test.LogRecordTests
                     BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(inlineSize), declaredLength);
 
                 var payload = PinnedSpanByte.FromPinnedPointer(ptr, inlineSize + sizeof(int) + availableBytes);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.False);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
                 Assert.That(deserialized.IsSet, Is.False);
             }
         }
@@ -153,7 +153,7 @@ namespace Tsavorite.test.LogRecordTests
                 ptr[Constants.FixedHeaderSize + 1] = 43;
 
                 var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.True);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
                 Assert.That(deserialized.Key[0], Is.EqualTo(42));
                 Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
                 deserialized.Dispose();
@@ -182,11 +182,37 @@ namespace Tsavorite.test.LogRecordTests
                 record[inlineSize + sizeof(int)] = 42;
 
                 var payload = PinnedSpanByte.FromPinnedPointer(ptr, inlineSize + sizeof(int) + 1);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.True);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
                 if (keyOverflow)
                     Assert.That(deserialized.Key[0], Is.EqualTo(42));
                 else
                     Assert.That(deserialized.ValueSpan[0], Is.EqualTo(42));
+                deserialized.Dispose();
+            }
+        }
+
+        [Test]
+        public void TryDeserializeAcceptsBothOverflowFields()
+        {
+            var record = new byte[64];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyIsOverflow();
+                header.SetValueIsOverflow();
+
+                var inlineSize = RoundUp(new LogRecord((long)ptr).ActualSize, Constants.kRecordAlignment);
+                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(inlineSize), 1);
+                record[inlineSize + sizeof(int)] = 42;
+                var valueOffset = inlineSize + sizeof(int) + 1;
+                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(valueOffset), 1);
+                record[valueOffset + sizeof(int)] = 43;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, valueOffset + sizeof(int) + 1);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
+                Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
                 deserialized.Dispose();
             }
         }

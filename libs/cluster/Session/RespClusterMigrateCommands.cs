@@ -42,7 +42,7 @@ namespace Garnet.cluster
                 return false;
 
             if (reassembler.RecordIsInline)
-                return DiskLogRecord.TryDeserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord);
+                return DiskLogRecord.TryDeserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord);
 
             // Non-inline: deserialize the streamed object value (if any) from its chunks, then assign the pre-populated pieces.
             IHeapObject valueObject = null;
@@ -325,7 +325,7 @@ namespace Garnet.cluster
                                         continue;
                                     }
 
-                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord))
                                     {
                                         logger?.LogError("Rejected malformed or null migrated log record");
                                         throw new GarnetException("Malformed or null migrated log record");
