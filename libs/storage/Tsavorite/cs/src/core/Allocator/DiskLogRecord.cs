@@ -546,6 +546,51 @@ namespace Tsavorite.core
             }
         }
 
+        /// <summary>Validate a whole serialized record's bounds before deserializing untrusted migration or replication data.</summary>
+        /// <returns>False if the record header or a declared field extends beyond <paramref name="recordSpan"/>.</returns>
+        public static bool TryDeserialize<TStoreFunctions>(PinnedSpanByte recordSpan, IObjectSerializer<IHeapObject> valueObjectSerializer, ObjectIdMap transientObjectIdMap,
+            TStoreFunctions storeFunctions, out DiskLogRecord diskLogRecord)
+            where TStoreFunctions : IStoreFunctions
+        {
+            diskLogRecord = default;
+            if (recordSpan.Length < Constants.FixedHeaderSize)
+                return false;
+
+            var serializedLogRecord = new LogRecord((long)recordSpan.ToPointer());
+            if (serializedLogRecord.Info.IsNull || serializedLogRecord.ActualSize > recordSpan.Length)
+                return false;
+
+            if (!serializedLogRecord.DataHeader.RecordIsInline)
+            {
+                var offset = RoundUp(serializedLogRecord.ActualSize, Constants.kRecordAlignment);
+                if (offset > recordSpan.Length)
+                    return false;
+
+                var dataHeader = serializedLogRecord.DataHeader;
+                if (dataHeader.KeyIsOverflow && !TryReadOverflowLength(recordSpan.ReadOnlySpan, ref offset))
+                    return false;
+                if (dataHeader.ValueIsOverflow && !TryReadOverflowLength(recordSpan.ReadOnlySpan, ref offset))
+                    return false;
+            }
+
+            diskLogRecord = Deserialize(recordSpan, valueObjectSerializer, transientObjectIdMap, storeFunctions);
+            return true;
+        }
+
+        private static bool TryReadOverflowLength(ReadOnlySpan<byte> record, ref int offset)
+        {
+            if (record.Length - offset < sizeof(int))
+                return false;
+
+            var length = BinaryPrimitives.ReadInt32LittleEndian(record.Slice(offset));
+            offset += sizeof(int);
+            if (length < 0 || length > record.Length - offset)
+                return false;
+
+            offset += length;
+            return true;
+        }
+
         /// <summary>
         /// Compute a chunked record's inline-portion size (<c>RoundUp(ActualSize)</c>) from the start of its inline header. The
         /// chunked migration/replication receiver (<c>ChunkedRecordReassembler</c>) uses this to know how many bytes make up the

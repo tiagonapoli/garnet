@@ -565,7 +565,11 @@ namespace Garnet.cluster
                         if (!RespReadUtils.GetSerializedRecordSpan(out var recordSpan, ref payloadPtr, payloadEndPtr))
                             return false;
 
-                        diskLogRecord = DiskLogRecord.Deserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions);
+                        if (!DiskLogRecord.TryDeserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                        {
+                            logger?.LogWarning("Rejected malformed replicated log record");
+                            return false;
+                        }
 
                         // Streamed records carry the primary's native handle and bypass the RMW path that maintains the context reservation
                         vectorManager?.SanitizeAndTrackIngestedRecordIfApplicable(ref diskLogRecord);
@@ -597,7 +601,11 @@ namespace Garnet.cluster
                             // The reassembler owns the inline buffer; pin it while the record it backs is used.
                             fixed (byte* headerPtr = chunkedRecordReassembler.InlineBuffer)
                             {
-                                diskLogRecord = CompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap);
+                                if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord))
+                                {
+                                    logger?.LogWarning("Rejected malformed chunked replicated log record");
+                                    return false;
+                                }
 
                                 // Streamed records carry the primary's native handle and bypass the RMW path that maintains the context reservation
                                 vectorManager?.SanitizeAndTrackIngestedRecordIfApplicable(ref diskLogRecord);
