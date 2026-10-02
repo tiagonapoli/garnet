@@ -82,22 +82,10 @@ namespace Tsavorite.test.LogRecordTests
             }
         }
 
-        [TestCase(RecordInfo.Size)]
-        [TestCase(Constants.FixedHeaderSize)]
-        public void TryDeserializeAcceptsNullRecord(int recordLength)
-        {
-            var record = new byte[recordLength];
-            fixed (byte* ptr = record)
-            {
-                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
-                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, default(StoreFunctions<SpanByteComparer, SpanByteRecordTriggers>), out var deserialized), Is.True);
-                Assert.That(deserialized.Info.IsNull, Is.True);
-                deserialized.Dispose();
-            }
-        }
-
         [TestCase(RecordInfo.Size - 1, false)]
+        [TestCase(RecordInfo.Size, false)]
         [TestCase(12, false)]
+        [TestCase(Constants.FixedHeaderSize, false)]
         [TestCase(Constants.FixedHeaderSize, true)]
         [TestCase(24, false)]
         public void TryDeserializeRejectsMalformedNullRecord(int recordLength, bool nonzeroDataHeader)

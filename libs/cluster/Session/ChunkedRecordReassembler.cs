@@ -28,7 +28,7 @@ namespace Garnet.cluster
     /// directly from the network chunks; an object value (whose length is not known up front, and which may exceed 2 GB, the max
     /// length of a single <c>byte[]</c>) is accumulated as a chunk list and later streamed to the deserializer via a
     /// <see cref="ReadOnlySequence{T}"/>. The completed pieces are assembled by
-    /// <see cref="DiskLogRecord.CompleteDeserializeChunkedRecord"/> (out-of-line components) or <see cref="DiskLogRecord.TryDeserialize"/>
+    /// <see cref="DiskLogRecord.CompleteDeserializeChunkedRecord"/> (out-of-line components) or <see cref="DiskLogRecord.Deserialize"/>
     /// (a fully-inline record).
     /// </remarks>
     internal sealed class ChunkedRecordReassembler
