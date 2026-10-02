@@ -158,7 +158,8 @@ namespace Tsavorite.core
                 // The IHeapObject owned by this DiskLogRecord (if any) is disposed via the store-level
                 // IRecordTriggers.OnDisposeDiskRecord trigger, which callers must invoke before this
                 // Dispose(). The allocator's OnDisposeDiskRecord forwards to that trigger.
-                logRecord.Dispose();
+                if (!logRecord.Info.IsNull)
+                    logRecord.Dispose();
             }
             logRecord = default;
 
@@ -546,18 +547,29 @@ namespace Tsavorite.core
             }
         }
 
-        /// <summary>Validate a whole serialized record's bounds before deserializing untrusted migration or replication data.</summary>
-        /// <returns>False if the record header or a declared field extends beyond <paramref name="recordSpan"/>.</returns>
+        /// <summary>Validate a serialized record's bounds, accepting empty null records before deserializing migration or replication data.</summary>
+        /// <returns>False if fields extend beyond <paramref name="recordSpan"/> or a null record claims data.</returns>
+        /// <remarks>Callers must check <see cref="Info"/> before accessing fields of a null record.</remarks>
         public static bool TryDeserialize<TStoreFunctions>(PinnedSpanByte recordSpan, IObjectSerializer<IHeapObject> valueObjectSerializer, ObjectIdMap transientObjectIdMap,
             TStoreFunctions storeFunctions, out DiskLogRecord diskLogRecord)
             where TStoreFunctions : IStoreFunctions
         {
             diskLogRecord = default;
-            if (recordSpan.Length < Constants.FixedHeaderSize)
+            if (recordSpan.Length < RecordInfo.Size)
                 return false;
 
             var serializedLogRecord = new LogRecord((long)recordSpan.ToPointer());
-            if (serializedLogRecord.Info.IsNull || serializedLogRecord.ActualSize > recordSpan.Length)
+            if (serializedLogRecord.Info.IsNull)
+            {
+                if (recordSpan.Length != RecordInfo.Size &&
+                    (recordSpan.Length != Constants.FixedHeaderSize || BinaryPrimitives.ReadUInt64LittleEndian(recordSpan.ReadOnlySpan[RecordInfo.Size..]) != 0))
+                    return false;
+
+                diskLogRecord = new(serializedLogRecord);
+                return true;
+            }
+
+            if (recordSpan.Length < Constants.FixedHeaderSize || serializedLogRecord.ActualSize > recordSpan.Length)
                 return false;
 
             if (!serializedLogRecord.DataHeader.RecordIsInline)

@@ -187,10 +187,10 @@ namespace Garnet.cluster
                                         // The reassembler owns the inline buffer; pin it while the record it backs is used.
                                         fixed (byte* headerPtr = chunkedRecordReassembler.InlineBuffer)
                                         {
-                                            if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord))
+                                            if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord) || diskLogRecord.Info.IsNull)
                                             {
-                                                logger?.LogWarning("Rejected malformed chunked migrated log record");
-                                                throw new GarnetException("Malformed chunked migrated log record");
+                                                logger?.LogWarning("Rejected malformed or null chunked migrated log record");
+                                                throw new GarnetException("Malformed or null chunked migrated log record");
                                             }
 
                                             var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
@@ -284,10 +284,10 @@ namespace Garnet.cluster
                                     }
 
                                     if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer,
-                                            transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                                            transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord) || diskLogRecord.Info.IsNull)
                                     {
-                                        logger?.LogWarning("Rejected malformed migrated log record");
-                                        throw new GarnetException("Malformed migrated log record");
+                                        logger?.LogWarning("Rejected malformed or null migrated log record");
+                                        throw new GarnetException("Malformed or null migrated log record");
                                     }
 
                                     var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
@@ -320,7 +320,8 @@ namespace Garnet.cluster
                     {
                         if (diskLogRecord.IsSet)
                         {
-                            storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
+                            if (!diskLogRecord.Info.IsNull)
+                                storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
                             diskLogRecord.Dispose();
                         }
                     }

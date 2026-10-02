@@ -78,6 +78,23 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual("PONG", pong.ToString());
         }
 
+        [TestCase(RecordInfo.Size)]
+        [TestCase(Constants.FixedHeaderSize)]
+        [Category("CLUSTER")]
+        public void ClusterMigrateRejectsNullLogRecord(int recordLength)
+        {
+            context.CreateInstances(defaultShards, useTLS: UseTLS);
+            context.CreateConnection(useTLS: UseTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(logger: context.logger);
+
+            var sourceNodeId = context.clusterTestUtils.GetNodeIdFromNode(1, context.logger);
+            var targetEndpoint = context.clusterTestUtils.GetEndPoint(2);
+            SendRaw(targetEndpoint, BuildMigrateCommand(sourceNodeId, new byte[recordLength]));
+
+            var pong = context.clusterTestUtils.GetMultiplexer().GetServer(targetEndpoint).Execute("PING");
+            ClassicAssert.AreEqual("PONG", pong.ToString());
+        }
+
         /// <summary>
         /// Builds a CLUSTER MIGRATE command carrying one inline log record whose header declares a value far larger
         /// than the bytes actually present in the framed record.
@@ -101,15 +118,20 @@ namespace Garnet.test.cluster
                     rp[keyOffset + keyBytes.Length + i] = 0x41;
             }
 
+            return BuildMigrateCommand(sourceNodeId, record);
+        }
+
+        static unsafe byte[] BuildMigrateCommand(string sourceNodeId, byte[] record)
+        {
             // Payload = [int keyCount][byte MigrationRecordSpanType][int recordLength][record bytes]
-            var payload = new byte[sizeof(int) + 1 + sizeof(int) + recordLength];
+            var payload = new byte[sizeof(int) + 1 + sizeof(int) + record.Length];
             fixed (byte* pp = payload)
             {
                 *(int*)pp = 1;
                 pp[sizeof(int)] = (byte)MigrationRecordSpanType.LogRecord;
-                *(int*)(pp + sizeof(int) + 1) = recordLength;
+                *(int*)(pp + sizeof(int) + 1) = record.Length;
             }
-            Array.Copy(record, 0, payload, sizeof(int) + 1 + sizeof(int), recordLength);
+            Array.Copy(record, 0, payload, sizeof(int) + 1 + sizeof(int), record.Length);
 
             // CLUSTER MIGRATE <sourceNodeId> <replace=F> <vectorSet=F> <payload>
             return BuildRespArray(

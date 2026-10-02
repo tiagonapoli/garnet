@@ -565,9 +565,9 @@ namespace Garnet.cluster
                         if (!RespReadUtils.GetSerializedRecordSpan(out var recordSpan, ref payloadPtr, payloadEndPtr))
                             return false;
 
-                        if (!DiskLogRecord.TryDeserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                        if (!DiskLogRecord.TryDeserialize(recordSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord) || diskLogRecord.Info.IsNull)
                         {
-                            logger?.LogWarning("Rejected malformed replicated log record");
+                            logger?.LogWarning("Rejected malformed or null replicated log record");
                             return false;
                         }
 
@@ -601,9 +601,9 @@ namespace Garnet.cluster
                             // The reassembler owns the inline buffer; pin it while the record it backs is used.
                             fixed (byte* headerPtr = chunkedRecordReassembler.InlineBuffer)
                             {
-                                if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord))
+                                if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord) || diskLogRecord.Info.IsNull)
                                 {
-                                    logger?.LogWarning("Rejected malformed chunked replicated log record");
+                                    logger?.LogWarning("Rejected malformed or null chunked replicated log record");
                                     return false;
                                 }
 
@@ -631,7 +631,8 @@ namespace Garnet.cluster
                 // Dispose the diskLogRecord if there was an exception in SET
                 if (diskLogRecord.IsSet)
                 {
-                    storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
+                    if (!diskLogRecord.Info.IsNull)
+                        storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
                     diskLogRecord.Dispose();
                 }
                 throw;
