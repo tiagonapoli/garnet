@@ -63,8 +63,7 @@ namespace Garnet.test.cluster
 
             var migrateCommand = BuildMalformedMigrateCommand(sourceNodeId, keyBytes);
 
-            // Send the crafted CLUSTER MIGRATE directly to the importing node. With the fix the record is rejected in
-            // DiskLogRecord.Deserialize and the connection is torn down without a reply, so read best-effort with a timeout.
+            // Send the crafted CLUSTER MIGRATE directly to the importing node; a malformed record must not receive an OK reply.
             var targetEndpoint = context.clusterTestUtils.GetEndPoint(targetNodeIndex);
             SendRaw(targetEndpoint, migrateCommand);
 
@@ -148,7 +147,11 @@ namespace Garnet.test.cluster
             socket.Send(command);
             socket.ReceiveTimeout = 2000;
             var response = new byte[256];
-            try { _ = socket.Receive(response); }
+            try
+            {
+                var received = socket.Receive(response);
+                ClassicAssert.AreNotEqual("+OK\r\n", Encoding.ASCII.GetString(response, 0, received));
+            }
             catch (SocketException) { /* fix path tears down the connection without replying */ }
         }
     }

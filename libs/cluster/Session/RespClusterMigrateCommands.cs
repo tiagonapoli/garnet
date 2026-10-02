@@ -31,22 +31,23 @@ namespace Garnet.cluster
         /// <see cref="chunkedRecordReassembler"/>: a fully-inline record from its contiguous inline buffer, else the inline portion
         /// plus the pre-populated overflow key/value and/or the streamed (now deserialized) object value.
         /// <paramref name="headerPtr"/> must point at the pinned inline buffer (<see cref="ChunkedRecordReassembler.InlineBuffer"/>)
-        /// and remain pinned while the returned record is used.
+        /// and remain pinned while the output record is used.
         /// </summary>
-        unsafe DiskLogRecord CompleteChunkedRecordReassembly(byte* headerPtr, StoreWrapper storeWrapper, ObjectIdMap transientObjectIdMap)
+        unsafe bool TryCompleteChunkedRecordReassembly(byte* headerPtr, StoreWrapper storeWrapper, ObjectIdMap transientObjectIdMap, out DiskLogRecord diskLogRecord)
         {
             var reassembler = chunkedRecordReassembler;
             var headerSpan = PinnedSpanByte.FromPinnedPointer(headerPtr, reassembler.InlineSize);
             if (reassembler.RecordIsInline)
-                return DiskLogRecord.Deserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions);
+                return DiskLogRecord.TryDeserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord);
 
             // Non-inline: deserialize the streamed object value (if any) from its chunks, then assign the pre-populated pieces.
             IHeapObject valueObject = null;
             if (reassembler.IsObjectValue)
                 valueObject = (IHeapObject)storeWrapper.GarnetObjectSerializer.Deserialize(reassembler.ObjectValueSequence());
 
-            return DiskLogRecord.CompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
+            diskLogRecord = DiskLogRecord.CompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
                 valueObject, transientObjectIdMap);
+            return true;
         }
 
         /// <summary>
@@ -186,7 +187,11 @@ namespace Garnet.cluster
                                         // The reassembler owns the inline buffer; pin it while the record it backs is used.
                                         fixed (byte* headerPtr = chunkedRecordReassembler.InlineBuffer)
                                         {
-                                            diskLogRecord = CompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap);
+                                            if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord))
+                                            {
+                                                logger?.LogWarning("Rejected malformed chunked migrated log record");
+                                                throw new GarnetException("Malformed chunked migrated log record");
+                                            }
 
                                             var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
                                             if (!currentConfig.IsImportingSlot(slot)) // Slot is not in importing state
@@ -278,8 +283,12 @@ namespace Garnet.cluster
                                         continue;
                                     }
 
-                                    diskLogRecord = DiskLogRecord.Deserialize(payloadRaw, storeWrapper.GarnetObjectSerializer,
-                                        transientObjectIdMap, storeWrapper.storeFunctions);
+                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer,
+                                            transientObjectIdMap, storeWrapper.storeFunctions, out diskLogRecord))
+                                    {
+                                        logger?.LogWarning("Rejected malformed migrated log record");
+                                        throw new GarnetException("Malformed migrated log record");
+                                    }
 
                                     var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
                                     if (!currentConfig.IsImportingSlot(slot)) // Slot is not in importing state
