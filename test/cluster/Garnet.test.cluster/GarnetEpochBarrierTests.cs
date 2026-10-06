@@ -71,6 +71,20 @@ namespace Garnet.test.cluster
             }
         }
 
+        sealed class SessionEpochSlot
+        {
+            public long Value;
+        }
+
+        readonly struct AtomicObserverSource(SessionEpochSlot slot) : IEpochObserver
+        {
+            public bool AllSessionsQuiesced(long targetEpoch)
+            {
+                var localEpoch = Volatile.Read(ref slot.Value);
+                return localEpoch == 0 || localEpoch >= targetEpoch;
+            }
+        }
+
         // Small park slices so the backoff re-scan path is reached quickly in tests.
         static readonly TimeSpan BaseParkDelay = TimeSpan.FromMilliseconds(1);
         static readonly TimeSpan MaxParkDelay = TimeSpan.FromMilliseconds(10);
@@ -103,6 +117,21 @@ namespace Garnet.test.cluster
             var completed = await epoch.BumpAndWaitForEpochTransitionAsync();
 
             ClassicAssert.IsTrue(completed);
+        }
+
+        [Test, CancelAfter(10_000)]
+        public async Task BumpCanCompleteBeforeAnAcquirerPublishesItsOldEpoch()
+        {
+            var slot = new SessionEpochSlot();
+            var epoch = new GarnetEpoch<AtomicObserverSource>(new AtomicObserverSource(slot));
+
+            var sampledEpoch = epoch.GetCurrentEpoch();
+            ClassicAssert.IsTrue(await epoch.BumpAndWaitForEpochTransitionAsync());
+
+            // Even a full-fence exchange cannot protect the gap after the earlier epoch read.
+            ClassicAssert.AreEqual(0, Interlocked.Exchange(ref slot.Value, sampledEpoch));
+            ClassicAssert.AreEqual(sampledEpoch, Volatile.Read(ref slot.Value));
+            ClassicAssert.Less(slot.Value, epoch.GetCurrentEpoch());
         }
 
         [Test, CancelAfter(15_000)]
