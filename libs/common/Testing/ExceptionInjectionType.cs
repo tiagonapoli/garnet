@@ -150,5 +150,9 @@ namespace Garnet.common
         /// token scan finds candidates but rejects every one of them.
         /// </summary>
         Replication_Fail_Replica_Unreadable_Checkpoint,
+        /// <summary>
+        /// Park slot verification while its epoch is released after reading the cluster config.
+        /// </summary>
+        Cluster_Slot_Verification_Epoch_Released,
     }
 }
