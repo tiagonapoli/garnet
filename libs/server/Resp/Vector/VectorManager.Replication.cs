@@ -660,7 +660,7 @@ namespace Garnet.server
             var previousValue = Interlocked.Exchange(ref replicationReplayStarted, -1);
             if (previousValue == -1 || !completed)
             {
-                logger.LogWarning("VectorManager replication replay tasks failed disposal - probably duplicate call");
+                logger?.LogWarning("VectorManager replication replay tasks failed disposal - probably duplicate call");
                 Debug.Assert(false, "VectorManager replication tasks were already disposed");
             }
         }
