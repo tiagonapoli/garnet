@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using NUnit.Framework;
 using Tsavorite.core;
@@ -59,6 +60,233 @@ namespace Tsavorite.test.LogRecordTests
             }
             sbamOutput.Dispose();
             DeleteDirectory(MethodTestDir);
+        }
+
+        [TestCase(1, 4096, 24)]
+        [TestCase(20, 1, 24)]
+        [TestCase(1, 1, 12)]
+        public void TryDeserializeRejectsTruncatedInlineRecord(int keyLength, int valueLength, int payloadLength)
+        {
+            var record = new byte[64];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyAndValueInline();
+                header.KeyLength = keyLength;
+                header.ValueLength = valueLength;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, payloadLength);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [TestCase(RecordInfo.Size - 1, false)]
+        [TestCase(RecordInfo.Size, false)]
+        [TestCase(12, false)]
+        [TestCase(Constants.FixedHeaderSize, false)]
+        [TestCase(Constants.FixedHeaderSize, true)]
+        [TestCase(24, false)]
+        public void TryDeserializeRejectsMalformedNullRecord(int recordLength, bool nonzeroDataHeader)
+        {
+            var record = new byte[recordLength];
+            fixed (byte* ptr = record)
+            {
+                if (nonzeroDataHeader)
+                {
+                    ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                    header.SetKeyAndValueInline();
+                    header.KeyLength = 100;
+                    header.ValueLength = 1;
+                }
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [TestCase(true, 4096, 8)]
+        [TestCase(false, 4096, 8)]
+        [TestCase(true, -1, 8)]
+        [TestCase(false, -1, 8)]
+        [TestCase(true, 0, -2)]
+        [TestCase(false, 0, -2)]
+        public void TryDeserializeRejectsInvalidOverflowLength(bool keyOverflow, int declaredLength, int availableBytes)
+        {
+            var record = new byte[64];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyAndValueInline();
+                header.KeyLength = 1;
+                header.ValueLength = 1;
+                if (keyOverflow)
+                    header.SetKeyIsOverflow();
+                else
+                    header.SetValueIsOverflow();
+
+                var inlineSize = RoundUp(new LogRecord((long)ptr).ActualSize, Constants.kRecordAlignment);
+                if (availableBytes >= 0)
+                    BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(inlineSize), declaredLength);
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, inlineSize + sizeof(int) + availableBytes);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [Test]
+        public void TryDeserializeAcceptsCompleteInlineRecord()
+        {
+            var record = new byte[24];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyAndValueInline();
+                header.KeyLength = 1;
+                header.ValueLength = 1;
+                ptr[Constants.FixedHeaderSize] = 42;
+                ptr[Constants.FixedHeaderSize + 1] = 43;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
+                Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
+                deserialized.Dispose();
+            }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void TryDeserializeAcceptsCompleteOverflowRecord(bool keyOverflow)
+        {
+            var record = new byte[64];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyAndValueInline();
+                header.KeyLength = 1;
+                header.ValueLength = 1;
+                if (keyOverflow)
+                    header.SetKeyIsOverflow();
+                else
+                    header.SetValueIsOverflow();
+
+                var inlineSize = RoundUp(new LogRecord((long)ptr).ActualSize, Constants.kRecordAlignment);
+                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(inlineSize), 1);
+                record[inlineSize + sizeof(int)] = 42;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, inlineSize + sizeof(int) + 1);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
+                if (keyOverflow)
+                    Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                else
+                    Assert.That(deserialized.ValueSpan[0], Is.EqualTo(42));
+                deserialized.Dispose();
+            }
+        }
+
+        [Test]
+        public void TryDeserializeAcceptsBothOverflowFields()
+        {
+            var record = new byte[64];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetKeyIsOverflow();
+                header.SetValueIsOverflow();
+
+                var inlineSize = RoundUp(new LogRecord((long)ptr).ActualSize, Constants.kRecordAlignment);
+                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(inlineSize), 1);
+                record[inlineSize + sizeof(int)] = 42;
+                var valueOffset = inlineSize + sizeof(int) + 1;
+                BinaryPrimitives.WriteInt32LittleEndian(record.AsSpan(valueOffset), 1);
+                record[valueOffset + sizeof(int)] = 43;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, valueOffset + sizeof(int) + 1);
+                Assert.That(DiskLogRecord.TryDeserialize(payload, null, objectIdMap, out var deserialized), Is.True);
+                Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
+                deserialized.Dispose();
+            }
+        }
+
+        [Test]
+        public void TryCompleteDeserializeChunkedRecordRejectsNullBeforeObjectDeserialization()
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                ref var header = ref *(RecordDataHeader*)(ptr + RecordInfo.Size);
+                header.SetValueIsObject();
+                var called = false;
+                IHeapObject DeserializeValueObject()
+                {
+                    called = true;
+                    return null;
+                }
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, default, default, DeserializeValueObject, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+                Assert.That(called, Is.False);
+            }
+        }
+
+        [TestCase(RecordInfo.Size)]
+        [TestCase(Constants.FixedHeaderSize)]
+        public void TryCompleteDeserializeChunkedRecordRejectsTruncatedHeader(int length)
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, default, default, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void TryCompleteDeserializeChunkedRecordRejectsMissingOverflow(bool missingKey)
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                var key = missingKey ? default : OverflowByteArray.AllocateData(1);
+                var value = missingKey ? OverflowByteArray.AllocateData(1) : default;
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, key, value, null, objectIdMap, out var deserialized), Is.False);
+                Assert.That(deserialized.IsSet, Is.False);
+            }
+        }
+
+        [Test]
+        public void TryCompleteDeserializeChunkedRecordAcceptsOverflowFields()
+        {
+            var record = new byte[32];
+            fixed (byte* ptr = record)
+            {
+                *(RecordInfo*)ptr = new RecordInfo();
+                var key = OverflowByteArray.AllocateData(1);
+                key.Span[0] = 42;
+                var value = OverflowByteArray.AllocateData(1);
+                value.Span[0] = 43;
+
+                var payload = PinnedSpanByte.FromPinnedPointer(ptr, record.Length);
+                Assert.That(DiskLogRecord.TryCompleteDeserializeChunkedRecord(payload, key, value, null, objectIdMap, out var deserialized), Is.True);
+                Assert.That(deserialized.Key[0], Is.EqualTo(42));
+                Assert.That(deserialized.ValueSpan[0], Is.EqualTo(43));
+                deserialized.Dispose();
+            }
         }
 
         static void UpdateRecordSizeInfo(ref RecordSizeInfo sizeInfo, int keySize = -1, int valueSize = -1)

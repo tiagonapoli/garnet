@@ -31,22 +31,21 @@ namespace Garnet.cluster
         /// <see cref="chunkedRecordReassembler"/>: a fully-inline record from its contiguous inline buffer, else the inline portion
         /// plus the pre-populated overflow key/value and/or the streamed (now deserialized) object value.
         /// <paramref name="headerPtr"/> must point at the pinned inline buffer (<see cref="ChunkedRecordReassembler.InlineBuffer"/>)
-        /// and remain pinned while the returned record is used.
+        /// and remain pinned while the output record is used.
         /// </summary>
-        unsafe DiskLogRecord CompleteChunkedRecordReassembly(byte* headerPtr, StoreWrapper storeWrapper, ObjectIdMap transientObjectIdMap)
+        unsafe bool TryCompleteChunkedRecordReassembly(byte* headerPtr, StoreWrapper storeWrapper, ObjectIdMap transientObjectIdMap, out DiskLogRecord diskLogRecord)
         {
             var reassembler = chunkedRecordReassembler;
             var headerSpan = PinnedSpanByte.FromPinnedPointer(headerPtr, reassembler.InlineSize);
             if (reassembler.RecordIsInline)
-                return DiskLogRecord.Deserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, storeWrapper.storeFunctions);
+                return DiskLogRecord.TryDeserialize(headerSpan, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord);
 
-            // Non-inline: deserialize the streamed object value (if any) from its chunks, then assign the pre-populated pieces.
-            IHeapObject valueObject = null;
-            if (reassembler.IsObjectValue)
-                valueObject = (IHeapObject)storeWrapper.GarnetObjectSerializer.Deserialize(reassembler.ObjectValueSequence());
-
-            return DiskLogRecord.CompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
-                valueObject, transientObjectIdMap);
+            // Non-inline: defer object deserialization until the inline header is validated.
+            Func<IHeapObject> deserializeValueObject = reassembler.IsObjectValue
+                ? () => (IHeapObject)storeWrapper.GarnetObjectSerializer.Deserialize(reassembler.ObjectValueSequence())
+                : null;
+            return DiskLogRecord.TryCompleteDeserializeChunkedRecord(headerSpan, reassembler.KeyOverflow, reassembler.ValueOverflow,
+                deserializeValueObject, transientObjectIdMap, out diskLogRecord);
         }
 
         /// <summary>
@@ -101,6 +100,12 @@ namespace Garnet.cluster
 
             void Process(BasicGarnetApi basicGarnetApi, byte[] input, bool replaceOption, bool vectorSetOption)
             {
+                if (input.Length < sizeof(int))
+                {
+                    logger?.LogError("Rejected migrated payload without a key count");
+                    throw new GarnetException("Malformed migrated payload: missing key count");
+                }
+
                 var currentConfig = clusterProvider.clusterManager.CurrentConfig;
                 byte migrateState = 0;
 
@@ -111,6 +116,12 @@ namespace Garnet.cluster
 
                     var keyCount = *(int*)payloadPtr;
                     payloadPtr += sizeof(int);
+                    if (keyCount < 0)
+                    {
+                        logger?.LogError("Rejected migrated payload with negative key count: {KeyCount}", keyCount);
+                        throw new GarnetException("Malformed migrated payload: negative key count");
+                    }
+
                     var i = 0;
 
                     TrackImportProgress(keyCount, keyCount == 0);
@@ -125,11 +136,20 @@ namespace Garnet.cluster
                             // Vector Sets need special handling
                             while (i < keyCount)
                             {
+                                if (payloadPtr >= payloadEndPtr)
+                                {
+                                    logger?.LogError("Rejected migrated payload missing a Vector Set record kind");
+                                    throw new GarnetException("Malformed migrated payload: missing record kind");
+                                }
+
                                 var kind = (MigrationRecordSpanType)(*payloadPtr);
                                 payloadPtr++;
 
                                 if (!RespReadUtils.GetSerializedRecordSpan(out var payloadRaw, ref payloadPtr, payloadEndPtr))
-                                    return;
+                                {
+                                    logger?.LogError("Rejected malformed Vector Set migrated record frame");
+                                    throw new GarnetException("Malformed Vector Set migrated record frame");
+                                }
 
                                 if (kind != MigrationRecordSpanType.VectorSetIndex)
                                     throw new InvalidOperationException($"Unexpected {nameof(MigrationRecordSpanType)}: {kind}");
@@ -153,6 +173,12 @@ namespace Garnet.cluster
                         {
                             while (i < keyCount)
                             {
+                                if (payloadPtr >= payloadEndPtr)
+                                {
+                                    logger?.LogError("Rejected migrated payload missing a record kind");
+                                    throw new GarnetException("Malformed migrated payload: missing record kind");
+                                }
+
                                 var kind = (MigrationRecordSpanType)(*payloadPtr);
                                 payloadPtr++;
 
@@ -162,13 +188,21 @@ namespace Garnet.cluster
                                     // [int chunkLength | continuation][chunk bytes]. GetSerializedRecordSpan cannot read these
                                     // because the continuation flag makes the length read as negative.
                                     if (payloadPtr + sizeof(int) > payloadEndPtr)
-                                        return;
+                                    {
+                                        logger?.LogError("Rejected migrated chunk without a length prefix");
+                                        throw new GarnetException("Malformed migrated chunk: missing length prefix");
+                                    }
+
                                     var rawChunkLength = *(int*)payloadPtr;
                                     payloadPtr += sizeof(int);
                                     var moreChunksFollow = (rawChunkLength & ChunkedRecordConstants.ContinuationFlag) != 0;
                                     var chunkLength = rawChunkLength & ~ChunkedRecordConstants.ContinuationFlag;
-                                    if (chunkLength < 0 || payloadPtr + chunkLength > payloadEndPtr)
-                                        return;
+                                    if (chunkLength > payloadEndPtr - payloadPtr)
+                                    {
+                                        logger?.LogError("Rejected migrated chunk extending beyond its payload");
+                                        throw new GarnetException("Malformed migrated chunk: length exceeds payload");
+                                    }
+
                                     var chunkSpan = new ReadOnlySpan<byte>(payloadPtr, chunkLength);
                                     payloadPtr += chunkLength;
 
@@ -186,7 +220,11 @@ namespace Garnet.cluster
                                         // The reassembler owns the inline buffer; pin it while the record it backs is used.
                                         fixed (byte* headerPtr = chunkedRecordReassembler.InlineBuffer)
                                         {
-                                            diskLogRecord = CompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap);
+                                            if (!TryCompleteChunkedRecordReassembly(headerPtr, storeWrapper, transientObjectIdMap, out diskLogRecord))
+                                            {
+                                                logger?.LogError("Rejected malformed or null chunked migrated log record");
+                                                throw new GarnetException("Malformed or null chunked migrated log record");
+                                            }
 
                                             var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
                                             if (!currentConfig.IsImportingSlot(slot)) // Slot is not in importing state
@@ -213,7 +251,10 @@ namespace Garnet.cluster
                                 }
 
                                 if (!RespReadUtils.GetSerializedRecordSpan(out var payloadRaw, ref payloadPtr, payloadEndPtr))
-                                    return;
+                                {
+                                    logger?.LogError("Rejected malformed migrated record frame");
+                                    throw new GarnetException("Malformed migrated record frame");
+                                }
 
                                 // An error has occurred
                                 if (migrateState > 0)
@@ -278,8 +319,11 @@ namespace Garnet.cluster
                                         continue;
                                     }
 
-                                    diskLogRecord = DiskLogRecord.Deserialize(payloadRaw, storeWrapper.GarnetObjectSerializer,
-                                        transientObjectIdMap, storeWrapper.storeFunctions);
+                                    if (!DiskLogRecord.TryDeserialize(payloadRaw, storeWrapper.GarnetObjectSerializer, transientObjectIdMap, out diskLogRecord))
+                                    {
+                                        logger?.LogError("Rejected malformed or null migrated log record");
+                                        throw new GarnetException("Malformed or null migrated log record");
+                                    }
 
                                     var slot = HashSlotUtils.HashSlot(diskLogRecord.Key);
                                     if (!currentConfig.IsImportingSlot(slot)) // Slot is not in importing state
