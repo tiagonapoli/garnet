@@ -727,11 +727,27 @@ namespace Garnet.server
                 return;
             }
 
+            var isTypedVectorCopy = unifiedInput.header.cmd == RespCommand.RENAMENX && unifiedInput.arg1 == VectorManager.RecordType;
+            Span<byte> restoredIndex = stackalloc byte[VectorManager.IndexSizeBytes];
+            if (isTypedVectorCopy)
+            {
+                if (value.Length != restoredIndex.Length)
+                    throw new GarnetException("Invalid Vector Set index length during AOF replay");
+
+                value.Span.CopyTo(restoredIndex);
+                VectorManager.ClearIndexPointer(restoredIndex);
+                value = PinnedSpanByte.FromPinnedSpan(restoredIndex);
+            }
+
             var output = UnifiedOutput.FromPinnedPointer(outputPtr, outputLength);
             var upsertOptions = new UpsertOptions() { KeyHash = preparedParameters.KeyHash };
-            _ = unifiedContext.Upsert((FixedSpanByteKey)preparedParameters.Key, ref unifiedInput, value, ref output, ref upsertOptions);
+            var status = unifiedContext.Upsert((FixedSpanByteKey)preparedParameters.Key, ref unifiedInput, value, ref output, ref upsertOptions);
+            if (isTypedVectorCopy && status.IsPending)
+                StorageSession.CompletePendingForUnifiedStoreSession(ref status, ref output, ref unifiedContext);
             if (!output.SpanByteAndMemory.IsSpanByte)
                 output.SpanByteAndMemory.Dispose();
+            if (isTypedVectorCopy && !status.IsCompletedSuccessfully)
+                throw new GarnetException($"Failed to replay typed Vector Set index copy: {status}");
         }
 
         static void UnifiedStoreObjectUpsert<TUnifiedContext>(PreparedParameters preparedParameters, TUnifiedContext unifiedContext, GarnetObjectSerializer garnetObjectSerializer, byte* outputPtr, int outputLength)

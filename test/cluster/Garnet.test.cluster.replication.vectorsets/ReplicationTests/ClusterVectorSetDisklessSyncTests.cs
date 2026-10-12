@@ -3,10 +3,12 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
+using Tsavorite.core;
 
 namespace Garnet.test.cluster
 {
@@ -118,6 +120,58 @@ namespace Garnet.test.cluster
 
             context.clusterTestUtils.ReadOnly(ReplicaIndex);
             AssertFullyReplicated(PrimaryIndex, ReplicaIndex, VectorSetKey);
+        }
+
+        [Test]
+        public void VectorSetImportedIndexSurvivesAofRecovery()
+        {
+            const string Key = "{vsdisk}aof-recovery";
+            const string ImportedKey = "{vsdisk}imported-index";
+
+            SetupDisklessCluster(1);
+            PopulateVectorSet(PrimaryIndex, Key, count: 4);
+            ImportIndexRecord(PrimaryIndex, Key, ImportedKey);
+            AssertVectorSetRecordType(PrimaryIndex, ImportedKey);
+
+            context.nodeOptions[PrimaryIndex].Recover = true;
+            context.RestartNode(PrimaryIndex, ensureAofFlush: true);
+            ClassicAssert.AreEqual(4, VectorSetSize(PrimaryIndex, Key));
+            AssertVectorSetRecordType(PrimaryIndex, ImportedKey);
+        }
+
+        private unsafe void ImportIndexRecord(int nodeIndex, string key, string importedKey)
+        {
+            // Exercise the typed-record copy used by streamed imports without relying on full-sync timing.
+            var storeWrapper = GetStoreWrapper(context.nodes[nodeIndex]);
+            var database = storeWrapper.DefaultDatabase;
+            var before = storeWrapper.appendOnlyFile.Log.TailAddress;
+            using var session = new StorageSession(storeWrapper, new ScratchBufferBuilder(), new ScratchBufferAllocator(), null, null, database.Id, null, database.VectorManager, null);
+            var keyBytes = Encoding.ASCII.GetBytes(key);
+            var readInput = new UnifiedInput(RespCommand.RENAME);
+            var output = new UnifiedOutput();
+            try
+            {
+                var readStatus = session.unifiedBasicContext.Read((FixedSpanByteKey)keyBytes, ref readInput, ref output);
+                if (readStatus.IsPending)
+                    StorageSession.CompletePendingForUnifiedStoreSession(ref readStatus, ref output, ref session.unifiedBasicContext);
+
+                ClassicAssert.IsTrue(readStatus.Found, "the imported index must exist before its raw AOF copy");
+                fixed (byte* recordPtr = output.SpanByteAndMemory.ReadOnlySpan)
+                {
+                    var record = new LogRecord(recordPtr, session.functionsState.transientObjectIdMap);
+                    ClassicAssert.AreEqual(VectorManager.RecordType, record.RecordType);
+                    var importInput = new UnifiedInput(RespCommand.NONE);
+                    VectorManager.ClearIndexPointer(record.ValueSpan);
+                    var upsertStatus = session.unifiedBasicContext.Upsert((FixedSpanByteKey)Encoding.ASCII.GetBytes(importedKey), ref importInput, in record);
+                    ClassicAssert.IsTrue(upsertStatus.IsCompletedSuccessfully, "the imported typed record must be logged");
+                }
+
+                ClassicAssert.AreNotEqual(before, storeWrapper.appendOnlyFile.Log.TailAddress, "the imported record must produce an AOF entry");
+            }
+            finally
+            {
+                output.Dispose();
+            }
         }
 
         /// <summary>

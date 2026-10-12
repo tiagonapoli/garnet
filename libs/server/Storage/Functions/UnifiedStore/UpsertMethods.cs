@@ -89,7 +89,16 @@ namespace Garnet.server
         {
             functionsState.watchVersionMap.IncrementVersion(upsertInfo.KeyHash);
             if (functionsState.appendOnlyFile != null)
+            {
+                if (input.header.cmd == RespCommand.NONE && inputLogRecord.RecordType == VectorManager.RecordType)
+                {
+                    // RENAMENX carries the type for raw index copies without triggering RENAME replay.
+                    input.header.cmd = RespCommand.RENAMENX;
+                    input.arg1 = VectorManager.RecordType;
+                }
+
                 upsertInfo.UserData |= NeedAofLog; // Mark that we need to write to AOF
+            }
 
         }
 
@@ -99,6 +108,7 @@ namespace Garnet.server
         {
             if (!InPlaceWriterForSpanValue(ref logRecord, ref input, newValue, ref output.SpanByteAndMemory, ref upsertInfo, this, functionsState, input.arg1))
                 return false;
+
             if (functionsState.appendOnlyFile != null)
                 upsertInfo.UserData |= NeedAofLog; // Mark that we need to write to AOF
             return true;
@@ -122,8 +132,17 @@ namespace Garnet.server
         {
             if (!InPlaceWriterForLogRecordValue(ref logRecord, ref input, in inputLogRecord, ref output.SpanByteAndMemory, ref upsertInfo, this, functionsState, input.arg1))
                 return false;
+
             if (functionsState.appendOnlyFile != null)
+            {
+                if (input.header.cmd == RespCommand.NONE && inputLogRecord.RecordType == VectorManager.RecordType)
+                {
+                    input.header.cmd = RespCommand.RENAMENX;
+                    input.arg1 = VectorManager.RecordType;
+                }
+
                 upsertInfo.UserData |= NeedAofLog; // Mark that we need to write to AOF
+            }
             return true;
         }
 
