@@ -106,8 +106,15 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool InPlaceWriter(ref LogRecord logRecord, ref UnifiedInput input, ReadOnlySpan<byte> newValue, ref UnifiedOutput output, ref UpsertInfo upsertInfo)
         {
-            if (!InPlaceWriterForSpanValue(ref logRecord, ref input, newValue, ref output.SpanByteAndMemory, ref upsertInfo, this, functionsState, input.arg1))
+            var isTypedCopy = input.header.cmd == RespCommand.RENAMENX && input.arg1 == VectorManager.RecordType;
+            if (!InPlaceWriterForSpanValue(ref logRecord, ref input, newValue, ref output.SpanByteAndMemory, ref upsertInfo, this, functionsState, isTypedCopy ? 0 : input.arg1))
                 return false;
+            if (isTypedCopy)
+            {
+                var header = logRecord.DataHeader;
+                header.RecordType = VectorManager.RecordType;
+                logRecord.SetDataHeader(header);
+            }
 
             if (functionsState.appendOnlyFile != null)
                 upsertInfo.UserData |= NeedAofLog; // Mark that we need to write to AOF
@@ -132,6 +139,12 @@ namespace Garnet.server
         {
             if (!InPlaceWriterForLogRecordValue(ref logRecord, ref input, in inputLogRecord, ref output.SpanByteAndMemory, ref upsertInfo, this, functionsState, input.arg1))
                 return false;
+            if (input.header.cmd == RespCommand.NONE && inputLogRecord.RecordType == VectorManager.RecordType)
+            {
+                var header = logRecord.DataHeader;
+                header.RecordType = VectorManager.RecordType;
+                logRecord.SetDataHeader(header);
+            }
 
             if (functionsState.appendOnlyFile != null)
             {
