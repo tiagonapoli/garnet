@@ -139,6 +139,25 @@ namespace Garnet.test.cluster
             AssertVectorSetRecordType(PrimaryIndex, ImportedKey);
         }
 
+        [Test]
+        public void VectorSetImportedIndexOverExistingStringSurvivesAofRecovery()
+        {
+            const string Key = "{vsdisk}aof-recovery-existing-string";
+            const string ImportedKey = "{vsdisk}imported-index-existing-string";
+
+            SetupDisklessCluster(1);
+            PopulateVectorSet(PrimaryIndex, Key, count: 4);
+            context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(PrimaryIndex), "SET", [ImportedKey, new byte[VectorManager.IndexSize]]);
+
+            ImportIndexRecord(PrimaryIndex, Key, ImportedKey);
+            AssertVectorSetRecordType(PrimaryIndex, ImportedKey);
+
+            context.nodeOptions[PrimaryIndex].Recover = true;
+            context.RestartNode(PrimaryIndex, ensureAofFlush: true);
+            ClassicAssert.AreEqual(4, VectorSetSize(PrimaryIndex, Key));
+            AssertVectorSetRecordType(PrimaryIndex, ImportedKey);
+        }
+
         private unsafe void ImportIndexRecord(int nodeIndex, string key, string importedKey)
         {
             // Exercise the typed-record copy used by streamed imports without relying on full-sync timing.
