@@ -66,6 +66,10 @@ namespace Garnet.common
         /// </summary>
         Replication_Diskless_Sync_Reset_Cts,
         /// <summary>
+        /// Abort a diskless full sync after importing a raw record.
+        /// </summary>
+        Replication_Diskless_Sync_After_Record_Import,
+        /// <summary>
         /// Fail TakeOverAsPrimary during failover by throwing before BeginRecovery is called.
         /// </summary>
         Failover_Fail_TakeOverAsPrimary,

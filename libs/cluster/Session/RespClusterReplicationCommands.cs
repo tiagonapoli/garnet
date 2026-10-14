@@ -573,6 +573,7 @@ namespace Garnet.cluster
                         storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
                         diskLogRecord.Dispose();
                         diskLogRecord = default; // prevent double-trigger in catch
+                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.Replication_Diskless_Sync_After_Record_Import);
                     }
                     else if (kind == MigrationRecordSpanType.ChunkedLogRecord)
                     {
@@ -605,6 +606,7 @@ namespace Garnet.cluster
                                 storeWrapper.storeFunctions.OnDisposeDiskRecord(ref diskLogRecord, DisposeReason.DeserializedFromDisk);
                                 diskLogRecord.Dispose();
                                 diskLogRecord = default; // prevent double-trigger in catch
+                                ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.Replication_Diskless_Sync_After_Record_Import);
                             }
                             chunkedRecordReassembler.Reset();
                         }
