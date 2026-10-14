@@ -5,6 +5,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using Tsavorite.core;
 using static Tsavorite.core.Utility;
@@ -130,6 +131,82 @@ namespace Tsavorite.test
         [Test]
         [Category(TsavoriteKVTestCategory)]
         [Category(ObjectIdMapCategory)]
+        public async Task SnapshotOverflowSerializationSurvivesSourcePageEviction([Values] bool overflowKey)
+        {
+            CreateStore(useLargeObjects: false, captureFlushFailures: false, overflowKeys: overflowKey);
+            using var session = store.NewSession<TestObjectKey, TestLargeObjectInput, TestLargeObjectOutput, Empty, TestLargeObjectFunctions>(new TestLargeObjectFunctions());
+            var value = new byte[8 << 20];
+            value.AsSpan().Fill(0x5a);
+            _ = session.BasicContext.Upsert(new TestObjectKey { key = 1 }, value.AsSpan(), Empty.Default);
+            var snapshotEndAddress = store.Log.TailAddress;
+
+            using var snapshotLogDevice = new ControlledReadFailureDevice(
+                Devices.CreateLogDevice(Path.Join(MethodTestDir, "eviction.snapshot.log"), deleteOnClose: true));
+            using var snapshotObjectLogDevice = new ControlledReadFailureDevice(
+                Devices.CreateLogDevice(Path.Join(MethodTestDir, "eviction.snapshot.obj.log"), deleteOnClose: true));
+            using var writeEntered = new ManualResetEventSlim();
+            using var releaseWrite = new ManualResetEventSlim();
+            snapshotObjectLogDevice.BeforeWrite = () =>
+            {
+                writeEntered.Set();
+                if (!releaseWrite.Wait(TimeSpan.FromSeconds(30)))
+                    throw new TimeoutException("Snapshot object-log write was not released.");
+            };
+            using var flushBuffers = store.hlogBase.CreateCircularFlushBuffers(snapshotObjectLogDevice, logger: null);
+
+            store.hlogBase.AsyncFlushPagesForSnapshot(flushBuffers, 0, store.hlogBase.GetPage(snapshotEndAddress) + 1, store.Log.BeginAddress, snapshotEndAddress,
+                long.MaxValue, snapshotLogDevice, snapshotObjectLogDevice, out var completedTask, throttleCheckpointFlushDelayMs: 0);
+            try
+            {
+                Assert.That(writeEntered.Wait(TimeSpan.FromSeconds(10)), Is.True, "Snapshot serialization did not reach object-log I/O.");
+                var padding = new byte[256];
+                for (var key = 2; key < 66; key++)
+                    _ = session.BasicContext.Upsert(new TestObjectKey { key = key }, padding.AsSpan(), Empty.Default);
+
+                store.Log.FlushAndEvict(wait: true);
+                Assert.That(store.Log.HeadAddress, Is.GreaterThanOrEqualTo(snapshotEndAddress));
+                Assert.That(store.hlogBase.ClosedUntilAddress, Is.GreaterThanOrEqualTo(MinKvLogPageSize));
+            }
+            finally
+            {
+                releaseWrite.Set();
+            }
+
+            await completedTask.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var snapshotPage = new byte[(int)snapshotEndAddress];
+            using (var snapshotFile = new FileStream(snapshotLogDevice.FileName + ".0", FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                snapshotFile.ReadExactly(snapshotPage);
+
+            ulong objectPosition;
+            unsafe
+            {
+                fixed (byte* page = snapshotPage)
+                {
+                    var record = new LogRecord(page + store.hlogBase.GetFirstValidLogicalAddressOnPage(0));
+                    objectPosition = record.GetObjectLogRecordStartPositionAndLengths(out var keyLength, out var valueLength);
+                    Assert.That(keyLength, Is.EqualTo(overflowKey ? sizeof(int) : 0));
+                    Assert.That(valueLength, Is.EqualTo((ulong)value.Length));
+                }
+            }
+
+            using var snapshotObjects = new FileStream(snapshotObjectLogDevice.FileName + ".0", FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            snapshotObjects.Position = (long)objectPosition;
+            if (overflowKey)
+            {
+                var keyBytes = new byte[sizeof(int)];
+                snapshotObjects.ReadExactly(keyBytes);
+                Assert.That(BitConverter.ToInt32(keyBytes), Is.EqualTo(1));
+            }
+
+            var snapshotValue = new byte[value.Length];
+            snapshotObjects.ReadExactly(snapshotValue);
+            Assert.That(snapshotValue.AsSpan().SequenceEqual(value), Is.True, "Snapshot overflow bytes changed after source-page eviction.");
+        }
+
+        [Test]
+        [Category(TsavoriteKVTestCategory)]
+        [Category(ObjectIdMapCategory)]
         public void HeaderReadFailureDefersPairedTruncation([Values] InjectedReadFailure failureMode)
         {
             const int pageSize = MinKvLogPageSize;
@@ -177,7 +254,7 @@ namespace Tsavorite.test
             Assert.That(objectLogDevice.RemoveSegmentCount, Is.GreaterThan(0));
         }
 
-        private void CreateStore(bool useLargeObjects, bool captureFlushFailures, long segmentSize = 1L << 30, long objectLogSegmentSize = 1L << 30)
+        private void CreateStore(bool useLargeObjects, bool captureFlushFailures, long segmentSize = 1L << 30, long objectLogSegmentSize = 1L << 30, bool overflowKeys = false)
         {
             logDevice = new(Devices.CreateLogDevice(Path.Join(MethodTestDir, "ObjectAllocatorDeviceFailureTests.log"), deleteOnClose: true));
             objectLogDevice = new(Devices.CreateLogDevice(Path.Join(MethodTestDir, "ObjectAllocatorDeviceFailureTests.obj.log"), deleteOnClose: true));
@@ -194,6 +271,7 @@ namespace Tsavorite.test
                 MutableFraction = 0.1,
                 LogMemorySize = 1L << (MinKvLogPageSizeBits + 5),
                 PageSize = MinKvLogPageSize,
+                MaxInlineKeySize = overflowKeys ? 0 : KVSettings.DefaultMaxInlineKeySize,
                 SegmentSize = segmentSize,
                 ObjectLogSegmentSize = objectLogSegmentSize,
                 loggerFactory = TestLoggerFactory
@@ -243,6 +321,7 @@ namespace Tsavorite.test
         internal int FailedReadCount => Volatile.Read(ref failedReadCount);
         internal int TruncateUntilAddressCount => Volatile.Read(ref truncateUntilAddressCount);
         internal int RemoveSegmentCount => Volatile.Read(ref removeSegmentCount);
+        internal Action BeforeWrite;
         internal ulong LastFailedReadAddress { get; private set; }
         internal uint LastFailedReadLength { get; private set; }
 
@@ -292,6 +371,7 @@ namespace Tsavorite.test
             DeviceIOCompletionCallback callback, object context)
         {
             _ = Interlocked.Increment(ref writeCount);
+            BeforeWrite?.Invoke();
             underlying.WriteAsync(sourceAddress, segmentId, destinationAddress, numBytesToWrite, callback, context);
         }
 
