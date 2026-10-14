@@ -8,16 +8,18 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using Garnet.client;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
+using StackExchange.Redis;
 
 namespace Garnet.test.cluster
 {
     /// <summary>
-    /// Measures replica AOF growth when a diskless full sync is interrupted after importing records.
-    /// These tests write many GiB to disk, so they run only when selected explicitly.
+    /// Verifies the replica AOF written while importing records during a diskless full sync: its growth and what a replica restart recovers from it.
+    /// The growth tests write many GiB to disk, so they run only when selected explicitly.
     /// </summary>
     [TestFixture]
     [NonParallelizable]
@@ -92,6 +94,118 @@ namespace Garnet.test.cluster
                 ClassicAssert.GreaterOrEqual(fileBytes, targetBytes, $"the replica's physical AOF segment files must span at least {targetGiB} GiB");
                 ClassicAssert.Less(log.BeginAddress[0], primaryAddress, "the replica AOF should not have been reinitialized at the primary offset");
             }
+        }
+
+        [TestCase("string")]
+        [TestCase("hash")]
+        [TestCase("list")]
+        [TestCase("set")]
+        [TestCase("zset")]
+        public void InterruptedDisklessFullSyncAofReplayLosesExpiration(string type)
+        {
+            context.CreateInstances(2, enableAOF: true, enableDisklessSync: true, replicaDisklessSyncFullSyncAofThreshold: "1k", timeout: 60);
+            context.MeetAndAssignSlotsAllNodes(2);
+
+            var key = $"{{obj}}{type}";
+            var database = context.clusterTestUtils.GetDatabase();
+            PopulateKey(database, key, type);
+            ClassicAssert.IsTrue(database.KeyExpire(key, TimeSpan.FromHours(1)));
+            ClassicAssert.IsNotNull(database.KeyTimeToLive(key));
+
+            var log = GetStoreWrapper(context.nodes[ReplicaIndex]).appendOnlyFile.Log;
+            var tailBeforeSync = log.TailAddress[0];
+            var primaryId = context.clusterTestUtils.GetNodeIdFromNode(PrimaryIndex, context.logger);
+
+            using (ExceptionInjectionHelper.EnabledScope(ExceptionInjectionType.Replication_Diskless_Sync_After_Record_Import))
+            {
+                context.clusterTestUtils.ClusterReplicate(ReplicaIndex, PrimaryIndex, async: true, logger: context.logger);
+
+                var stopwatch = Stopwatch.StartNew();
+                while (log.TailAddress[0] == tailBeforeSync)
+                {
+                    ClassicAssert.Less(stopwatch.Elapsed, TimeSpan.FromSeconds(30), "the replica did not import the record");
+                    Thread.Sleep(10);
+                }
+
+                log.CommitAsync().GetAwaiter().GetResult();
+                TestContext.Progress.WriteLine($"Interrupted diskless sync: replica AOF [{log.BeginAddress[0]}, {log.TailAddress[0]}) after importing {key}.");
+
+                // Stop the primary so the restarted replica can only use its own AOF.
+                context.nodes[PrimaryIndex].Dispose(false);
+                context.nodes[PrimaryIndex] = null;
+                context.nodes[ReplicaIndex].Dispose(false);
+            }
+
+            using var session = RestartReplicaWithoutPrimary();
+
+            // The failed sync left the replica as a primary without slots; let it serve the replayed keys.
+            ClassicAssert.AreEqual("OK", session.ExecuteAsync("CLUSTER", "FORGET", primaryId).GetAwaiter().GetResult());
+            ClassicAssert.AreEqual("OK", session.ExecuteAsync("CLUSTER", "ADDSLOTSRANGE", "0", "16383").GetAwaiter().GetResult());
+
+            var recoveredType = session.ExecuteAsync("TYPE", key).GetAwaiter().GetResult();
+            var recoveredTtl = session.ExecuteAsync("TTL", key).GetAwaiter().GetResult();
+            TestContext.Progress.WriteLine($"Replica AOF replay recovered {key}: TYPE={recoveredType} TTL={recoveredTtl}");
+
+            ClassicAssert.AreEqual(type, recoveredType, "AOF replay should recover the imported value");
+            ClassicAssert.AreEqual("-1", recoveredTtl, "the imported record's AOF entry has no expiration, so replay recovers the key without its TTL");
+        }
+
+        [Test]
+        public void CompletedDisklessFullSyncAofDoesNotRecoverImportedRecords()
+        {
+            const int keyCount = 100;
+
+            context.CreateInstances(2, enableAOF: true, enableDisklessSync: true, replicaDisklessSyncFullSyncAofThreshold: "1k", timeout: 60);
+            context.MeetAndAssignSlotsAllNodes(2);
+
+            var database = context.clusterTestUtils.GetDatabase();
+            for (var i = 0; i < keyCount; i++)
+                PopulateKey(database, $"{{obj}}{i}", (i % 5) switch { 0 => "string", 1 => "hash", 2 => "list", 3 => "set", _ => "zset" });
+
+            var log = GetStoreWrapper(context.nodes[ReplicaIndex]).appendOnlyFile.Log;
+            var primaryLog = GetStoreWrapper(context.nodes[PrimaryIndex]).appendOnlyFile.Log;
+
+            context.clusterTestUtils.ClusterReplicate(ReplicaIndex, PrimaryIndex, async: false, logger: context.logger);
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, ReplicaIndex, context.logger);
+            ClassicAssert.AreEqual(keyCount, (long)context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(ReplicaIndex), "DBSIZE", []));
+
+            log.CommitAsync().GetAwaiter().GetResult();
+            TestContext.Progress.WriteLine($"Completed diskless sync: replica AOF [{log.BeginAddress[0]}, {log.TailAddress[0]}), primary AOF [{primaryLog.BeginAddress[0]}, {primaryLog.TailAddress[0]}).");
+
+            context.nodes[PrimaryIndex].Dispose(false);
+            context.nodes[PrimaryIndex] = null;
+            context.nodes[ReplicaIndex].Dispose(false);
+
+            using var session = RestartReplicaWithoutPrimary();
+            var recoveredKeys = session.ExecuteAsync("DBSIZE").GetAwaiter().GetResult();
+            TestContext.Progress.WriteLine($"Replica restart without primary recovered {recoveredKeys} of {keyCount} keys.");
+
+            ClassicAssert.AreEqual("0", recoveredKeys, "the replica takes no checkpoint and keeps no imported records in its AOF, so it recovers nothing locally");
+        }
+
+        private GarnetClientSession RestartReplicaWithoutPrimary()
+        {
+            context.nodes[ReplicaIndex] = context.CreateInstance(context.clusterTestUtils.GetEndPoint(ReplicaIndex), cleanClusterConfig: false, tryRecover: true, enableAOF: true, timeout: 60);
+            context.nodes[ReplicaIndex].Start();
+
+            var session = context.clusterTestUtils.CreateGarnetClientSession(ReplicaIndex);
+            session.Connect();
+            ClassicAssert.AreEqual("OK", session.ExecuteAsync("READONLY").GetAwaiter().GetResult());
+            return session;
+        }
+
+        private static void PopulateKey(IDatabase database, string key, string type)
+        {
+            var added = type switch
+            {
+                "string" => database.StringSet(key, "value"),
+                "hash" => database.HashSet(key, "field", "value"),
+                "list" => database.ListRightPush(key, "value") == 1,
+                "set" => database.SetAdd(key, "value"),
+                "zset" => database.SortedSetAdd(key, "value", 1),
+                _ => throw new ArgumentOutOfRangeException(nameof(type)),
+            };
+            ClassicAssert.IsTrue(added);
         }
 
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "storeWrapper")]
