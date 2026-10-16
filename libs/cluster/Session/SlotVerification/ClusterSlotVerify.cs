@@ -48,7 +48,7 @@ namespace Garnet.cluster
                     return state switch
                     {
                         SlotState.STABLE => new(SlotVerifiedState.OK, _slot), // If slot in stable state then serve request
-                        SlotState.MIGRATING => CanOperateOnKey(ref keySlice, _slot, readOnly: true) ? new(SlotVerifiedState.OK, _slot) : new(SlotVerifiedState.ASK, _slot), // Can serve request only if key exists
+                        SlotState.MIGRATING => new(CanOperateOnKey(config, ref keySlice, _slot, readOnly: true), _slot),
                         _ => new(SlotVerifiedState.CLUSTERDOWN, _slot)
                     };
                 }
@@ -98,7 +98,7 @@ namespace Garnet.cluster
                     return state switch
                     {
                         SlotState.STABLE => new(SlotVerifiedState.OK, _slot), // If slot in stable state then serve request
-                        SlotState.MIGRATING => CanOperateOnKey(ref keySlice, _slot, readOnly: false) ? new(SlotVerifiedState.OK, _slot) : new(SlotVerifiedState.ASK, _slot), // Can serve request only if key exists
+                        SlotState.MIGRATING => new(CanOperateOnKey(config, ref keySlice, _slot, readOnly: false), _slot),
                         _ => new(SlotVerifiedState.CLUSTERDOWN, _slot)
                     };
                 }
@@ -113,8 +113,26 @@ namespace Garnet.cluster
                 }
             }
 
-            bool CanOperateOnKey(ref PinnedSpanByte key, int slot, bool readOnly)
+            SlotVerifiedState CanOperateOnKey(ClusterConfig config, ref PinnedSpanByte key, int slot, bool readOnly)
             {
+#if DEBUG
+                if (ExceptionInjectionHelper.IsEnabled(ExceptionInjectionType.Cluster_Slot_Verification_Epoch_Released))
+                {
+                    ReleaseCurrentEpoch();
+                    try
+                    {
+                        ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Cluster_Slot_Verification_Epoch_Released);
+                    }
+                    finally
+                    {
+                        AcquireCurrentEpoch();
+                    }
+
+                    if (!ReferenceEquals(config, clusterProvider.clusterManager.CurrentConfig))
+                        return SlotVerifiedState.TRYAGAIN;
+                }
+#endif
+
                 // For both read and read/write ops we need to ensure that key will not be removed
                 // while we try to operate on it so we will delay the corresponding operation
                 // as long as the key is being actively migrated
@@ -123,8 +141,12 @@ namespace Garnet.cluster
                     ReleaseCurrentEpoch();
                     Thread.Yield();
                     AcquireCurrentEpoch();
+
+                    if (!ReferenceEquals(config, clusterProvider.clusterManager.CurrentConfig))
+                        return SlotVerifiedState.TRYAGAIN;
                 }
-                return Exists(key);
+
+                return Exists(key) ? SlotVerifiedState.OK : SlotVerifiedState.ASK;
             }
 
 
@@ -148,6 +170,7 @@ namespace Garnet.cluster
 
         ClusterSlotVerificationResult MultiKeySlotVerify(ClusterConfig config, ref SessionParseState parseState, ref ClusterSlotVerificationInput csvi, bool isTxn, bool waitForStableSlot)
         {
+            var initialConfig = config;
             // Find the first valid key and initialize slot/result
             var specIndex = 0;
             // If slot verification is called from transaction manager, parse state contains consecutive keys so we can skip key search
@@ -162,10 +185,14 @@ namespace Garnet.cluster
             ref var firstKey = ref parseState.GetArgSliceByRef(searchArgs.firstIdx);
             var firstSlot = HashSlotUtils.HashSlot(firstKey);
             var firstSlotVerifyResult = SingleKeySlotVerify(ref config, ref firstKey, csvi.readOnly, csvi.sessionAsking > 0, waitForStableSlot, firstSlot);
+            if (!ReferenceEquals(config, initialConfig))
+                return new(SlotVerifiedState.TRYAGAIN, firstSlot);
 
             // Verify remaining keys from the first spec (starting from second key)
             var verifyResult = VerifyKeysInRange(ref config, ref parseState, ref csvi, searchArgs.firstIdx + searchArgs.step,
                 searchArgs.lastIdx, searchArgs.step, firstSlot, waitForStableSlot, ref firstSlotVerifyResult);
+            if (!ReferenceEquals(config, initialConfig))
+                return new(SlotVerifiedState.TRYAGAIN, firstSlot);
             if (verifyResult.state != SlotVerifiedState.OK)
                 return verifyResult;
 
@@ -177,6 +204,8 @@ namespace Garnet.cluster
 
                 verifyResult = VerifyKeysInRange(ref config, ref parseState, ref csvi, searchArgs.firstIdx,
                     searchArgs.lastIdx, searchArgs.step, firstSlot, waitForStableSlot, ref firstSlotVerifyResult);
+                if (!ReferenceEquals(config, initialConfig))
+                    return new(SlotVerifiedState.TRYAGAIN, firstSlot);
                 if (verifyResult.state != SlotVerifiedState.OK)
                     return verifyResult;
             }

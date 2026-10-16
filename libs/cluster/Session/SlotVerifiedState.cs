@@ -29,7 +29,7 @@ namespace Garnet.cluster
         /// </summary>
         CROSSSLOT,
         /// <summary>
-        /// Used for multi-key operations referring to a collection of keys some of which have migrated
+        /// Retry when multi-key slot states conflict or a configuration changes during epoch release.
         /// </summary>
         TRYAGAIN
     }

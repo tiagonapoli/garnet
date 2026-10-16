@@ -32,14 +32,17 @@ namespace Garnet.cluster
         public bool NetworkIterativeSlotVerify(PinnedSpanByte keySlice, bool readOnly, byte SessionAsking, bool waitForStableSlot)
         {
             ClusterSlotVerificationResult verifyResult;
+            var initialConfig = configSnapshot;
 
             // If it is the first verification initialize the result cache
             if (!initialized)
             {
                 verifyResult = SingleKeySlotVerify(ref configSnapshot, ref keySlice, readOnly, SessionAsking > 0, waitForStableSlot);
-                cachedVerificationResult = verifyResult;
+                cachedVerificationResult = ReferenceEquals(configSnapshot, initialConfig)
+                    ? verifyResult
+                    : new(SlotVerifiedState.TRYAGAIN, verifyResult.slot);
                 initialized = true;
-                return verifyResult.state == SlotVerifiedState.OK;
+                return cachedVerificationResult.state == SlotVerifiedState.OK;
             }
 
             // If slot verification failed return early in order to capture the first error
@@ -47,6 +50,11 @@ namespace Garnet.cluster
                 return false;
 
             verifyResult = SingleKeySlotVerify(ref configSnapshot, ref keySlice, readOnly, SessionAsking > 0, waitForStableSlot);
+            if (!ReferenceEquals(configSnapshot, initialConfig))
+            {
+                cachedVerificationResult = new(SlotVerifiedState.TRYAGAIN, verifyResult.slot);
+                return false;
+            }
 
             // Check if slot changes between keys
             if (verifyResult.slot != cachedVerificationResult.slot)
