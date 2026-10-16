@@ -55,6 +55,7 @@ namespace Garnet.server
             keys = Keys;
 
             Type matchType = null;
+            byte matchRecordType = 0;
             if (!typeObject.IsEmpty)
             {
                 if (typeObject.SequenceEqual(CmdStrings.ZSET) || typeObject.SequenceEqual(CmdStrings.zset))
@@ -77,7 +78,12 @@ namespace Garnet.server
                 {
                     matchType = typeof(string);
                 }
-                else if (!typeObject.SequenceEqual(CmdStrings.STRING) && !typeObject.SequenceEqual(CmdStrings.stringt))
+                else if (typeObject.SequenceEqual(CmdStrings.vectorsett))
+                {
+                    matchType = typeof(string);
+                    matchRecordType = VectorManager.RecordType;
+                }
+                else
                 {
                     // Unexpected typeObject type
                     storeCursor = lastScanCursor = 0;
@@ -88,7 +94,7 @@ namespace Garnet.server
             var patternPtr = patternB.ToPointer();
 
             unifiedStoreDbScanFuncs ??= IsConsistentReadSession ? new ConsistentUnifiedStoreGetDBKeys(readSessionState) : new UnifiedStoreGetDBKeys();
-            unifiedStoreDbScanFuncs.Initialize(Keys, allKeys ? null : patternPtr, patternB.Length, matchType);
+            unifiedStoreDbScanFuncs.Initialize(Keys, allKeys ? null : patternPtr, patternB.Length, matchType, matchRecordType);
 
             storeCursor = cursor;
             long remainingCount = count;
@@ -204,13 +210,15 @@ namespace Garnet.server
                 internal byte* patternB;
                 internal int patternLength;
                 internal Type matchType;
+                internal byte matchRecordType;
 
-                internal void Initialize(List<byte[]> keys, byte* patternB, int length, Type matchType = null)
+                internal void Initialize(List<byte[]> keys, byte* patternB, int length, Type matchType = null, byte matchRecordType = 0)
                 {
                     this.keys = keys;
                     this.patternB = patternB;
                     this.patternLength = length;
                     this.matchType = matchType;
+                    this.matchRecordType = matchRecordType;
                 }
             }
 
@@ -283,8 +291,8 @@ namespace Garnet.server
 
                 internal UnifiedStoreGetDBKeys() => info = new();
 
-                internal void Initialize(List<byte[]> keys, byte* patternB, int length, Type matchType = null)
-                    => info.Initialize(keys, patternB, length, matchType);
+                internal void Initialize(List<byte[]> keys, byte* patternB, int length, Type matchType = null, byte matchRecordType = 0)
+                    => info.Initialize(keys, patternB, length, matchType, matchRecordType);
 
                 public virtual bool Reader<TSourceLogRecord>(in TSourceLogRecord logRecord, RecordMetadata recordMetadata, long numberOfRecords, out CursorRecordResult cursorRecordResult)
                     where TSourceLogRecord : ISourceLogRecord
@@ -313,7 +321,7 @@ namespace Garnet.server
 
                     if (info.matchType != null &&
                         ((logRecord.DataHeader.ValueIsObject && (info.matchType == typeof(string) || info.matchType != logRecord.ValueObject.GetType())) ||
-                         (!logRecord.DataHeader.ValueIsObject && info.matchType != typeof(string))))
+                         (!logRecord.DataHeader.ValueIsObject && (info.matchType != typeof(string) || logRecord.RecordType != info.matchRecordType))))
                     {
                         cursorRecordResult = CursorRecordResult.Skip;
                         return true;
