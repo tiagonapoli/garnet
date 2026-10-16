@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using Garnet.common;
 using Garnet.server;
 using Tsavorite.core;
@@ -17,7 +18,14 @@ namespace Garnet.cluster
         public readonly ArgSliceVector argSliceVector;
 
         public List<(PinnedSpanByte, bool)> Keys { private set; get; }
-        public SketchStatus Status { private set; get; }
+
+        int _status;
+
+        /// <summary>
+        /// Migration status gating access to the keys in this sketch. Read from session threads while the
+        /// migrating thread advances it, so accesses are volatile (acquire memory barrier).
+        /// </summary>
+        public SketchStatus Status => (SketchStatus)Volatile.Read(ref _status);
 
         public Sketch(int keyCount = 1 << 20)
         {
@@ -25,7 +33,7 @@ namespace Garnet.cluster
                 throw new GarnetException($"{nameof(Sketch)} size should be power of 2!");
             size = keyCount;
             bitmap = GC.AllocateArray<byte>(keyCount >> 3, pinned: true);
-            Status = SketchStatus.INITIALIZING;
+            SetStatus(SketchStatus.INITIALIZING);
             Keys = [];
             argSliceVector = new();
         }
@@ -100,14 +108,15 @@ namespace Garnet.cluster
             argSliceVector.Clear();
             for (var i = 0; i < (size >> 3); i++)
                 bitmap[i] = 0;
-            Status = SketchStatus.INITIALIZING;
+            SetStatus(SketchStatus.INITIALIZING);
         }
 
         /// <summary>
-        /// Set KeyMigrationStatus
+        /// Set KeyMigrationStatus. Release memory barrier, so the sketch contents this status gates are
+        /// published before the status that admits readers to them.
         /// </summary>
         /// <param name="status"></param>
-        public void SetStatus(SketchStatus status) => Status = status;
+        public void SetStatus(SketchStatus status) => Volatile.Write(ref _status, (int)status);
         #endregion
     }
 }
