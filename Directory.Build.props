@@ -57,4 +57,37 @@
     <PackageTags>Garnet key-value store cache dictionary hashtable concurrent persistent remote cluster Redis RESP</PackageTags>
   </PropertyGroup>
 
+  <!-- ============================ Local dev fast path ============================
+       Faster inner-loop builds, opt-in via -p:FastDev=true or the "Debug-Fast" /
+       "Release-Fast" solution configurations (declared in Garnet.slnx). Builds a
+       single target framework and skips analyzers, code-style enforcement, and
+       XML docs. Must stay at the end of the file to override the defaults above.
+
+       TF_BUILD (Azure Pipelines) and GITHUB_ACTIONS mark a CI build, which always
+       gets the full build. That gate goes on the derived FastDevEnabled because
+       -p:FastDev=true is an MSBuild global property a PropertyGroup can't override. -->
+  <PropertyGroup>
+    <FastDev Condition="'$(FastDev)' == '' and ('$(Configuration)' == 'Debug-Fast' or '$(Configuration)' == 'Release-Fast')">true</FastDev>
+    <FastDevEnabled Condition="'$(FastDev)' == 'true' and '$(TF_BUILD)' != 'true' and '$(GITHUB_ACTIONS)' != 'true'">true</FastDevEnabled>
+  </PropertyGroup>
+
+  <!-- Custom configuration names don't get the SDK's automatic Debug/Release
+       codegen, so map them explicitly to their base configuration. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug-Fast'">
+    <DefineConstants>$(DefineConstants);DEBUG</DefineConstants>
+    <Optimize>false</Optimize>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release-Fast'">
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(FastDevEnabled)' == 'true'">
+    <TargetFrameworks>net10.0</TargetFrameworks>
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
 </Project>
