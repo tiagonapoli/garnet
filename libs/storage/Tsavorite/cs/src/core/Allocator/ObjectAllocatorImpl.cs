@@ -900,6 +900,8 @@ namespace Tsavorite.core
                                         $"ObjectLogPosition mismatch on first record for ReadOnly flush: rec {recordStartPosition.CurrentAddress}, tail {objectLogTail.CurrentAddress}");
 
                                     OverflowByteArray keyOverflow = default, valueOverflow = default;
+                                    var keyOverflowLength = 0;
+                                    var valueOverflowLength = 0;
                                     IHeapObject valueObject = default;
                                     try
                                     {
@@ -929,10 +931,16 @@ namespace Tsavorite.core
                                         }
 
                                         if (logRecord.DataHeader.KeyIsOverflow)
+                                        {
                                             keyOverflow = logRecord.KeyOverflow;
+                                            keyOverflowLength = keyOverflow.Length;
+                                        }
 
                                         if (logRecord.DataHeader.ValueIsOverflow)
+                                        {
                                             valueOverflow = logRecord.ValueOverflow;
+                                            valueOverflowLength = valueOverflow.Length;
+                                        }
                                         else if (logRecord.DataHeader.ValueIsObject)
                                             valueObject = logRecord.ValueObject;
                                     }
@@ -948,7 +956,9 @@ namespace Tsavorite.core
                                     logRecord.SetReuseObjectIdForSize();
 
                                     var valueObjectLength = logWriter.WriteRecordObjects(in keyOverflow, in valueOverflow, in valueObject);
-                                    logRecord.SetObjectLogRecordStartPositionAndLength(recordStartPosition, valueObjectLength);
+                                    // Snapshot I/O can outlive the source page's object map.
+                                    var valueLength = logRecord.DataHeader.ValueIsOverflow ? (ulong)valueOverflowLength : valueObjectLength;
+                                    logRecord.SetObjectLogRecordStartPositionAndLength(recordStartPosition, keyOverflowLength, valueLength);
                                 }
                                 else
                                 {

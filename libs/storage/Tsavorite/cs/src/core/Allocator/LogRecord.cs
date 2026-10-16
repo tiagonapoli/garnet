@@ -1503,8 +1503,8 @@ namespace Tsavorite.core
         /// Sets the lengths of Overflow Keys and Values and Object values into the disk-image copy of the log record before the main-log page is flushed.
         /// </summary>
         /// <param name="objectLogFilePosition">The starting position of the serialized key and value data in the object log.</param>
-        /// <param name="valueObjectLength">The serialized length of the value object if it is an object and not inline or overflow. Overflow
-        ///     fields have their length known from the <see cref="OverflowByteArray.Length"/> property.</param>
+        /// <param name="keyOverflowLength">The overflow key length captured while its object-map entry was protected.</param>
+        /// <param name="valueLength">The overflow value length captured under protection, or the serialized object length.</param>
         /// <remarks>
         /// <para>R11 encoding: for overflow keys, low 12 bits of actual length go into the RDH KeyLength field and the next 32 bits
         /// overwrite the int* at keyAddress (which previously held the objectId) — total 44 bits → 16 TB max key. For overflow values
@@ -1514,7 +1514,7 @@ namespace Tsavorite.core
         /// <para>IMPORTANT: Overwrites the int* slots that held the in-memory objectIds, so this is only safe to call in the disk-image
         /// copy of the log record (srcBuffer), not in the live main-log record.</para>
         /// </remarks>
-        internal readonly void SetObjectLogRecordStartPositionAndLength(in ObjectLogFilePositionInfo objectLogFilePosition, ulong valueObjectLength)
+        internal readonly void SetObjectLogRecordStartPositionAndLength(in ObjectLogFilePositionInfo objectLogFilePosition, int keyOverflowLength, ulong valueLength)
         {
             if (DataHeader.RecordIsInline)   // ValueIsInline is true; if the record is fully inline, we should not be called here
             {
@@ -1524,34 +1524,26 @@ namespace Tsavorite.core
 
             var dataHeader = DataHeader;
 
-            var (valueLength, valueAddress) = dataHeader.GetValueFieldInfo(physicalAddress);
+            var (inlineValueLength, valueAddress) = dataHeader.GetValueFieldInfo(physicalAddress);
 
             // Write ObjectLogPosition with the ReuseObjectIdForSize flag set so the reader knows the on-disk encoding.
-            var objectLogPositionPtr = (ulong*)GetObjectLogPositionAddress(valueAddress + valueLength);
+            var objectLogPositionPtr = (ulong*)GetObjectLogPositionAddress(valueAddress + inlineValueLength);
             *objectLogPositionPtr = objectLogFilePosition.word | ObjectLogFilePositionInfo.kReuseObjectIdForSizeMask;
 
             // Overflow key: low 12 bits → RDH KeyLength; next 32 bits → int* slot at keyAddress (overwriting the in-memory objectId).
             if (dataHeader.KeyIsOverflow)
             {
                 var (_, keyAddress) = dataHeader.GetKeyFieldInfo(physicalAddress);
-                var overflow = objectIdMap.GetOverflowByteArray(*(int*)keyAddress);
-                var actualKeyLength = (ulong)overflow.Length;
+                var actualKeyLength = (ulong)keyOverflowLength;
                 dataHeader.KeyLength = (int)(actualKeyLength & RecordDataHeader.kKeyLengthLowBitsMask);
                 *(int*)keyAddress = (int)(actualKeyLength >> RecordDataHeader.kKeyLengthBits);
             }
 
             // Overflow value or Object value: low 22 bits → RDH ValueLength; next 32 bits → int* slot at valueAddress.
-            if (dataHeader.ValueIsOverflow)
+            if (dataHeader.ValueIsOverflow || dataHeader.ValueIsObject)
             {
-                var overflow = objectIdMap.GetOverflowByteArray(*(int*)valueAddress);
-                var actualValueLength = (ulong)overflow.Length;
-                dataHeader.ValueLength = (int)(actualValueLength & RecordDataHeader.kValueLengthLowBitsMask);
-                *(int*)valueAddress = (int)(actualValueLength >> RecordDataHeader.kValueLengthBits);
-            }
-            else if (dataHeader.ValueIsObject)
-            {
-                dataHeader.ValueLength = (int)(valueObjectLength & RecordDataHeader.kValueLengthLowBitsMask);
-                *(uint*)valueAddress = (uint)(valueObjectLength >> RecordDataHeader.kValueLengthBits);
+                dataHeader.ValueLength = (int)(valueLength & RecordDataHeader.kValueLengthLowBitsMask);
+                *(uint*)valueAddress = (uint)(valueLength >> RecordDataHeader.kValueLengthBits);
             }
 
             // Atomic publish via SetDataHeader.
