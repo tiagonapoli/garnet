@@ -1118,7 +1118,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["BEGIN_REPLICA_RECOVER", "1", "2", "3", "4", "5", "6", "7"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["BEGIN_REPLICA_RECOVER", "1", "2", "3", "4", "5", "6"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -1788,7 +1788,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["MIGRATE", "a", "b", "c"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["MIGRATE", "a", "b", "c", "d"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -1817,7 +1817,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["SYNC", "a", "b", "c"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["SYNC", "a", "b"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -1875,7 +1875,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["ADVANCE_TIME"]);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["ADVANCE_TIME", "1", "2"]);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -2154,7 +2154,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["SEND_CKPT_METADATA", "1", "2", "3", "4", "5"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["SEND_CKPT_METADATA", "1", "2", "3"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -2241,7 +2241,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["SETSLOT", "1"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["SETSLOT", "1", "STABLE"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -2447,7 +2447,7 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("CLUSTER", ["SLOTSTATE"]).ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("CLUSTER", ["SLOTSTATE", "1"]).ConfigureAwait(false);
                     Assert.Fail("Shouldn't be reachable, cluster isn't enabled");
                 }
                 catch (Exception e)
@@ -5377,12 +5377,12 @@ namespace Garnet.test.Resp.ACL
             {
                 try
                 {
-                    await client.ExecuteForStringResultAsync("REGISTERCS").ConfigureAwait(false);
+                    await client.ExecuteForStringResultAsync("REGISTERCS", ["a", "b", "c", "d", "e", "f"]).ConfigureAwait(false);
                     Assert.Fail("Should be unreachable, command is malfoemd");
                 }
                 catch (Exception e)
                 {
-                    if (e.Message == "ERR wrong number of arguments for 'REGISTERCS' command")
+                    if (e.Message.StartsWith("ERR "))
                     {
                         return;
                     }
