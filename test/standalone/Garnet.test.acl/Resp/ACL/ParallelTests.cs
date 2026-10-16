@@ -4,10 +4,10 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
-using Garnet.client;
 using Garnet.server.ACL;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
+using Tsavorite.core;
 
 namespace Garnet.test.Resp.ACL
 {
