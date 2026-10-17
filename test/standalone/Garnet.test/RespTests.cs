@@ -1663,6 +1663,22 @@ namespace Garnet.test
         }
 
         [Test]
+        public void SingleDeleteOfReadOnlyRecordReturnsOne()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const string key = "readOnlyDelKey";
+            db.StringSet(key, "value");
+            var store = server.Provider.StoreWrapper.store;
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+
+            ClassicAssert.AreEqual(1, (int)db.Execute("DEL", key), "DEL must count a key whose record is in the read-only region");
+            ClassicAssert.IsFalse(db.KeyExists(key));
+            ClassicAssert.AreEqual(0, (int)db.Execute("DEL", key));
+        }
+
+        [Test]
         public void GarnetObjectStoreDisabledError()
         {
             TearDown();
