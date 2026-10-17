@@ -32,6 +32,9 @@ namespace Garnet.server
         /// </summary>
         bool IsReplicating { get; }
 
+        /// <summary>Whether this connection receives internal replication, snapshot, or migration payloads.</summary>
+        bool IsBulkTransferSession => false;
+
         /// <summary>
         /// If set, commands can use this to enumerate details about the server or other sessions.
         ///

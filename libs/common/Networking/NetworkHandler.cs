@@ -78,6 +78,9 @@ namespace Garnet.networking
         /// </summary>
         protected readonly LimitedFixedBufferPool networkPool;
 
+        /// <summary>Whether this connection retains receive capacity across recurring bulk transfers.</summary>
+        protected virtual bool RetainReceiveBuffers => false;
+
         /// <summary>
         /// Pool entry
         /// </summary>
@@ -426,11 +429,12 @@ namespace Garnet.networking
         /// go through here.
         /// </summary>
         /// <remarks>
-        /// Three regimes, checked cheapest first. A buffer larger than
+        /// Bulk-transfer connections keep partial messages and apply demand-based hysteresis at completed
+        /// batch boundaries. Other connections use three regimes, checked cheapest first. A buffer larger than
         /// <see cref="NetworkBufferSettings.maxReceiveBufferSize"/> is released immediately because the pool
         /// cannot recycle it and it would otherwise be pinned indefinitely by an idle connection. While the
-        /// process-wide budget is binding, shrinking is immediate so the aggregate converges rather than
-        /// waiting out a per-connection countdown. Otherwise the buffer is kept until
+        /// process-wide budget is binding, a shorter countdown makes the aggregate converge promptly.
+        /// Otherwise the buffer is kept until
         /// <see cref="ShrinkHysteresis"/> consecutive receives have fit comfortably in the smaller size.
         /// <para>
         /// The countdown bookkeeping and the budget's shrink accounting both happen here, leaving a caller
@@ -453,7 +457,12 @@ namespace Garnet.networking
             if (current <= baseSize)
                 return false;
 
-            if (current > networkBufferSettings.maxReceiveBufferSize)
+            var retain = RetainReceiveBuffers;
+            // A partial bulk message's demand is not known until the consumer can finish it.
+            if (retain && buffered > 0)
+                return false;
+
+            if (!retain && current > networkBufferSettings.maxReceiveBufferSize)
             {
                 // Above the pool's largest size class, so this buffer cannot be recycled on return. Release it
                 // without waiting out the hysteresis, sized to what is still buffered rather than to the
