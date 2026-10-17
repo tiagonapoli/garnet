@@ -1,8 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
@@ -120,6 +122,47 @@ namespace Garnet.test.cluster
 
             context.clusterTestUtils.ReadOnly(ReplicaIndex);
             AssertFullyReplicated(PrimaryIndex, ReplicaIndex, VectorSetKey);
+        }
+
+        /// <summary>
+        /// A key replaced by a Vector Set while a diskless full sync streams its snapshot is sent twice: as the
+        /// read-only string in scan phase 1 and as the Vector Set in phase 2. The replica must end with the
+        /// Vector Set, even though it copies the index record over the same-sized string in place.
+        /// </summary>
+        [Test]
+        public void StringReplacedByVectorSetDuringDisklessFullSyncReplicatesAsVectorSet()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const string Key = "{vsdisk}type-change";
+            const ExceptionInjectionType Pause = ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Record;
+
+            SetupDisklessCluster(2);
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+
+            // The only record on the primary, sized like a Vector Set index so the replica's copy of the index lands on it in place.
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primary, "SET", [Key, new byte[VectorManager.IndexSize]], logger: context.logger));
+            var store = GetStoreWrapper(context.nodes[PrimaryIndex]).store;
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+
+            using (ExceptionInjectionHelper.EnabledScope(Pause))
+            {
+                var attach = Task.Run(() => context.clusterTestUtils.AttachReplicaToPrimary(ReplicaIndex, PrimaryIndex, logger: context.logger));
+                ExceptionInjectionHelper.WaitOnClearAsync(Pause).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+
+                // Phase 1 has streamed the read-only string; replace it before phase 2 scans the mutable region.
+                _ = context.clusterTestUtils.Execute(primary, "DEL", [Key], logger: context.logger);
+                PopulateVectorSet(PrimaryIndex, Key, count: 4);
+                ClassicAssert.AreEqual("vectorset", (string)context.clusterTestUtils.Execute(primary, "TYPE", [Key], logger: context.logger));
+
+                ExceptionInjectionHelper.EnableException(Pause);
+                attach.WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+            }
+
+            context.clusterTestUtils.ReadOnly(ReplicaIndex);
+            var replicaType = (string)context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(ReplicaIndex), "TYPE", [Key], logger: context.logger);
+            ClassicAssert.AreEqual("vectorset", replicaType, $"node {ReplicaIndex} applied the streamed Vector Set over the earlier streamed string but kept the string record type");
+            AssertFullyReplicated(PrimaryIndex, ReplicaIndex, Key);
         }
 
         /// <summary>
