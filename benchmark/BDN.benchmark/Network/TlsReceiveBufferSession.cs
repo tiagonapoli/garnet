@@ -20,6 +20,7 @@ namespace BDN.benchmark.Network
         private readonly SemaphoreSlim completed = new(0);
         private readonly CancellationTokenSource timeout = new(TimeSpan.FromMinutes(5));
         private readonly FrameConsumer consumer = new();
+        private readonly bool bulkTransfer;
         private readonly ILoggerFactory loggerFactory = LoggerFactory.Create(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
         private Socket clientSocket;
         private SslStream clientStream;
@@ -27,8 +28,9 @@ namespace BDN.benchmark.Network
         private Task receivePump;
         private X509Certificate2 certificate;
 
-        public TlsReceiveBufferSession(int messageSizeMiB, int largestReceiveClassMiB)
+        public TlsReceiveBufferSession(int messageSizeMiB, int largestReceiveClassMiB, bool bulkTransfer)
         {
+            this.bulkTransfer = bulkTransfer;
             payload = new byte[checked(messageSizeMiB * 1024 * 1024 - 1024)];
             BinaryPrimitives.WriteInt32LittleEndian(payload, payload.Length);
             payload.AsSpan(sizeof(int)).Fill(0x5A);
@@ -56,7 +58,7 @@ namespace BDN.benchmark.Network
             clientSocket = new Socket(SocketType.Stream, ProtocolType.Tcp);
             await clientSocket.ConnectAsync(listener.LocalEndPoint, timeout.Token);
             var accepted = await accept;
-            handler = new ReceiveHandler(accepted, Settings, pool, consumer, loggerFactory.CreateLogger<ReceiveHandler>());
+            handler = new ReceiveHandler(accepted, Settings, pool, consumer, bulkTransfer, loggerFactory.CreateLogger<ReceiveHandler>());
             receivePump = PumpAsync();
             var serverAuth = handler.StartAsync(new SslServerAuthenticationOptions { ServerCertificate = certificate }, token: timeout.Token);
             clientStream = new SslStream(new NetworkStream(clientSocket, ownsSocket: false), leaveInnerStreamOpen: false,
@@ -118,17 +120,20 @@ namespace BDN.benchmark.Network
         private sealed class ReceiveHandler : NetworkHandler<FrameHook, GarnetTcpNetworkSender>
         {
             private readonly Socket socket;
+            private readonly bool bulkTransfer;
             private int closeRequested;
 
-            public unsafe ReceiveHandler(Socket socket, NetworkBufferSettings settings, LimitedFixedBufferPool pool, FrameConsumer consumer, ILogger logger) : base(new FrameHook(consumer), new GarnetTcpNetworkSender(socket, settings, pool), settings, pool, useTLS: true, messageConsumer: consumer, logger: logger)
+            public unsafe ReceiveHandler(Socket socket, NetworkBufferSettings settings, LimitedFixedBufferPool pool, FrameConsumer consumer, bool bulkTransfer, ILogger logger) : base(new FrameHook(consumer), new GarnetTcpNetworkSender(socket, settings, pool), settings, pool, useTLS: true, messageConsumer: consumer, logger: logger)
             {
                 this.socket = socket;
+                this.bulkTransfer = bulkTransfer;
                 networkReceiveBufferEntry = pool.Get(BaseReceiveBufferSize, PoolEntryBufferType.NetworkReceiveBuffer);
                 networkReceiveBuffer = networkReceiveBufferEntry.entry;
                 networkReceiveBufferPtr = networkReceiveBufferEntry.entryPtr;
             }
 
             public int ReceiveCapacity => transportReceiveBuffer.Length;
+            protected override bool RetainReceiveBuffers => bulkTransfer;
             public override string RemoteEndpointName => socket.RemoteEndPoint.ToString();
             public override string LocalEndpointName => socket.LocalEndPoint.ToString();
             public override bool IsLocalConnection() => true;

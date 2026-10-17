@@ -49,6 +49,9 @@ namespace Garnet.cluster
         public bool IsReplicating { get; private set; }
 
         /// <inheritdoc/>
+        public bool IsBulkTransferSession { get; private set; }
+
+        /// <inheritdoc/>
         public IGarnetServer Server { get; set; }
 
         private StringBasicContext stringBasicContext;

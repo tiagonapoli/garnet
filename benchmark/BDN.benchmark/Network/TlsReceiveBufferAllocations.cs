@@ -26,11 +26,15 @@ namespace BDN.benchmark.Network
         [Params(1, 64)]
         public int LargestReceiveClassMiB { get; set; }
 
+        /// <summary>Opt-in policy used by internal bulk-transfer connections, versus the unchanged data-plane policy.</summary>
+        [Params(false, true)]
+        public bool BulkTransfer { get; set; }
+
         /// <summary>Creates the payload and TLS connection and warms the buffer pools outside measurement.</summary>
         [GlobalSetup]
         public async Task Setup()
         {
-            session = new TlsReceiveBufferSession(MessageSizeMiB, LargestReceiveClassMiB);
+            session = new TlsReceiveBufferSession(MessageSizeMiB, LargestReceiveClassMiB, BulkTransfer);
             await session.StartAsync();
             await ReceiveMessages();
         }
@@ -54,28 +58,32 @@ namespace BDN.benchmark.Network
             {
                 foreach (var largestReceiveClassMiB in new[] { 1, 64 })
                 {
-                    await using var connection = new TlsReceiveBufferSession(messageSizeMiB, largestReceiveClassMiB);
-                    await connection.StartAsync();
-                    for (var i = 0; i < MessagesPerBatch; i++)
-                        await connection.SendAsync();
-
-                    var beforeStats = connection.PoolStats;
-                    var before = GC.GetTotalAllocatedBytes(precise: true);
-                    for (var i = 0; i < MessagesPerBatch; i++)
-                        await connection.SendAsync();
-
-                    var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-                    Console.WriteLine(JsonSerializer.Serialize(new
+                    foreach (var bulkTransfer in new[] { false, true })
                     {
-                        messageSizeMiB,
-                        largestReceiveClassMiB,
-                        messages = MessagesPerBatch,
-                        payloadBytesPerMessage = connection.PayloadBytes,
-                        allocatedBytesPerMessage = allocated / MessagesPerBatch,
-                        receiveCapacityBytes = connection.ReceiveCapacity,
-                        beforeStats,
-                        afterStats = connection.PoolStats
-                    }));
+                        await using var connection = new TlsReceiveBufferSession(messageSizeMiB, largestReceiveClassMiB, bulkTransfer);
+                        await connection.StartAsync();
+                        for (var i = 0; i < MessagesPerBatch; i++)
+                            await connection.SendAsync();
+
+                        var beforeStats = connection.PoolStats;
+                        var before = GC.GetTotalAllocatedBytes(precise: true);
+                        for (var i = 0; i < MessagesPerBatch; i++)
+                            await connection.SendAsync();
+
+                        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+                        Console.WriteLine(JsonSerializer.Serialize(new
+                        {
+                            messageSizeMiB,
+                            largestReceiveClassMiB,
+                            bulkTransfer,
+                            messages = MessagesPerBatch,
+                            payloadBytesPerMessage = connection.PayloadBytes,
+                            allocatedBytesPerMessage = allocated / MessagesPerBatch,
+                            receiveCapacityBytes = connection.ReceiveCapacity,
+                            beforeStats,
+                            afterStats = connection.PoolStats
+                        }));
+                    }
                 }
             }
         }
