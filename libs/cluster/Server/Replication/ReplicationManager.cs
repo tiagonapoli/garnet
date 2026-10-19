@@ -338,6 +338,9 @@ namespace Garnet.cluster
                     storeWrapper.EnqueueCommit(AofEntryType.MainStoreStreamingCheckpointEndCommit, newVersion);
                 else
                     storeWrapper.EnqueueCommit(AofEntryType.ObjectStoreStreamingCheckpointEndCommit, newVersion);
+
+                // Runs before StreamingSnapshotCheckpointSMTask captures the tail that bounds its final scan.
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Replication_Pause_Before_Diskless_Snapshot_Final_Scan);
             }
             else
             {
