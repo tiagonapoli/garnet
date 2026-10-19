@@ -35,6 +35,7 @@ namespace Garnet.cluster
         readonly int numSessions;
 
         bool firstRead = false;
+        bool firstChunkSent = false;
         long currentFlushEventCount = 0;
         long lastFlushEventCount = 0;
 
@@ -209,7 +210,15 @@ namespace Garnet.cluster
                 }
 
                 if (!needToFlush)
+                {
+                    if (moreChunksFollow && !firstChunkSent)
+                    {
+                        firstChunkSent = true;
+                        ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Chunk);
+                    }
+
                     return span.Length;
+                }
 
                 AsyncUtils.BlockingWait(replicationSyncManager.WaitForFlushAsync());
                 currentFlushEventCount++;
@@ -256,6 +265,7 @@ namespace Garnet.cluster
 
             // Reset read marker
             firstRead = false;
+            firstChunkSent = false;
 
             serializationOutput.Dispose();
         }

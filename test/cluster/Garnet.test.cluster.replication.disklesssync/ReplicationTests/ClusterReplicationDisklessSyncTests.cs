@@ -607,9 +607,55 @@ namespace Garnet.test.cluster
         const int PrimaryIndex = 0;
         const int ReplicaIndex = 1;
 
-        void SetupDisklessPrimary()
+        /// <summary>
+        /// A new-version hash below the captured tail stays mutable while the final scan serializes it, and a concurrent
+        /// in-place HSET mutates the dictionary mid-enumeration. The replica must still converge to the primary's hash.
+        /// </summary>
+        [Test]
+        [Category("REPLICATION")]
+        public void HashMutatedInPlaceWhileDisklessSnapshotSerializesItIsSyncedToReplica()
         {
-            context.CreateInstances(2, disableObjects: true, enableAOF: true, useTLS: useTLS, enableDisklessSync: true, timeout: timeout, sublogCount: sublogCount, asyncReplay: asyncReplay);
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+            const string key = "{disklessrace}hash";
+            // A 32 KB AOF page gives a 64 KB send buffer, so the ~120 KB hash streams as several chunks.
+            SetupDisklessPrimary(disableObjects: false, pageSize: "16k", aofPageSize: "32k");
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+            for (var batch = 0; batch < 20; batch++)
+            {
+                var args = new List<object> { key };
+                for (var i = 0; i < 100; i++)
+                    args.AddRange([$"field{batch * 100 + i}", new string('v', 48)]);
+                _ = context.clusterTestUtils.Execute(primary, "HSET", args, logger: context.logger);
+            }
+
+            const ExceptionInjectionType finalScan = ExceptionInjectionType.Replication_Pause_Before_Diskless_Snapshot_Final_Scan;
+            const ExceptionInjectionType firstChunk = ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Chunk;
+            using (ExceptionInjectionHelper.EnabledScope(finalScan))
+            using (ExceptionInjectionHelper.EnabledScope(firstChunk))
+            {
+                var attach = Task.Run(() => context.clusterTestUtils.AttachReplicaToPrimary(ReplicaIndex, PrimaryIndex, logger: context.logger));
+                ExceptionInjectionHelper.WaitOnClearAsync(finalScan).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+
+                // Copy-updates the old-version hash into a new-version record that the final scan will stream.
+                ClassicAssert.AreEqual(1, (int)context.clusterTestUtils.Execute(primary, "HSET", [key, "beforeScan", "x"], logger: context.logger));
+                ExceptionInjectionHelper.EnableException(finalScan);
+
+                ExceptionInjectionHelper.WaitOnClearAsync(firstChunk).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+                ClassicAssert.AreEqual(1, (int)context.clusterTestUtils.Execute(primary, "HSET", [key, "duringScan", "x"], logger: context.logger));
+                ExceptionInjectionHelper.EnableException(firstChunk);
+                attach.WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, ReplicaIndex, logger: context.logger);
+            context.clusterTestUtils.ReadOnly(ReplicaIndex, context.logger);
+            var replica = context.clusterTestUtils.GetEndPoint(ReplicaIndex);
+            ClassicAssert.AreEqual(2002, (int)context.clusterTestUtils.Execute(primary, "HLEN", [key], logger: context.logger));
+            ClassicAssert.AreEqual(2002, (int)context.clusterTestUtils.Execute(replica, "HLEN", [key], logger: context.logger), "replica hash diverged from the primary");
+        }
+
+        void SetupDisklessPrimary(bool disableObjects = true, string pageSize = default, string aofPageSize = default)
+        {
+            context.CreateInstances(2, disableObjects: disableObjects, enableAOF: true, useTLS: useTLS, enableDisklessSync: true, timeout: timeout, sublogCount: sublogCount, asyncReplay: asyncReplay, lowMemory: pageSize != default, memorySize: pageSize == default ? default : "1m", pageSize: pageSize, AofPageSize: aofPageSize);
             context.CreateConnection(useTLS: useTLS);
             context.clusterTestUtils.MeetAndAssignSlots(PrimaryIndex, 2, context.logger);
         }
