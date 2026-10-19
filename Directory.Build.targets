@@ -4,6 +4,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Using Include="Garnet.Diagnostics" />
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" />
   </ItemGroup>
   <ItemGroup Condition="'$(MSBuildProjectName)' != 'Garnet.Diagnostics'">
     <ProjectReference Include="$(MSBuildThisFileDirectory)libs/diagnostics/Garnet.Diagnostics.csproj" PrivateAssets="all" />
