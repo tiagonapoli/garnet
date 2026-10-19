@@ -582,6 +582,28 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(ReplicaIndex), "EXISTS", [key], logger: context.logger), "replica kept a key deleted on the primary during diskless sync");
         }
 
+        /// <summary>
+        /// INCR after the version shift but before the final scan captures the tail writes a new-version record that the
+        /// final scan streams. The replica recovers at the new version and also replays the INCR from the AOF, so the
+        /// replica must not apply the increment twice.
+        /// </summary>
+        [Test]
+        [Category("REPLICATION")]
+        public void IncrementBeforeFinalDisklessSnapshotScanIsAppliedOnceOnReplica()
+        {
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+            const string key = "{disklessrace}counter";
+            SetupDisklessPrimary();
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primary, "SET", [key, "0"], logger: context.logger));
+
+            AttachReplicaWhilePaused(ExceptionInjectionType.Replication_Pause_Before_Diskless_Snapshot_Final_Scan, () =>
+                ClassicAssert.AreEqual(1, (int)context.clusterTestUtils.Execute(primary, "INCR", [key], logger: context.logger)));
+
+            ClassicAssert.AreEqual("1", (string)context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(ReplicaIndex), "GET", [key], logger: context.logger), "replica applied the INCR both from the snapshot and from the AOF");
+        }
+
         const int PrimaryIndex = 0;
         const int ReplicaIndex = 1;
 

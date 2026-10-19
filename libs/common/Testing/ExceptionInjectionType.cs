@@ -164,5 +164,9 @@ namespace Garnet.common
         /// Pause the primary's streaming snapshot after it serializes its first record.
         /// </summary>
         Replication_Pause_After_First_Diskless_Snapshot_Record,
+        /// <summary>
+        /// Pause the primary's streaming snapshot after the version shift, before the final scan captures the log tail.
+        /// </summary>
+        Replication_Pause_Before_Diskless_Snapshot_Final_Scan,
     }
 }
