@@ -41,6 +41,17 @@ The target framework is `net10.0`. CI runs tests in Debug and Release, on Ubuntu
 
 Test projects live under `test/standalone/` and `test/cluster/` — there is no bare `test/Garnet.test`.
 
+### Assertions
+
+Use `GarnetAsserts.Assert(...)`, not `Debug.Assert` or a static import of `GarnetAsserts`.
+It breaks into an attached debugger and then calls `Environment.FailFast`; tests have no exception-based override.
+Calls are included when the caller defines `DEBUG` or `GARNET_ASSERT`. Use `-p:EnableGarnetAsserts=true`
+to add `GARNET_ASSERT` throughout the project graph without replacing existing compilation symbols.
+Checks that require DEBUG-only fields or bookkeeping use `GarnetAsserts.DebugOnlyAssert(...)` inside `#if DEBUG`.
+Assertion-only helper methods and blocks that do not require DEBUG-only state must also allow `GARNET_ASSERT`.
+The `Garnet.Diagnostics` namespace is imported globally. Keep NUnit assertions unchanged and test fatal
+Garnet assertions in child processes.
+
 ### Test ports
 
 Every test host claims its own TCP ports at startup, so several checkouts can run tests on one machine without
