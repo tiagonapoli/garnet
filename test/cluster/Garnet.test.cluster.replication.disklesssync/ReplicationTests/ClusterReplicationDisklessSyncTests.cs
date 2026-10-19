@@ -4,7 +4,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Garnet.common;
+using Garnet.server;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -550,5 +553,62 @@ namespace Garnet.test.cluster
             context.clusterTestUtils.WaitForReplicasConnected(primaryIndex, 1, logger: context.logger);
         }
 #endif
+
+        /// <summary>
+        /// DEL of a read-only key after scan phase 1 streamed it, but before the version shift, writes an old-version
+        /// tombstone. The scans never stream tombstones and the replica skips old-version AOF entries, so the replica
+        /// must not keep the key.
+        /// </summary>
+        [Test]
+        [Category("REPLICATION")]
+        public void ReadOnlyKeyDeletedDuringDisklessSnapshotIsDeletedOnReplica()
+        {
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+            const string key = "{disklessrace}deleted";
+            SetupDisklessPrimary();
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primary, "SET", [key, "value"], logger: context.logger));
+            var store = GetStoreWrapper(context.nodes[PrimaryIndex]).store;
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+
+            // Phase 1 has streamed the read-only key and the store is still at the old version.
+            AttachReplicaWhilePaused(ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Record, () =>
+            {
+                _ = context.clusterTestUtils.Execute(primary, "DEL", [key], logger: context.logger);
+                ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(primary, "EXISTS", [key], logger: context.logger));
+            });
+
+            ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(context.clusterTestUtils.GetEndPoint(ReplicaIndex), "EXISTS", [key], logger: context.logger), "replica kept a key deleted on the primary during diskless sync");
+        }
+
+        const int PrimaryIndex = 0;
+        const int ReplicaIndex = 1;
+
+        void SetupDisklessPrimary()
+        {
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, useTLS: useTLS, enableDisklessSync: true, timeout: timeout, sublogCount: sublogCount, asyncReplay: asyncReplay);
+            context.CreateConnection(useTLS: useTLS);
+            context.clusterTestUtils.MeetAndAssignSlots(PrimaryIndex, 2, context.logger);
+        }
+
+        // Attaches the replica, runs whilePaused on the primary at the given streaming snapshot pause, then waits for sync.
+        void AttachReplicaWhilePaused(ExceptionInjectionType pause, Action whilePaused)
+        {
+            using (ExceptionInjectionHelper.EnabledScope(pause))
+            {
+                var attach = Task.Run(() => context.clusterTestUtils.AttachReplicaToPrimary(ReplicaIndex, PrimaryIndex, logger: context.logger));
+                ExceptionInjectionHelper.WaitOnClearAsync(pause).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+                whilePaused();
+                ExceptionInjectionHelper.EnableException(pause);
+                attach.WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, ReplicaIndex, logger: context.logger);
+            context.clusterTestUtils.ReadOnly(ReplicaIndex, context.logger);
+        }
+
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "storeWrapper")]
+        static extern ref StoreWrapper GetStoreWrapper(GarnetServer server);
     }
 }
