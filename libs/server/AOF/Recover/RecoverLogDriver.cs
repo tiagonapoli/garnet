@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading;
@@ -46,6 +47,9 @@ namespace Garnet.server
         readonly TsavoriteLogScanSingleIterator replayIterator = appendOnlyFile.Log.ScanSingle(physicalSublogIdx, startAddress, untilAddress, scanUncommitted: true, recover: false, logger: logger);
         readonly TsavoriteLog physicalSublog = appendOnlyFile.Log.GetSubLog(physicalSublogIdx);
         readonly CancellationTokenSource cts = new();
+
+        // Committing metadata refreshes the log epoch, so it must not happen while the protected chunk is still being read
+        readonly List<TsavoriteLogRecoveryInfo> pendingCommitMetadata = [];
         readonly ILogger logger = logger;
         readonly long startAddress = startAddress;
         readonly long untilAddress = untilAddress;
@@ -122,7 +126,7 @@ namespace Garnet.server
                     {
                         TsavoriteLogRecoveryInfo info = new();
                         info.Initialize(new ReadOnlySpan<byte>(ptr + entryLength, -payloadLength));
-                        physicalSublog.UnsafeCommitMetadataOnly(info, isProtected);
+                        pendingCommitMetadata.Add(info);
                         entryLength += TsavoriteLog.UnsafeAlign(-payloadLength);
                     }
                     ptr += entryLength;
@@ -133,6 +137,10 @@ namespace Garnet.server
                         logger?.LogTrace("Completed AOF replay of {count} records, until AOF address {nextAofAddress} (DB ID: {id})", ReplayedRecordCount, untilAddress, dbId);
                     }
                 }
+
+                foreach (var info in pendingCommitMetadata)
+                    physicalSublog.UnsafeCommitMetadataOnly(info, isProtected);
+                pendingCommitMetadata.Clear();
 
                 // Completed replay
                 if (nextAddress == untilAddress)

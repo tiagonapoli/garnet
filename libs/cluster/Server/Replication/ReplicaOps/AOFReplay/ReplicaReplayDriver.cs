@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -45,6 +46,9 @@ namespace Garnet.cluster
         long appliedPulseSequenceNumber;
         long stagedPulseSequenceNumber;
         readonly int directVirtualSublogIdx;
+
+        // Committing metadata refreshes the log epoch, so it must not happen while the protected chunk is still being read
+        readonly List<TsavoriteLogRecoveryInfo> pendingCommitMetadata = [];
 
         internal long StagedPulseSequenceNumber => Volatile.Read(ref stagedPulseSequenceNumber);
 
@@ -191,7 +195,7 @@ namespace Garnet.cluster
                         TsavoriteLogRecoveryInfo info = new();
                         info.Initialize(new ReadOnlySpan<byte>(ptr + entryLength, -payloadLength));
                         var paused = PauseBeforeReplayCommitMetadata(isProtected && ptr + entryLength + TsavoriteLog.UnsafeAlign(-payloadLength) < record + recordLength);
-                        physicalSublog.UnsafeCommitMetadataOnly(info, isProtected);
+                        pendingCommitMetadata.Add(info);
                         HoldAfterReplayCommitMetadata(paused);
                         entryLength += TsavoriteLog.UnsafeAlign(-payloadLength);
                     }
@@ -205,6 +209,12 @@ namespace Garnet.cluster
                 // If an exception occurrs, be sure to advance ReplicationOffset by the amount of successful work that transpired before the error
                 replicationManager.SetSublogReplicationOffset(physicalSublogIdx, replicationOffset);
                 throw;
+            }
+            finally
+            {
+                foreach (var info in pendingCommitMetadata)
+                    physicalSublog.UnsafeCommitMetadataOnly(info, isProtected);
+                pendingCommitMetadata.Clear();
             }
 
             // Before updating replication offset, we must wait for any pending Vector Set ops to complete
