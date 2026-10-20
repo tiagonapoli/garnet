@@ -5648,8 +5648,7 @@ namespace Garnet.test
 
         [TestCase(false)]
         [TestCase(true)]
-        [Explicit("Reproduces the current incorrect VREM reply for an existing read-only vector; asserts observed behavior, not the intended contract.")]
-        public unsafe void ReproVremReadOnlyWithoutStorageTier(bool growReadOnlyRegion)
+        public unsafe void VremReadOnlyWithoutStorageTier(bool growReadOnlyRegion)
         {
             server.Dispose();
             server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, useLogNullDevice: true, enableVectorSetPreview: true, lowMemory: true, memorySize: "64m", pageSize: "16k");
@@ -5691,7 +5690,7 @@ namespace Garnet.test
                 var beforeTail = store.Log.TailAddress;
                 var reply = (int)db.Execute("VREM", "readonly-repro", "member0");
                 TestContext.Out.WriteLine($"readOnly={growReadOnlyRegion}, storageTier={GetOpts(server).EnableStorageTier}, vectorAddress={address}, head={initialHead}, readOnlyAddress={store.Log.ReadOnlyAddress}, tailBeforeDelete={beforeTail}, vectorExistedBefore=True, VREM={reply}");
-                Assert.That(reply, Is.EqualTo(growReadOnlyRegion ? 0 : 1));
+                Assert.That(reply, Is.EqualTo(1));
                 Assert.That(session.BasicContext.ContainsKeyInMemory(key, out _).Found, Is.False);
                 Assert.That((int)db.Execute("VISMEMBER", "readonly-repro", "member0"), Is.Zero);
             }
