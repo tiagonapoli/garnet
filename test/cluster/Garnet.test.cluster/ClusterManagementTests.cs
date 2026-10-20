@@ -722,6 +722,59 @@ namespace Garnet.test.cluster
             ClassicAssert.IsTrue(killed >= 1);
         }
 
+        [Test, Order(7)]
+        public void ReplicaGossipReconnectsAfterPrimaryKillsItsConnection()
+        {
+            const int Primary = 0;
+            const int Replica = 1;
+            context.CreateInstances(2, enableAOF: true);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[Primary];
+            var replicaGossipName = $"name=Gossip-{context.endpoints[Replica]}";
+            var killedIds = WaitForReplicaGossipConnections(excludedIds: []);
+            WaitForPrimaryLink("up");
+
+            // A peer closing the gossip connection (e.g. CLIENT KILL) or a gossip timeout disposes the replica's
+            // client on the next send; the replica must reconnect with a usable client.
+            foreach (var id in killedIds)
+                _ = context.clusterTestUtils.Execute(primaryEndpoint, "CLIENT", ["KILL", "ID", id]);
+
+            _ = WaitForReplicaGossipConnections(excludedIds: killedIds);
+            WaitForPrimaryLink("up");
+
+            HashSet<string> WaitForReplicaGossipConnections(HashSet<string> excludedIds)
+            {
+                var deadline = Stopwatch.StartNew();
+                while (true)
+                {
+                    var clients = ((string)context.clusterTestUtils.Execute(primaryEndpoint, "CLIENT", ["LIST"])).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+                    var ids = clients.Where(c => c.Contains(replicaGossipName, StringComparison.Ordinal))
+                        .Select(c => c.Split(' ')[0]["id=".Length..])
+                        .Where(id => !excludedIds.Contains(id))
+                        .ToHashSet();
+                    if (ids.Count > 0)
+                        return ids;
+
+                    if (deadline.Elapsed > TimeSpan.FromSeconds(60))
+                        Assert.Fail($"Replica gossip did not open a new connection to the primary. Clients:\n{string.Join('\n', clients)}");
+                    Thread.Sleep(100);
+                }
+            }
+
+            void WaitForPrimaryLink(string expected)
+            {
+                var deadline = Stopwatch.StartNew();
+                while (context.clusterTestUtils.GetInfo(Replica, "replication", "master_link_status", context.logger) != expected)
+                {
+                    if (deadline.Elapsed > TimeSpan.FromSeconds(60))
+                        Assert.Fail($"Replica master_link_status did not become {expected}");
+                    Thread.Sleep(100);
+                }
+            }
+        }
+
         [Test, Order(8)]
         public void FailoverBadOptions()
         {
