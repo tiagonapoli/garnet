@@ -396,18 +396,32 @@ namespace Garnet.server
 
             ref var ctx = ref ActiveThreadSession.vectorBasicContext;
 
+            // Outside the mutable region Delete appends a tombstone and reports NotFound even if the key existed, so probe first.
+            var existed = Exists(ref ctx, keyWithNamespace);
             var status = ctx.Delete(keyWithNamespace);
             Debug.Assert(!status.IsPending, "Deletes should never go async");
 
             RestoreKeyLengthPrefix(keyData, keyLength);
 
-            if (status.IsCompletedSuccessfully && status.Found)
+            if (status.IsCompletedSuccessfully && (status.Found || (existed && status.Record.Created)))
             {
                 return 1;
             }
             else
             {
                 return 0;
+            }
+
+            static bool Exists(ref VectorBasicContext ctx, VectorElementKey key)
+            {
+                // A Read without a callback or output buffer only records the value size, so this copies no data.
+                VectorInput input = default;
+                VectorOutput output = new();
+                var status = ctx.Read(key, ref input, ref output);
+                if (status.IsPending)
+                    CompletePending(ref status, ref input, ref output, ref ctx);
+
+                return status.Found;
             }
         }
 
