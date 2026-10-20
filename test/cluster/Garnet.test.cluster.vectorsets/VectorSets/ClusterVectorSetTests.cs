@@ -2419,6 +2419,71 @@ namespace Garnet.test.cluster
         }
 
         [Test]
+        public async Task VREMOfReadOnlyElementReplicatesAsync()
+        {
+            const int PrimaryIndex = 0;
+            const int SecondaryIndex = 1;
+            const string Key = nameof(VREMOfReadOnlyElementReplicatesAsync);
+            const string Element = "member0";
+
+            _ = await SimpleSetupClusterAsync(DefaultShards, primaryCount: 1, replicaCount: 1, useTLS: false).ConfigureAwait(false);
+
+            var primary = (IPEndPoint)context.endpoints[PrimaryIndex];
+            var secondary = (IPEndPoint)context.endpoints[SecondaryIndex];
+
+            await using var connection = await ConnectionMultiplexer.ConnectAsync(context.clusterTestUtils.GetRedisConfig(context.endpoints)).ConfigureAwait(false);
+            var primaryServer = connection.GetServer(primary);
+            var secondaryServer = connection.GetServer(secondary);
+
+            for (var i = 0; i < 4; i++)
+                ClassicAssert.AreEqual(1, (int)await primaryServer.ExecuteAsync(0, "VADD", [Key, "VALUES", "3", "1", "2", $"{3 + i}", $"member{i}", "NOQUANT"]).ConfigureAwait(false));
+
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, SecondaryIndex);
+            ClassicAssert.AreEqual("OK", (string)await secondaryServer.ExecuteAsync(0, "READONLY", []).ConfigureAwait(false));
+
+            // Move every vector record out of the mutable region, without evicting anything, on both nodes.
+            foreach (var node in context.nodes)
+            {
+                var log = GetStoreWrapper(node).store.Log;
+                var head = log.HeadAddress;
+                log.ShiftReadOnlyAddress(log.TailAddress, wait: true);
+                ClassicAssert.AreEqual(head, log.HeadAddress);
+            }
+
+            var firstRemove = (int)await primaryServer.ExecuteAsync(0, "VREM", [Key, Element]).ConfigureAwait(false);
+            var readd = (int)await primaryServer.ExecuteAsync(0, "VADD", [Key, "VALUES", "3", "1", "2", "3", Element, "NOQUANT"]).ConfigureAwait(false);
+            var secondRemove = (int)await primaryServer.ExecuteAsync(0, "VREM", [Key, Element]).ConfigureAwait(false);
+            var replicaSynced = true;
+            using (var syncTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30)))
+            {
+                try
+                {
+                    context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, SecondaryIndex, cancellation: syncTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    replicaSynced = false;
+                }
+            }
+
+            var primaryCard = (int)await primaryServer.ExecuteAsync(0, "VCARD", [Key]).ConfigureAwait(false);
+            var replicaCard = (int)await secondaryServer.ExecuteAsync(0, "VCARD", [Key], flags: CommandFlags.NoRedirect).ConfigureAwait(false);
+            var replicaIsMember = (int)await secondaryServer.ExecuteAsync(0, "VISMEMBER", [Key, Element], flags: CommandFlags.NoRedirect).ConfigureAwait(false);
+            TestContext.Out.WriteLine($"firstRemove={firstRemove}, readd={readd}, secondRemove={secondRemove}, replicaSynced={replicaSynced}, primaryCard={primaryCard}, replicaCard={replicaCard}, replicaIsMember={replicaIsMember}");
+
+            Assert.Multiple(() =>
+            {
+                ClassicAssert.AreEqual(1, firstRemove, "VREM of an existing read-only element must report removal");
+                ClassicAssert.AreEqual(1, readd);
+                ClassicAssert.AreEqual(1, secondRemove);
+                ClassicAssert.IsTrue(replicaSynced, "Replica stopped applying the primary's AOF");
+                ClassicAssert.AreEqual(3, primaryCard);
+                ClassicAssert.AreEqual(primaryCard, replicaCard);
+                ClassicAssert.AreEqual(0, replicaIsMember);
+            });
+        }
+
+        [Test]
         public async Task ConcurrentVADDUpdatesAsync()
         {
             const int PrimaryIndex = 0;
