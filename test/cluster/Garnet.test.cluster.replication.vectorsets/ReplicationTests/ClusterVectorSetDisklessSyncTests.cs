@@ -1,8 +1,12 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
@@ -18,7 +22,7 @@ namespace Garnet.test.cluster
         private const int ReplicaIndex = 1;
 
         /// <summary>Creates a diskless-sync cluster with a low threshold so re-attach takes full sync.</summary>
-        private void SetupDisklessCluster(int nodeCount, int commitFrequencyMs = 0, bool asyncReplay = false)
+        private void SetupDisklessCluster(int nodeCount, int commitFrequencyMs = 0, bool asyncReplay = false, string pageSize = default, string aofPageSize = default)
         {
             // Once the replica's AOF gap exceeds this, the primary stops replaying and full syncs instead
             context.CreateInstances(
@@ -28,6 +32,10 @@ namespace Garnet.test.cluster
                 asyncReplay: asyncReplay,
                 enableDisklessSync: true,
                 replicaDisklessSyncFullSyncAofThreshold: "1k",
+                lowMemory: pageSize != default,
+                memorySize: pageSize == default ? default : "1m",
+                pageSize: pageSize,
+                AofPageSize: aofPageSize,
                 timeout: timeout);
 
             context.MeetAndAssignSlotsAllNodes(nodeCount);
@@ -340,6 +348,130 @@ namespace Garnet.test.cluster
             {
                 ClassicAssert.AreEqual(expected, replicaCensus.GetValueOrDefault(ns), $"node {ReplicaIndex} holds {replicaCensus.GetValueOrDefault(ns)} records in namespace {ns} but node {PrimaryIndex} holds {expected}");
             }
+        }
+
+        /// <summary>
+        /// Scan phase 1 streams a whole Vector Set, which is then deleted, cleaned up, and recreated under the same key
+        /// before phase 2. The primary hands the freed context to the new set, so any element data of the deleted set
+        /// left on the replica surfaces inside the new one.
+        /// </summary>
+        [Test]
+        public void VectorSetDeletedAndRecreatedInSameContextDuringDisklessFullSyncDoesNotResurrectElements()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const string Key = "{vsdisk}vs-recreate";
+            const int DeletedElements = 8;
+
+            // A 32 KB AOF page gives a 64 KB send buffer, so the ~120 KB filler hash streams as several chunks.
+            SetupDisklessCluster(2, pageSize: "16k", aofPageSize: "32k");
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+
+            PopulateVectorSet(PrimaryIndex, Key, DeletedElements);
+            var deletedContext = ReadPersistedContext(PrimaryIndex, Key);
+            // The filler is the last record phase 1 streams; built from small HSETs so each fits a 32 KB AOF page.
+            for (var batch = 0; batch < 20; batch++)
+            {
+                var args = new List<object> { "{vsdisk}filler" };
+                for (var i = 0; i < 100; i++)
+                    args.AddRange([$"field{batch * 100 + i}", new string('v', 48)]);
+                _ = context.clusterTestUtils.Execute(primary, "HSET", args, logger: context.logger);
+            }
+
+            MakePrimaryReadOnly();
+
+            // Pausing mid-way through the filler guarantees phase 1 already streamed every record of the set.
+            AttachReplicaWhilePaused(ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Chunk, () =>
+            {
+                DeleteOnPrimary(Key);
+                WaitForContextReleased(PrimaryIndex, deletedContext);
+                PopulateVectorSet(PrimaryIndex, Key, count: 4);
+                ClassicAssert.AreEqual(deletedContext, ReadPersistedContext(PrimaryIndex, Key), "the recreated Vector Set did not reuse the freed context, so this test does not exercise context reuse");
+            });
+
+            AssertNoDeletedElementsResurrected(Key, DeletedElements);
+        }
+
+        private void DeleteOnPrimary(string key)
+        {
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+            var deleted = (int)context.clusterTestUtils.Execute(primary, "DEL", [key], logger: context.logger);
+            ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(primary, "EXISTS", [key], logger: context.logger), $"DEL of '{key}' (reply {deleted}) did not remove it from node {PrimaryIndex}");
+        }
+
+        private void MakePrimaryReadOnly()
+        {
+            var store = GetStoreWrapper(context.nodes[PrimaryIndex]).store;
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+        }
+
+        /// <summary>Attaches the replica, runs <paramref name="whilePaused"/> while the sync is held at <paramref name="pause"/>, then lets it finish.</summary>
+        private void AttachReplicaWhilePaused(ExceptionInjectionType pause, Action whilePaused)
+        {
+            using (ExceptionInjectionHelper.EnabledScope(pause))
+            {
+                var attach = Task.Run(() => context.clusterTestUtils.AttachReplicaToPrimary(ReplicaIndex, PrimaryIndex, logger: context.logger));
+                ExceptionInjectionHelper.WaitOnClearAsync(pause).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+
+                whilePaused();
+
+                ExceptionInjectionHelper.EnableException(pause);
+                attach.WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+            }
+        }
+
+        /// <summary>Waits until the background cleanup of a deleted Vector Set has freed its context for reuse.</summary>
+        private void WaitForContextReleased(int nodeIndex, ulong vectorSetContext)
+        {
+            var vectorManager = GetStoreWrapper(context.nodes[nodeIndex]).DefaultDatabase.VectorManager;
+            var deadline = DateTime.UtcNow.AddSeconds(timeout);
+
+            while (true)
+            {
+                vectorManager.GetContextState(vectorSetContext, out var inUse, out _, out _);
+                if (!inUse)
+                    return;
+
+                if (DateTime.UtcNow > deadline)
+                    Assert.Fail($"node {nodeIndex} never released context {vectorSetContext} after its Vector Set was deleted");
+
+                _ = Thread.Yield();
+            }
+        }
+
+        /// <summary>Asserts the replica holds exactly the primary's current set, with none of the first <paramref name="deletedElements"/> elements written under the key.</summary>
+        private void AssertNoDeletedElementsResurrected(string key, int deletedElements)
+        {
+            context.clusterTestUtils.ReadOnly(ReplicaIndex);
+            WaitForReplication(PrimaryIndex, ReplicaIndex);
+
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+            var replica = context.clusterTestUtils.GetEndPoint(ReplicaIndex);
+
+            var resurrected = new List<int>();
+            for (var i = 0; i < deletedElements; i++)
+            {
+                var element = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(element, i);
+
+                ClassicAssert.IsEmpty((string[])context.clusterTestUtils.Execute(primary, "VEMB", [key, element], skipLogging: true), $"element {i} was deleted with its Vector Set but node {PrimaryIndex} still returns it");
+
+                if (((string[])context.clusterTestUtils.Execute(replica, "VEMB", [key, element], skipLogging: true)).Length != 0)
+                    resurrected.Add(i);
+            }
+
+            ClassicAssert.IsEmpty(resurrected, $"node {ReplicaIndex} returns {resurrected.Count} of {deletedElements} elements of the deleted Vector Set from the recreated '{key}': [{string.Join(", ", resurrected)}]");
+            ClassicAssert.AreEqual(VectorSetSize(PrimaryIndex, key), VectorSetSize(ReplicaIndex, key), $"node {ReplicaIndex} disagrees with node {PrimaryIndex} on the cardinality of the recreated '{key}'");
+
+            // Contexts are allocated per node, so compare the set's own records and the store-wide total rather than namespaces.
+            GetStoreWrapper(context.nodes[PrimaryIndex]).DefaultDatabase.VectorManager.WaitForQuiescence();
+            GetStoreWrapper(context.nodes[ReplicaIndex]).DefaultDatabase.VectorManager.WaitForQuiescence();
+            ClassicAssert.AreEqual(RecordsHeldForContext(PrimaryIndex, ReadPersistedContext(PrimaryIndex, key)), RecordsHeldForContext(ReplicaIndex, ReadPersistedContext(ReplicaIndex, key)), $"node {ReplicaIndex} and node {PrimaryIndex} hold a different number of element records for the recreated '{key}'");
+
+            static int TotalElementRecords(Dictionary<ulong, int> census) => census.Where(static kv => kv.Key != VectorManager.MetadataNamespace).Sum(static kv => kv.Value);
+            var primaryTotal = TotalElementRecords(CensusNamespacedRecords(PrimaryIndex));
+            var replicaTotal = TotalElementRecords(CensusNamespacedRecords(ReplicaIndex));
+            ClassicAssert.AreEqual(primaryTotal, replicaTotal, $"node {ReplicaIndex} holds {replicaTotal} Vector Set element records but node {PrimaryIndex} holds {primaryTotal}; one of them retains data of the deleted set");
         }
     }
 }
