@@ -5646,6 +5646,57 @@ namespace Garnet.test
         private static GarnetServer CreateGarnetServer(bool tryRecover, bool enableVectorSetPreview = true)
         => TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, tryRecover: tryRecover, aofMemorySize: DefaultAOFMemorySize, enableVectorSetPreview: enableVectorSetPreview);
 
+        [TestCase(false)]
+        [TestCase(true)]
+        [Explicit("Reproduces the current incorrect VREM reply for an existing read-only vector; asserts observed behavior, not the intended contract.")]
+        public unsafe void ReproVremReadOnlyWithoutStorageTier(bool growReadOnlyRegion)
+        {
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, useLogNullDevice: true, enableVectorSetPreview: true, lowMemory: true, memorySize: "64m", pageSize: "16k");
+            server.Start();
+            Assert.That(GetOpts(server).EnableStorageTier, Is.False);
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase();
+            for (var i = 0; i < 4; i++)
+                Assert.That((int)db.Execute("VADD", "readonly-repro", "VALUES", 3, "1", "2", "3", $"member{i}", "NOQUANT"), Is.EqualTo(1));
+
+            var id = ReadRawVectorTerm("readonly-repro", DiskANNService.InternalIdMap, "member0"u8);
+            var vector = ReadRawVectorTerm("readonly-repro", DiskANNService.FullVector, id);
+            var stub = ReadRawVectorStub("readonly-repro");
+            VectorManager.ReadIndex(stub, out var indexContext, out _, out _, out _, out _, out _, out _, out _, out _);
+            Span<byte> namespaceBytes = stackalloc byte[sizeof(uint)];
+            VectorManager.StoreContextInNamespace(indexContext | DiskANNService.FullVector, ref namespaceBytes);
+            var wrapper = server.Provider.StoreWrapper;
+            var store = wrapper.store;
+            var initialHead = store.Log.HeadAddress;
+            using var session = store.NewSession<VectorElementKey, VectorInput, VectorOutput, long, VectorSessionFunctions>(new VectorSessionFunctions(wrapper.CreateFunctionsState()));
+            fixed (byte* idPtr = id)
+            {
+                var key = new VectorElementKey(namespaceBytes, new ReadOnlySpan<byte>(idPtr, id.Length));
+                Assert.That(session.BasicContext.ContainsKeyInMemory(key, out var address).Found, Is.True);
+                Assert.That(address, Is.GreaterThanOrEqualTo(store.Log.ReadOnlyAddress));
+                if (growReadOnlyRegion)
+                {
+                    var padding = new byte[2048];
+                    for (var i = 0; i < 512 && store.Log.ReadOnlyAddress <= address; i++)
+                        Assert.That(db.StringSet($"padding:{i}", padding), Is.True);
+                }
+
+                Assert.That(store.Log.HeadAddress, Is.EqualTo(initialHead), "No records may be evicted for this reproduction");
+                Assert.That(address < store.Log.ReadOnlyAddress, Is.EqualTo(growReadOnlyRegion));
+                Assert.That(session.BasicContext.ContainsKeyInMemory(key, out var beforeDeleteAddress).Found, Is.True);
+                Assert.That(beforeDeleteAddress, Is.EqualTo(address));
+                CollectionAssert.AreEqual(vector, ReadRawVectorTerm("readonly-repro", DiskANNService.FullVector, id));
+                Assert.That((int)db.Execute("VISMEMBER", "readonly-repro", "member0"), Is.EqualTo(1));
+                var beforeTail = store.Log.TailAddress;
+                var reply = (int)db.Execute("VREM", "readonly-repro", "member0");
+                TestContext.Out.WriteLine($"readOnly={growReadOnlyRegion}, storageTier={GetOpts(server).EnableStorageTier}, vectorAddress={address}, head={initialHead}, readOnlyAddress={store.Log.ReadOnlyAddress}, tailBeforeDelete={beforeTail}, vectorExistedBefore=True, VREM={reply}");
+                Assert.That(reply, Is.EqualTo(growReadOnlyRegion ? 0 : 1));
+                Assert.That(session.BasicContext.ContainsKeyInMemory(key, out _).Found, Is.False);
+                Assert.That((int)db.Execute("VISMEMBER", "readonly-repro", "member0"), Is.Zero);
+            }
+        }
+
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "opts")]
         private static extern ref GarnetServerOptions GetOpts(GarnetServer server);
     }
