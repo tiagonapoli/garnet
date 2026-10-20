@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -2109,6 +2110,57 @@ namespace Garnet.test
             // (Flush files are not asserted here because none were created in this test — no flush
             // event fired between RI.SET and DEL. The next test verifies the preservation contract.)
         }
+
+#if DEBUG
+        /// <summary>
+        /// Deleting a range index whose stub a running checkpoint has frozen must still free its BfTree and delete
+        /// its working file, otherwise both leak until the stub is evicted and the file is never reclaimed.
+        /// </summary>
+        [Test]
+        public async Task RIDeleteDuringCheckpointFreesResourcesAsync()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const ExceptionInjectionType CheckpointPause = ExceptionInjectionType.Checkpoint_Pause_At_Flush_Begin;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            var riLogRoot = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
+
+            db.Execute("RI.CREATE", "doomed", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "doomed", "key1", "val1");
+            ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount);
+            ClassicAssert.AreEqual(1, Directory.GetFiles(riLogRoot, "*.data.bftree").Length);
+
+            ExceptionInjectionHelper.EnableException(CheckpointPause);
+            try
+            {
+#pragma warning disable CS0618 // ForegroundSave is deprecated in the client, but is what this test needs
+                var saveTask = Task.Run(() =>
+                {
+                    using var saveRedis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                    saveRedis.GetServers()[0].Save(SaveType.ForegroundSave);
+                });
+#pragma warning restore CS0618
+                await ExceptionInjectionHelper.WaitOnClearAsync(CheckpointPause).WaitAsync(TimeSpan.FromSeconds(30));
+
+                // The session is now in the checkpoint's new version, so the stub is frozen for the snapshot.
+                _ = db.Execute("DEL", "doomed");
+                ClassicAssert.IsFalse(db.KeyExists("doomed"), "DEL did not remove the range index");
+
+                ExceptionInjectionHelper.EnableException(CheckpointPause);
+                await saveTask.WaitAsync(TimeSpan.FromSeconds(60));
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(CheckpointPause);
+            }
+
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "the BfTree of the range index deleted during a checkpoint is still live");
+            ClassicAssert.AreEqual(0, Directory.GetFiles(riLogRoot, "*.data.bftree").Length, "the working file of the range index deleted during a checkpoint was not deleted");
+        }
+#endif
 
         /// <summary>
         /// Verifies the LOG-tied lifetime of per-flush snapshot files: DEL preserves the
