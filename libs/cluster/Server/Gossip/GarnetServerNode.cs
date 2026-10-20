@@ -18,7 +18,7 @@ namespace Garnet.cluster
         readonly ClusterProvider clusterProvider;
         readonly SslClientAuthenticationOptions tlsOptions;
         readonly LightEpoch epoch;
-        readonly GarnetClient gc;
+        volatile GarnetClient gc;
         GossipVersionNegotiation gossipNegotiation;
         ClusterAuthContainer clientAuth;
         ExponentialBackoff backoff;
@@ -140,6 +140,9 @@ namespace Garnet.cluster
                 if (!backoff.CanAttempt())
                     return new(false);
 
+                if (!TryReplaceDisposedClient())
+                    return new(false);
+
                 RefreshClientAuthentication();
                 initializationTask = InitializeCoreAsync(gc);
                 return new(initializationTask);
@@ -178,10 +181,32 @@ namespace Garnet.cluster
                     return;
 
                 // Credentials rotated since this client last connected; update them in place so the next
-                // reconnect authenticates with them. The client is reused for the node's lifetime (no swap),
-                // so forwarding never observes a torn client reference or a client disposed mid-send.
+                // reconnect authenticates with them.
                 clientAuth = currentAuth;
                 gc.UpdateAuth(currentAuth.ClusterUsername, currentAuth.ClusterPassword);
+            }
+
+            // GarnetClient disposes itself when a send finds the connection closed or a request times out, and a
+            // disposed client cannot reconnect, so it is replaced. Holding the dispose read lock keeps the node's
+            // terminal disposal from missing the replacement.
+            bool TryReplaceDisposedClient()
+            {
+                if (!gc.Disposed)
+                    return true;
+
+                if (!dispose.TryReadLock())
+                    return false;
+
+                try
+                {
+                    clientAuth = clusterProvider.ClusterAuth;
+                    gc = CreateGarnetClient(clientAuth);
+                    return true;
+                }
+                finally
+                {
+                    dispose.ReadUnlock();
+                }
             }
         }
 
@@ -387,15 +412,15 @@ namespace Garnet.cluster
                 }
 
                 locked = true;
-                // The client is reused for the node's lifetime (gc is immutable), so the liveness check and
-                // send always target the same client; the dispose read lock above keeps the node's terminal
-                // disposal from tearing it down mid-send.
-                if (!gc.IsConnected)
+                // Read the client once: a self-disposed client may be replaced concurrently, and the dispose read
+                // lock above keeps the node's terminal disposal from tearing it down mid-send.
+                var client = gc;
+                if (!client.IsConnected)
                 {
                     logger?.LogError($"{nameof(TryClusterPublish)}: client not connected; skipping publish forwarding");
                     return;
                 }
-                gc.ExecuteClusterPublishNoResponse(cmd, channel, message);
+                client.ExecuteClusterPublishNoResponse(cmd, channel, message);
             }
             finally
             {
