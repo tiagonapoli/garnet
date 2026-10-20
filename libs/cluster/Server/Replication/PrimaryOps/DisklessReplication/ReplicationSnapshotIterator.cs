@@ -265,17 +265,26 @@ namespace Garnet.cluster
         IStreamingSnapshotIteratorFunctions
     {
         long targetVersion;
+        bool firstRecordWritten;
 
         public bool OnStart(Guid checkpointToken, long currentVersion, long targetVersion)
         {
             this.targetVersion = targetVersion;
+            firstRecordWritten = false;
             return snapshotIteratorManager.OnStart(checkpointToken, currentVersion, targetVersion);
         }
 
         public bool Reader<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, RecordMetadata recordMetadata, long numberOfRecords)
             where TSourceLogRecord : ISourceLogRecord
         {
-            return snapshotIteratorManager.WriteRecord(in srcLogRecord, recordMetadata, numberOfRecords);
+            var result = snapshotIteratorManager.WriteRecord(in srcLogRecord, recordMetadata, numberOfRecords);
+            if (!firstRecordWritten)
+            {
+                firstRecordWritten = true;
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Record);
+            }
+
+            return result;
         }
 
         public void OnException(Exception exception, long numberOfRecords)
