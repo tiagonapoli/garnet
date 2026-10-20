@@ -1,8 +1,11 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
@@ -339,6 +342,89 @@ namespace Garnet.test.cluster
             foreach (var (ns, expected) in primaryCensus.Where(static kv => kv.Key != VectorManager.MetadataNamespace))
             {
                 ClassicAssert.AreEqual(expected, replicaCensus.GetValueOrDefault(ns), $"node {ReplicaIndex} holds {replicaCensus.GetValueOrDefault(ns)} records in namespace {ns} but node {PrimaryIndex} holds {expected}");
+            }
+        }
+
+        /// <summary>
+        /// A Vector Set streamed by scan phase 1 is deleted, fully cleaned up, and replaced by a same-sized string
+        /// before phase 2. The replica must end with the string and must not keep the deleted set's element data.
+        /// </summary>
+        [Test]
+        public void VectorSetDeletedAndReplacedByStringDuringDisklessFullSyncReplicatesAsString()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const string Key = "{vsdisk}vs-to-string";
+            var value = new byte[VectorManager.IndexSize];
+            Array.Fill(value, (byte)'s');
+
+            SetupDisklessCluster(2);
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+
+            PopulateVectorSet(PrimaryIndex, Key, count: 8);
+            var deletedContext = ReadPersistedContext(PrimaryIndex, Key);
+            MakePrimaryReadOnly();
+
+            AttachReplicaWhilePaused(ExceptionInjectionType.Replication_Pause_After_First_Diskless_Snapshot_Record, () =>
+            {
+                DeleteOnPrimary(Key);
+                WaitForContextReleased(PrimaryIndex, deletedContext);
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primary, "SET", [Key, value], logger: context.logger));
+            });
+
+            context.clusterTestUtils.ReadOnly(ReplicaIndex);
+            var replica = context.clusterTestUtils.GetEndPoint(ReplicaIndex);
+            ClassicAssert.AreEqual("string", (string)context.clusterTestUtils.Execute(replica, "TYPE", [Key], logger: context.logger), $"node {ReplicaIndex} applied the streamed string over the earlier streamed Vector Set index but kept the Vector Set record type");
+            ClassicAssert.AreEqual(value, (byte[])context.clusterTestUtils.Execute(replica, "GET", [Key], logger: context.logger));
+
+            var stranded = RecordsHeldForContext(ReplicaIndex, deletedContext);
+            ClassicAssert.AreEqual(0, stranded, $"node {ReplicaIndex} still holds {stranded} element records of the Vector Set deleted on node {PrimaryIndex} (context {deletedContext}); nothing references them and nothing will clean them up");
+        }
+
+        private void DeleteOnPrimary(string key)
+        {
+            var primary = context.clusterTestUtils.GetEndPoint(PrimaryIndex);
+            var deleted = (int)context.clusterTestUtils.Execute(primary, "DEL", [key], logger: context.logger);
+            ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(primary, "EXISTS", [key], logger: context.logger), $"DEL of '{key}' (reply {deleted}) did not remove it from node {PrimaryIndex}");
+        }
+
+        private void MakePrimaryReadOnly()
+        {
+            var store = GetStoreWrapper(context.nodes[PrimaryIndex]).store;
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+        }
+
+        /// <summary>Attaches the replica, runs <paramref name="whilePaused"/> while the sync is held at <paramref name="pause"/>, then lets it finish.</summary>
+        private void AttachReplicaWhilePaused(ExceptionInjectionType pause, Action whilePaused)
+        {
+            using (ExceptionInjectionHelper.EnabledScope(pause))
+            {
+                var attach = Task.Run(() => context.clusterTestUtils.AttachReplicaToPrimary(ReplicaIndex, PrimaryIndex, logger: context.logger));
+                ExceptionInjectionHelper.WaitOnClearAsync(pause).WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+
+                whilePaused();
+
+                ExceptionInjectionHelper.EnableException(pause);
+                attach.WaitAsync(TimeSpan.FromSeconds(timeout)).GetAwaiter().GetResult();
+            }
+        }
+
+        /// <summary>Waits until the background cleanup of a deleted Vector Set has freed its context for reuse.</summary>
+        private void WaitForContextReleased(int nodeIndex, ulong vectorSetContext)
+        {
+            var vectorManager = GetStoreWrapper(context.nodes[nodeIndex]).DefaultDatabase.VectorManager;
+            var deadline = DateTime.UtcNow.AddSeconds(timeout);
+
+            while (true)
+            {
+                vectorManager.GetContextState(vectorSetContext, out var inUse, out _, out _);
+                if (!inUse)
+                    return;
+
+                if (DateTime.UtcNow > deadline)
+                    Assert.Fail($"node {nodeIndex} never released context {vectorSetContext} after its Vector Set was deleted");
+
+                _ = Thread.Yield();
             }
         }
     }
