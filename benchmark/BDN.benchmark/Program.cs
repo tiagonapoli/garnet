@@ -18,6 +18,12 @@ class Program
 
     static void Main(string[] args)
     {
+        if (args.Length == 1 && args[0] == "--repro-tls-receive-allocations")
+        {
+            BDN.benchmark.Network.TlsReceiveBufferAllocations.ReproduceAsync().GetAwaiter().GetResult();
+            return;
+        }
+
         // Extract our custom CLI options before forwarding remaining args to BDN.
         // First check for a usage request, so we don't have to read the .cs file to see the options.
         var passthroughArgs = args;
@@ -34,6 +40,7 @@ class Program
                 Console.WriteLine("Garnet:   --frameworks or --fw:  Filter benchmarks to specific framework(s). Comma-separated list of net10.0 or all. Default is all.");
                 Console.WriteLine("Garnet:   --opparams or --op:    Filter Operations benchmarks by which params to include. Comma-separated list of none, acl, aof, aad, all. Default is all.");
                 Console.WriteLine("Garnet:   --help or /? or -?:    (Must be first) Display this help message, followed by BDN help (filter with 'findstr Garnet:' if that is not desired).");
+                Console.WriteLine("Garnet:   --repro-tls-receive-allocations: Run the bounded TLS allocation repro without BenchmarkDotNet.");
 
                 // Drop through without stripping the help request, so BDN's help will also display. The "Garnet:" prefix makes it possible to findstr on that.
             }

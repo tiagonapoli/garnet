@@ -215,6 +215,7 @@ namespace Garnet.cluster
                 // EnsureReplication does not trigger spurious resyncs while the
                 // AOF stream is idle (no data APPENDLOG to set the flag later).
                 IsReplicating = true;
+                IsBulkTransferSession = true;
 
                 // This is an initialization message
                 if (previousAddress == -1 && currentAddress == -1 && nextAddress == -1)
@@ -410,6 +411,7 @@ namespace Garnet.cluster
             var ckptFileType = (CheckpointFileType)ckptFileTypeInt;
 
             clusterProvider.replicationManager.recvCheckpointHandler.ProcessSnapshotData(fileToken, ckptFileType, startAddress, data);
+            IsBulkTransferSession = true;
             while (!RespWriteUtils.TryWriteDirect(CmdStrings.RESP_OK, ref dcurr, dend))
                 SendAndReset();
 
@@ -536,6 +538,7 @@ namespace Garnet.cluster
                 return true;
             }
 
+            IsBulkTransferSession = true;
             var payload = parseState.GetArgSliceByRef(1);
             var payloadPtr = payload.ToPointer();
             var lastParam = parseState.GetArgSliceByRef(parseState.Count - 1);
