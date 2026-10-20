@@ -230,11 +230,19 @@ namespace Garnet.server
 
                         if (!needsRecreate)
                         {
+                            if (lockToken.IsExclusive)
+                            {
+                                // Raised to recreate but don't need it, lower to shared and retry
+                                vectorSetLocks.ReleaseLock(lockToken);
+
+                                continue;
+                            }
+
                             if (readCmd == RespCommand.XVIMPORT && (IsImportCompleted(indexSpan) || IsImportFailed(indexSpan)))
                             {
                                 status = GarnetStatus.OK;
                                 importPending = false;
-                                return new(in vectorSetLocks, lockToken);
+                                return SharedReadLock(lockToken);
                             }
 
                             if (IsImportPending(indexSpan))
@@ -243,7 +251,7 @@ namespace Garnet.server
                                 {
                                     status = GarnetStatus.OK;
                                     importPending = true;
-                                    return new(in vectorSetLocks, lockToken);
+                                    return SharedReadLock(lockToken);
                                 }
 
                                 if (readCmd != RespCommand.XVIMPORT)
@@ -390,7 +398,7 @@ namespace Garnet.server
 
                     status = GarnetStatus.OK;
                     importPending = false;
-                    return new(in vectorSetLocks, lockToken);
+                    return SharedReadLock(lockToken);
                 }
             }
             catch
@@ -402,6 +410,16 @@ namespace Garnet.server
 
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Wraps a lock returned to a read caller, which must only ever hold the index lock shared.
+        /// </summary>
+        private VectorSetLock SharedReadLock(ReadOptimizedLock.LockToken lockToken)
+        {
+            Debug.Assert(!lockToken.IsExclusive, "Read commands must never hold an exclusive Vector Set index lock");
+
+            return new(in vectorSetLocks, lockToken);
         }
 
         /// <summary>
