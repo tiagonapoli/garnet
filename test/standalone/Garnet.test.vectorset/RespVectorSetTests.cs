@@ -5604,6 +5604,63 @@ namespace Garnet.test
                 }
             }
         }
+
+        /// <summary>
+        /// Deleting a Vector Set whose index record a running checkpoint has frozen must still request its cleanup,
+        /// otherwise its context and element data are never reclaimed.
+        /// </summary>
+        [Test]
+        public async Task VectorSetDeletedDuringCheckpointIsCleanedUpAsync()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const ExceptionInjectionType CheckpointPause = ExceptionInjectionType.Checkpoint_Pause_At_Flush_Begin;
+
+            var vectorManager = server.Provider.StoreWrapper.DefaultDatabase.VectorManager;
+            var vector = Enumerable.Range(0, 8).Select(static x => (byte)x).ToArray();
+            var key = "doomed"u8.ToArray();
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            _ = db.Execute("VADD", [key, "XB8", vector, new byte[] { 0, 0, 0, 0 }, "CAS", "NOQUANT", "EF", "16", "M", "32"]);
+
+            ulong vectorSetContext;
+            unsafe
+            {
+                fixed (byte* keyPtr = key)
+                {
+                    vectorSetContext = vectorManager.GetNamespacesForKeys(server.Provider.StoreWrapper, [PinnedSpanByte.FromPinnedPointer(keyPtr, key.Length)], []).Min();
+                }
+            }
+
+            ExceptionInjectionHelper.EnableException(CheckpointPause);
+            try
+            {
+#pragma warning disable CS0618 // ForegroundSave is deprecated in the client, but is what this test needs
+                var saveTask = Task.Run(() =>
+                {
+                    using var saveRedis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                    saveRedis.GetServers()[0].Save(SaveType.ForegroundSave);
+                });
+#pragma warning restore CS0618
+                await ExceptionInjectionHelper.WaitOnClearAsync(CheckpointPause).WaitAsync(TimeSpan.FromSeconds(30));
+
+                // The session is now in the checkpoint's new version, so the index record is frozen for the snapshot.
+                _ = db.Execute("DEL", [key]);
+                ClassicAssert.IsFalse(db.KeyExists(key), "DEL did not remove the Vector Set");
+
+                ExceptionInjectionHelper.EnableException(CheckpointPause);
+                await saveTask.WaitAsync(TimeSpan.FromSeconds(60));
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(CheckpointPause);
+            }
+
+            vectorManager.WaitForQuiescence();
+            vectorManager.GetContextState(vectorSetContext, out var inUse, out var isCleaningUp, out _);
+            ClassicAssert.IsFalse(inUse, $"context {vectorSetContext} of the Vector Set deleted during a checkpoint is still in use (cleaning up: {isCleaningUp}); its cleanup was never requested");
+        }
 #endif
 
         /// <summary>
