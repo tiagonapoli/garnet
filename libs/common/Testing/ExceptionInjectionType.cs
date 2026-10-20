@@ -160,5 +160,9 @@ namespace Garnet.common
         /// Pause after receiving the full diskless snapshot, before recovery resets the AOF addresses.
         /// </summary>
         Replication_Pause_Before_Diskless_Snapshot_Recovery,
+        /// <summary>
+        /// Pause the primary's streaming snapshot after the version shift, before the final scan captures the log tail.
+        /// </summary>
+        Replication_Pause_Before_Diskless_Snapshot_Final_Scan,
     }
 }
