@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -41,7 +40,7 @@ namespace Tsavorite.core
             [UnscopedRef]
             internal ref int GetRef(int instanceId)
             {
-                Debug.Assert(instanceId >= 0 && instanceId < MaxInstances);
+                if (!(instanceId >= 0 && instanceId < MaxInstances)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs:44: instanceId >= 0 && instanceId < MaxInstances");
                 return ref Unsafe.Add(ref field0, instanceId);
             }
         }
@@ -385,7 +384,7 @@ namespace Tsavorite.core
         /// <returns></returns>
         internal long BumpCurrentEpoch()
         {
-            Debug.Assert(ThisInstanceProtected(), "BumpCurrentEpoch must be called on a protected thread");
+            if (!(ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs:388: ThisInstanceProtected()" + " | " + ("BumpCurrentEpoch must be called on a protected thread"));
             var nextEpoch = Interlocked.Increment(ref CurrentEpoch);
 
             if (drainCount > 0)
@@ -850,8 +849,8 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ref long ThisThreadUserWord(int wordIndex)
         {
-            Debug.Assert((uint)wordIndex < MaxUserWords, "Invalid user-word index");
-            Debug.Assert(ThisInstanceProtected(), "ThisThreadUserWord must be called while epoch is protected");
+            if (!((uint)wordIndex < MaxUserWords)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs:853: (uint)wordIndex < MaxUserWords" + " | " + ("Invalid user-word index"));
+            if (!(ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs:854: ThisInstanceProtected()" + " | " + ("ThisThreadUserWord must be called while epoch is protected"));
             int entryIndex = Metadata.Entries.GetRef(instanceId);
             return ref UserWordRef(entryIndex, wordIndex);
         }
@@ -865,7 +864,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public long GetMinUserWord(int wordIndex)
         {
-            Debug.Assert((uint)wordIndex < MaxUserWords, "Invalid user-word index");
+            if (!((uint)wordIndex < MaxUserWords)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Epochs/LightEpoch.cs:868: (uint)wordIndex < MaxUserWords" + " | " + ("Invalid user-word index"));
 
             // Derive the base address from the actual Entry field layout via UserWordRef,
             // rather than hardcoding byte offsets. Entries occupy indices 1..kTableSize

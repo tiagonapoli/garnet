@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -104,7 +103,7 @@ namespace Tsavorite.core
                             goto CreateNewRecord;
 
                         default:
-                            Debug.Assert(latchDestination == LatchDestination.NormalProcessing, "Unknown latchDestination value; expected NormalProcessing");
+                            if (!(latchDestination == LatchDestination.NormalProcessing)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalUpsert.cs:107: latchDestination == LatchDestination.NormalProcessing" + " | " + ("Unknown latchDestination value; expected NormalProcessing"));
                             break;
                     }
                 }
@@ -167,13 +166,13 @@ namespace Tsavorite.core
                 }
 
                 // No record exists, or readonly or below. Drop through to create new record.
-                Debug.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei), "A Transactional-session Upsert() of an on-disk or non-existent key requires a LockTable lock");
+                if (!(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalUpsert.cs:170: !sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei)" + " | " + ("A Transactional-session Upsert() of an on-disk or non-existent key requires a LockTable lock"));
 
             CreateNewRecord:
                 status = CreateNewRecordUpsert<TKey, TValueSelector, TInput, TOutput, TContext, TSessionFunctionsWrapper, TSourceLogRecord>(
                         key, ref srcLogRecord, ref input, srcStringValue, srcObjectValue, in inputLogRecord, ref output, ref operationState, sessionFunctions, ref stackCtx, ref upsertInfo);
                 // We should never return "SUCCESS" for a new record operation: it returns NOTFOUND on success.
-                Debug.Assert(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS);
+                if (!(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalUpsert.cs:176: OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS");
                 goto Done;
             }
             finally

@@ -247,7 +247,7 @@ namespace Tsavorite.core
             // Single-owner invariant: only the natural owner of the page-turn is here, and natural owners are serialized by the page-turn
             // discipline (a thread can only become the owner of newPageIdx after the previous page's owner has published). So newPageIdx can
             // never exceed book.Length by more than 1.
-            Debug.Assert(newPageIdx <= localBook.Length, $"newPageIdx {newPageIdx} cannot exceed book.Length {localBook.Length} (single-owner discipline broken?)");
+            if (!(newPageIdx <= localBook.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:250: newPageIdx <= localBook.Length" + " | " + ($"newPageIdx {newPageIdx} cannot exceed book.Length {localBook.Length} (single-owner discipline broken?)"));
 
             // Test hook: in DEBUG builds, optionally throw before any state mutation so test code can deterministically exercise the rewind
             // path in CompleteAsPageOwner. Stripped from Release builds via [Conditional("DEBUG")].
@@ -305,7 +305,7 @@ namespace Tsavorite.core
             // non-OOM path, but a concurrent Allocate on another thread can advance it between the two reads we would otherwise do, producing
             // a misleading assertion message such as "index 1 must be less than Count 7" when at the moment of the failing check Count was <= 1.)
             var countSnapshot = Count;
-            Debug.Assert(index < countSnapshot, $"Get(): index {index} must be less than Count {countSnapshot}");
+            if (!(index < countSnapshot)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:308: index < countSnapshot" + " | " + ($"Get(): index {index} must be less than Count {countSnapshot}"));
 #endif
 
             // Volatile.Read on book (acquire) so an `index` handed to us via a non-synchronized channel from the allocating thread still sees the
@@ -318,7 +318,7 @@ namespace Tsavorite.core
             // Volatile.Read on the page slot for the same reason: ensures the page array reference and its contents (length, header) are
             // observed in a state consistent with the writer's Volatile.Write in AddPage.
             var localPage = Volatile.Read(ref localBook[pageIndex]);
-            Debug.Assert(localPage is not null, $"index {index} out of range of pages {pageIndex}");
+            if (!(localPage is not null)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:321: localPage is not null" + " | " + ($"index {index} out of range of pages {pageIndex}"));
             return localPage[blockIndex];
         }
 
@@ -353,7 +353,7 @@ namespace Tsavorite.core
 #if DEBUG
             // Cache Count in a local; see comment in Get for rationale.
             var countSnapshot = Count;
-            Debug.Assert(index < countSnapshot, $"Set(): index {index} must be less than Count {countSnapshot}");
+            if (!(index < countSnapshot)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:356: index < countSnapshot" + " | " + ($"Set(): index {index} must be less than Count {countSnapshot}"));
 #endif
 
             // See Get() for the rationale on Volatile.Read.
@@ -362,7 +362,7 @@ namespace Tsavorite.core
             var pageIndex = index >> MultiLevelPageArray.PageSizeBits;
             var blockIndex = index & MultiLevelPageArray.BlockIndexMask;
             var localPage = Volatile.Read(ref localBook[pageIndex]);
-            Debug.Assert(localPage is not null, $"index {index} out of range of pages {pageIndex}");
+            if (!(localPage is not null)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:365: localPage is not null" + " | " + ($"index {index} out of range of pages {pageIndex}"));
             localPage[blockIndex] = element;
         }
 
@@ -384,8 +384,7 @@ namespace Tsavorite.core
         public void Clear(int retainedPageCount = 1 << MultiLevelPageArray.PrimaryClearRetainedPageSizeBits)
         {
 #if DEBUG
-            Debug.Assert(Volatile.Read(ref inFlightAllocCount) == 0,
-                $"Clear() requires quiescence: {Volatile.Read(ref inFlightAllocCount)} Allocate call(s) currently in flight");
+            if (!(Volatile.Read(ref inFlightAllocCount) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:387: Volatile.Read(ref inFlightAllocCount) == 0" + " | " + ($"Clear() requires quiescence: {Volatile.Read(ref inFlightAllocCount)} Allocate call(s) currently in flight"));
 #endif
             if (!IsInitialized)
                 return;
@@ -415,8 +414,7 @@ namespace Tsavorite.core
         public void Clear(Action<TElement> action, int retainedPageCount = 1 << MultiLevelPageArray.PrimaryClearRetainedPageSizeBits)
         {
 #if DEBUG
-            Debug.Assert(Volatile.Read(ref inFlightAllocCount) == 0,
-                $"Clear(Action) requires quiescence: {Volatile.Read(ref inFlightAllocCount)} Allocate call(s) currently in flight");
+            if (!(Volatile.Read(ref inFlightAllocCount) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/MultiLevelPageArray.cs:418: Volatile.Read(ref inFlightAllocCount) == 0" + " | " + ($"Clear(Action) requires quiescence: {Volatile.Read(ref inFlightAllocCount)} Allocate call(s) currently in flight"));
 #endif
             if (!IsInitialized)
                 return;

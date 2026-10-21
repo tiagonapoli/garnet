@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -563,7 +562,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void UnsafeSuspendThread()
         {
-            Debug.Assert(store.epoch.ThisInstanceProtected());
+            if (!(store.epoch.ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/ClientSession/ClientSession.cs:566: store.epoch.ThisInstanceProtected()");
             store.epoch.Suspend();
         }
 

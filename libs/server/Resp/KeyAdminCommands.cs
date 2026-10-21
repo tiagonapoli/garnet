@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -307,7 +306,7 @@ namespace Garnet.server
             }
             else
             {
-                Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/KeyAdminCommands.cs:310: output.SpanByteAndMemory.IsSpanByte");
                 WriteNull();
             }
 

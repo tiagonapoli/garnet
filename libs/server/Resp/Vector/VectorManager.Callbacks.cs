@@ -4,7 +4,6 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -108,7 +107,7 @@ namespace Garnet.server
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             private void AdvanceTo(int i)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:111: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
 
                 if (i == currentIndex)
                 {
@@ -120,7 +119,7 @@ namespace Garnet.server
                 {
                     currentPtr += currentLen + sizeof(int); // Skip length prefix too
 
-                    Debug.Assert(currentPtr < lengthPrefixedKeys.ToPointer() + lengthPrefixedKeys.Length, "About to access out of bounds data");
+                    if (!(currentPtr < lengthPrefixedKeys.ToPointer() + lengthPrefixedKeys.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:123: currentPtr < lengthPrefixedKeys.ToPointer() + lengthPrefixedKeys.Length" + " | " + ("About to access out of bounds data"));
 
                     currentLen = *(int*)currentPtr;
 
@@ -157,7 +156,7 @@ namespace Garnet.server
             /// <inheritdoc/>
             public void GetKey(int i, out VectorElementKey key)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:160: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
 
                 AdvanceTo(i);
 
@@ -166,7 +165,6 @@ namespace Garnet.server
 
                 AssertKeyAlignment(in key);
 
-                [Conditional("DEBUG")]
                 static void AssertKeyAlignment(in VectorElementKey key)
                 {
                     ulong context;
@@ -180,19 +178,19 @@ namespace Garnet.server
                     }
                     else
                     {
-                        Debug.Fail("Unexpected namespace length");
+                        global::System.Environment.FailFast("Debug.Fail at libs/server/Resp/Vector/VectorManager.Callbacks.cs:183" + " | " + ("Unexpected namespace length"));
                         context = 0;
                     }
 
                     var keyLength = key.KeyBytes.Length;
-                    Debug.Assert(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0, "Unaligned key provided by DiskANN");
+                    if (!(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:188: ((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0" + " | " + ("Unaligned key provided by DiskANN"));
                 }
             }
 
             /// <inheritdoc/>
             public readonly void GetInput(int i, out VectorInput input)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:195: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
 
                 input = default;
                 input.CallbackContext = callbackContext;
@@ -203,7 +201,7 @@ namespace Garnet.server
             /// <inheritdoc/>
             public readonly void GetOutput(int i, out VectorOutput output)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:206: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
 
                 // Don't care, won't be used
                 Unsafe.SkipInit(out output);
@@ -212,13 +210,13 @@ namespace Garnet.server
             /// <inheritdoc/>
             public readonly void SetOutput(int i, VectorOutput output)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:215: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
             }
 
             /// <inheritdoc/>
             public void SetStatus(int i, Status status)
             {
-                Debug.Assert(i >= 0 && i < Count, "Trying to advance out of bounds");
+                if (!(i >= 0 && i < Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:221: i >= 0 && i < Count" + " | " + ("Trying to advance out of bounds"));
 
                 hasPending |= status.IsPending;
             }
@@ -360,7 +358,7 @@ namespace Garnet.server
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static unsafe byte WriteCallbackUnmanaged(ulong context, nint keyData, nuint keyLength, nint writeData, nuint writeLength)
         {
-            Debug.Assert(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0, "Unaligned key provided by DiskANN");
+            if (!(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:363: ((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0" + " | " + ("Unaligned key provided by DiskANN"));
 
             var keyWithNamespace = MakeVectorElementKey(context, keyData, keyLength);
 
@@ -390,7 +388,7 @@ namespace Garnet.server
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static byte DeleteCallbackUnmanaged(ulong context, nint keyData, nuint keyLength)
         {
-            Debug.Assert(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0, "Unaligned key provided by DiskANN");
+            if (!(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:393: ((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0" + " | " + ("Unaligned key provided by DiskANN"));
 
             var keyWithNamespace = MakeVectorElementKey(context, keyData, keyLength);
 
@@ -399,7 +397,7 @@ namespace Garnet.server
             // Outside the mutable region Delete appends a tombstone and reports NotFound even if the key existed, so probe first.
             var existed = Exists(ref ctx, keyWithNamespace);
             var status = ctx.Delete(keyWithNamespace);
-            Debug.Assert(!status.IsPending, "Deletes should never go async");
+            if (!(!status.IsPending)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:402: !status.IsPending" + " | " + ("Deletes should never go async"));
 
             RestoreKeyLengthPrefix(keyData, keyLength);
 
@@ -428,7 +426,7 @@ namespace Garnet.server
         [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
         private static byte ReadModifyWriteCallbackUnmanaged(ulong context, nint keyData, nuint keyLength, nuint writeLength, nint dataCallback, nint dataCallbackContext)
         {
-            Debug.Assert(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0, "Unaligned key provided by DiskANN");
+            if (!(((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:431: ((context & (ContextStep - 1)) is DiskANNService.InternalIdMap or DiskANNService.Attributes) || (keyLength % 4) == 0" + " | " + ("Unaligned key provided by DiskANN"));
 
             var keyWithNamespace = MakeVectorElementKey(context, keyData, keyLength);
 
@@ -467,7 +465,7 @@ namespace Garnet.server
 
         private static unsafe bool ReadSizeUnknown(ulong context, ReadOnlySpan<byte> key, ref SpanByteAndMemory value)
         {
-            Debug.Assert(context <= uint.MaxValue, "Contexts > 2^32-1 are not supported");
+            if (!(context <= uint.MaxValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Callbacks.cs:470: context <= uint.MaxValue" + " | " + ("Contexts > 2^32-1 are not supported"));
 
             Span<byte> nsBytes = stackalloc byte[sizeof(uint)];
             StoreContextInNamespace(context, ref nsBytes);

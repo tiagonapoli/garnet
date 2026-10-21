@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -226,8 +225,8 @@ namespace Garnet.server
         /// <param name="logAccessBitmap"></param>
         public void LockSublogs(ulong logAccessBitmap)
         {
-            Debug.Assert(serverOptions != null);
-            Debug.Assert(BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length);
+            if (!(serverOptions != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:229: serverOptions != null");
+            if (!(BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:230: BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length");
             shardedLog.LockSublogs(logAccessBitmap);
         }
 
@@ -237,8 +236,8 @@ namespace Garnet.server
         /// <param name="logAccessBitmap"></param>
         public void UnlockSublogs(ulong logAccessBitmap)
         {
-            Debug.Assert(shardedLog != null);
-            Debug.Assert(BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length);
+            if (!(shardedLog != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:240: shardedLog != null");
+            if (!(BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:241: BitOperations.PopCount(logAccessBitmap) <= shardedLog.Length");
             shardedLog.UnlockSublogs(logAccessBitmap);
         }
 
@@ -251,12 +250,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(sublogIdx == 0);
+                if (!(sublogIdx == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:254: sublogIdx == 0");
                 return singleLog.log;
             }
             else
             {
-                Debug.Assert(sublogIdx < shardedLog.Length);
+                if (!(sublogIdx < shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:259: sublogIdx < shardedLog.Length");
                 return shardedLog.sublog[sublogIdx];
             }
         }
@@ -271,12 +270,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(sublogIdx == 0);
+                if (!(sublogIdx == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:274: sublogIdx == 0");
                 return singleLog.log.TailAddress;
             }
             else
             {
-                Debug.Assert(sublogIdx < shardedLog.Length);
+                if (!(sublogIdx < shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:279: sublogIdx < shardedLog.Length");
                 return shardedLog.sublog[sublogIdx].TailAddress;
             }
         }
@@ -291,12 +290,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(sublogIdx == 0);
+                if (!(sublogIdx == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:294: sublogIdx == 0");
                 return singleLog.log.BeginAddress;
             }
             else
             {
-                Debug.Assert(sublogIdx < shardedLog.Length);
+                if (!(sublogIdx < shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:299: sublogIdx < shardedLog.Length");
                 return shardedLog.sublog[sublogIdx].BeginAddress;
             }
         }
@@ -333,12 +332,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(sublogIdx == 0);
+                if (!(sublogIdx == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:336: sublogIdx == 0");
                 return singleLog.log.Scan(beginAddress, endAddress, recover, scanBufferingMode, scanUncommitted, logger);
             }
             else
             {
-                Debug.Assert(sublogIdx < shardedLog.Length);
+                if (!(sublogIdx < shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:341: sublogIdx < shardedLog.Length");
                 return shardedLog.sublog[sublogIdx].Scan(beginAddress, endAddress, recover, scanBufferingMode, scanUncommitted, logger);
             }
         }
@@ -358,12 +357,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(sublogIdx == 0);
+                if (!(sublogIdx == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:361: sublogIdx == 0");
                 return singleLog.log.ScanSingle(beginAddress, endAddress, recover, scanBufferingMode, scanUncommitted, logger);
             }
             else
             {
-                Debug.Assert(sublogIdx < shardedLog.Length);
+                if (!(sublogIdx < shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:366: sublogIdx < shardedLog.Length");
                 return shardedLog.sublog[sublogIdx].ScanSingle(beginAddress, endAddress, recover, scanBufferingMode, scanUncommitted, logger);
             }
         }
@@ -458,12 +457,12 @@ namespace Garnet.server
         {
             if (singleLog != null)
             {
-                Debug.Assert(beginAddress.Length == 1);
+                if (!(beginAddress.Length == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:461: beginAddress.Length == 1");
                 singleLog.log.Initialize(beginAddress[0], committedUntilAddress[0], lastCommitNum);
             }
             else
             {
-                Debug.Assert(beginAddress.Length == shardedLog.Length);
+                if (!(beginAddress.Length == shardedLog.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/GarnetLog.cs:466: beginAddress.Length == shardedLog.Length");
                 for (var i = 0; i < shardedLog.Length; i++)
                     shardedLog.sublog[i].Initialize(beginAddress[i], committedUntilAddress[i], lastCommitNum);
             }

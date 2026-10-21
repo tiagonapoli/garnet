@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -31,7 +30,7 @@ namespace Garnet.server
             switch (status)
             {
                 case GarnetStatus.NOTFOUND:
-                    Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                    if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicEtagCommands.cs:34: output.SpanByteAndMemory.IsSpanByte");
                     WriteNull();
                     break;
                 case GarnetStatus.WRONGTYPE:
@@ -63,7 +62,7 @@ namespace Garnet.server
             switch (status)
             {
                 case GarnetStatus.NOTFOUND:
-                    Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                    if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicEtagCommands.cs:66: output.SpanByteAndMemory.IsSpanByte");
                     WriteNull();
                     break;
                 case GarnetStatus.WRONGTYPE:
@@ -195,7 +194,7 @@ namespace Garnet.server
             where TGarnetApi : IGarnetApi
         {
             // Currently only supports these two commands
-            Debug.Assert(cmd is RespCommand.SETIFMATCH or RespCommand.SETIFGREATER);
+            if (!(cmd is RespCommand.SETIFMATCH or RespCommand.SETIFGREATER)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicEtagCommands.cs:198: cmd is RespCommand.SETIFMATCH or RespCommand.SETIFGREATER");
 
             if (parseState.Count < 3 || parseState.Count > 6)
             {

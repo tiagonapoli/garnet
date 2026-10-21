@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -22,20 +21,18 @@ namespace Tsavorite.core
         public const byte MaximumExtendedNamespaceSize = (1 << RecordDataHeader.ExtendedNamespaceIndicatorBit) - 1;
 
         /// <summary>Asserts <paramref name="namespaceBytes"/> satisfies the <see cref="IKey.NamespaceBytes"/> contract.</summary>
-        [Conditional("DEBUG")]
         public static void AssertValid(ReadOnlySpan<byte> namespaceBytes)
         {
-            Debug.Assert(!namespaceBytes.IsEmpty, "Namespace cannot be empty");
-            Debug.Assert(namespaceBytes.Length != 1 || namespaceBytes[0] != 0, "The single-byte namespace value 0 is reserved");
-            Debug.Assert(namespaceBytes.Length <= MaximumExtendedNamespaceSize, $"Namespace size {namespaceBytes.Length} exceeds the maximum of {MaximumExtendedNamespaceSize}");
+            if (!(!namespaceBytes.IsEmpty)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/RecordNamespace.cs:28: !namespaceBytes.IsEmpty" + " | " + ("Namespace cannot be empty"));
+            if (!(namespaceBytes.Length != 1 || namespaceBytes[0] != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/RecordNamespace.cs:29: namespaceBytes.Length != 1 || namespaceBytes[0] != 0" + " | " + ("The single-byte namespace value 0 is reserved"));
+            if (!(namespaceBytes.Length <= MaximumExtendedNamespaceSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/RecordNamespace.cs:30: namespaceBytes.Length <= MaximumExtendedNamespaceSize" + " | " + ($"Namespace size {namespaceBytes.Length} exceeds the maximum of {MaximumExtendedNamespaceSize}"));
         }
 
         /// <summary>Asserts the caller sized the record for the namespace of <paramref name="key"/>; a mismatch frames the record incorrectly.</summary>
-        [Conditional("DEBUG")]
         public static void AssertKeyCorrectlySized<TKey>(TKey key, in RecordSizeInfo sizeInfo) where TKey : IKey, allows ref struct
         {
             var expectedExtendedSize = GetExtendedNamespaceSize(in key);
-            Debug.Assert(sizeInfo.FieldInfo.ExtendedNamespaceSize == expectedExtendedSize, $"Extended namespace size {sizeInfo.FieldInfo.ExtendedNamespaceSize} does not match the key's required size {expectedExtendedSize}");
+            if (!(sizeInfo.FieldInfo.ExtendedNamespaceSize == expectedExtendedSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/RecordNamespace.cs:38: sizeInfo.FieldInfo.ExtendedNamespaceSize == expectedExtendedSize" + " | " + ($"Extended namespace size {sizeInfo.FieldInfo.ExtendedNamespaceSize} does not match the key's required size {expectedExtendedSize}"));
         }
 
         /// <summary>The record space the namespace of <paramref name="key"/> requires ahead of the Key data; 0 if it needs none.</summary>

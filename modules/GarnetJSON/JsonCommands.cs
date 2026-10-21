@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using Garnet.common;
 using Garnet.server;
 using Garnet.server.Custom;
@@ -43,7 +42,7 @@ namespace GarnetJSON
         /// <returns>True if the update is successful, otherwise false.</returns>
         public override bool Updater(ReadOnlySpan<byte> key, ref ObjectInput input, IGarnetObject jsonObject, ref RespMemoryWriter writer, ref RMWInfo rmwInfo)
         {
-            Debug.Assert(jsonObject is GarnetJsonObject);
+            if (!(jsonObject is GarnetJsonObject)) global::System.Environment.FailFast("Debug.Assert failed at modules/GarnetJSON/JsonCommands.cs:46: jsonObject is GarnetJsonObject");
 
             var parseState = input.parseState;
             if (parseState.Count is not (2 or 3))
@@ -62,7 +61,7 @@ namespace GarnetJSON
             }
 
             var garnetJsonObject = jsonObject as GarnetJsonObject;
-            Debug.Assert(garnetJsonObject is not null);
+            if (!(garnetJsonObject is not null)) global::System.Environment.FailFast("Debug.Assert failed at modules/GarnetJSON/JsonCommands.cs:65: garnetJsonObject is not null");
 
             var result = garnetJsonObject.Set(path, value, existOptions, out var errorMessage);
 
@@ -106,9 +105,9 @@ namespace GarnetJSON
         /// <returns>True if the read is successful, otherwise false.</returns>
         public override bool Reader(ReadOnlySpan<byte> key, ref ObjectInput input, IGarnetObject jsonObject, ref RespMemoryWriter writer, ref ReadInfo readInfo)
         {
-            Debug.Assert(jsonObject is GarnetJsonObject);
+            if (!(jsonObject is GarnetJsonObject)) global::System.Environment.FailFast("Debug.Assert failed at modules/GarnetJSON/JsonCommands.cs:109: jsonObject is GarnetJsonObject");
             var garnetJsonObject = jsonObject as GarnetJsonObject;
-            Debug.Assert(garnetJsonObject is not null);
+            if (!(garnetJsonObject is not null)) global::System.Environment.FailFast("Debug.Assert failed at modules/GarnetJSON/JsonCommands.cs:111: garnetJsonObject is not null");
 
             var parseState = input.parseState;
 

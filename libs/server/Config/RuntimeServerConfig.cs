@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -355,8 +354,7 @@ namespace Garnet.server
         public TEnum GetEnum<TEnum>(ServerConfigType type) where TEnum : unmanaged, Enum
         {
             AssertKind(type, ConfigKind.Enum);
-            Debug.Assert(Meta[(int)type].EnumType == typeof(TEnum),
-                $"Configuration '{type}' is declared as '{Meta[(int)type].EnumType}' and cannot be read as '{typeof(TEnum)}'.");
+            if (!(Meta[(int)type].EnumType == typeof(TEnum))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Config/RuntimeServerConfig.cs:358: Meta[(int)type].EnumType == typeof(TEnum)" + " | " + ($"Configuration '{type}' is declared as '{Meta[(int)type].EnumType}' and cannot be read as '{typeof(TEnum)}'."));
 
             // The slot holds the underlying value widened to 64 bits (long)
             var raw = Volatile.Read(ref values[(int)type]);
@@ -567,11 +565,9 @@ namespace Garnet.server
         static int SecondsFromTimeSpan(TimeSpan ts)
             => ts == Timeout.InfiniteTimeSpan || ts < TimeSpan.Zero ? 0 : (int)ts.TotalSeconds;
 
-        [Conditional("DEBUG")]
         static void AssertKind(ServerConfigType type, ConfigKind requestedKind)
         {
-            Debug.Assert((Meta[(int)type].Kind & requestedKind) != 0,
-                $"Configuration '{type}' is declared as {Meta[(int)type].Kind} and cannot be read as {requestedKind}.");
+            if (!((Meta[(int)type].Kind & requestedKind) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Config/RuntimeServerConfig.cs:573: (Meta[(int)type].Kind & requestedKind) != 0" + " | " + ($"Configuration '{type}' is declared as {Meta[(int)type].Kind} and cannot be read as {requestedKind}."));
         }
 
         // Read a duration-valued slot and convert it from its stored unit to the requested unit.

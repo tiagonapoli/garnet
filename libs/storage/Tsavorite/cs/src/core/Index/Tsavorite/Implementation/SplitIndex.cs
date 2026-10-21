@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -27,7 +26,7 @@ namespace Tsavorite.core
                 _ = Thread.Yield();
 
             // Splits done; the capacity held for them returns to ordinary allocations.
-            Debug.Assert(numPendingChunksToBeSplit == 0);
+            if (!(numPendingChunksToBeSplit == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/SplitIndex.cs:30: numPendingChunksToBeSplit == 0");
             overflowBucketsAllocator.ReleaseReservation();
 
             // GC the old version of the hash table
@@ -145,7 +144,7 @@ namespace Tsavorite.core
 
                 var systemState = stateMachineDriver.SystemState;
                 // Verify that we are not moving latched buckets
-                Debug.Assert(!HashBucket.IsLatched(src_start));
+                if (!(!HashBucket.IsLatched(src_start))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/SplitIndex.cs:148: !HashBucket.IsLatched(src_start)");
 
                 HashBucketEntry entry = default;
                 do

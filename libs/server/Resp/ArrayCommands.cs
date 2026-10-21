@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -146,7 +145,7 @@ namespace Garnet.server
             else
             {
                 // Should never reach here
-                Debug.Fail("Database SELECT should have succeeded.");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Resp/ArrayCommands.cs:149" + " | " + ("Database SELECT should have succeeded."));
                 while (!RespWriteUtils.TryWriteError(CmdStrings.RESP_ERR_SELECT_UNSUCCESSFUL, ref dcurr, dend))
                     SendAndReset();
             }

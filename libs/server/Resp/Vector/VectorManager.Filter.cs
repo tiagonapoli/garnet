@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -262,7 +261,7 @@ namespace Garnet.server
         /// </summary>
         private static unsafe byte EvaluateCandidateFilter(ulong context, ReadOnlySpan<byte> attr)
         {
-            Debug.Assert(InlineFilterStatePtr != null, "Shouldn't call without pinning a filter state");
+            if (!(InlineFilterStatePtr != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Filter.cs:265: InlineFilterStatePtr != null" + " | " + ("Shouldn't call without pinning a filter state"));
             ref var state
                 = ref Unsafe.AsRef<InlineFilterState>(InlineFilterStatePtr);
 

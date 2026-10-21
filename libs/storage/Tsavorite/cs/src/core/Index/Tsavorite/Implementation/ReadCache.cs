@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -18,7 +17,7 @@ namespace Tsavorite.core
         internal bool FindInReadCache<TKey>(TKey key, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx, long minAddress = kInvalidAddress, bool alwaysFindLatestLA = true)
             where TKey : IKey, allows ref struct
         {
-            Debug.Assert(UseReadCache, "Should not call FindInReadCache if !UseReadCache");
+            if (!(UseReadCache)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:21: UseReadCache" + " | " + ("Should not call FindInReadCache if !UseReadCache"));
 
             // minAddress, if present, comes from the pre-pendingIO entry.Address; there may have been no readcache entries then.
             minAddress = IsReadCache(minAddress) ? AbsoluteAddress(minAddress) : readcacheBase.HeadAddress;
@@ -73,8 +72,7 @@ namespace Tsavorite.core
                 // boundary above or holds an epoch that gates the unlink. Its PreviousAddress is therefore always a live
                 // address (a lower readcache record or the main-log boundary). SkipReadCache relies on this same invariant
                 // without a check.
-                Debug.Assert(recordInfo.PreviousAddress > kTempInvalidAddress,
-                    "readcache record's PreviousAddress was kInvalid/kTempInvalid; eviction must not be observable here under epoch");
+                if (!(recordInfo.PreviousAddress > kTempInvalidAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:76: recordInfo.PreviousAddress > kTempInvalidAddress" + " | " + ("readcache record's PreviousAddress was kInvalid/kTempInvalid; eviction must not be observable here under epoch"));
 
                 // Update the leading LatestLogicalAddress to recordInfo.PreviousAddress, and if that is a main log record, break out.
                 stackCtx.recSrc.LatestLogicalAddress = recordInfo.PreviousAddress;
@@ -87,8 +85,8 @@ namespace Tsavorite.core
                 return true;
 
             // We did not find the record in the readcache, so set these to the start of the main log entries, and the caller will call TracebackForKeyMatch
-            Debug.Assert(ReferenceEquals(stackCtx.recSrc.AllocatorBase, hlogBase), "Expected recSrc.AllocatorBase == hlogBase");
-            Debug.Assert(stackCtx.recSrc.LatestLogicalAddress > kTempInvalidAddress, "Must have a main-log address after readcache");
+            if (!(ReferenceEquals(stackCtx.recSrc.AllocatorBase, hlogBase))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:90: ReferenceEquals(stackCtx.recSrc.AllocatorBase, hlogBase)" + " | " + ("Expected recSrc.AllocatorBase == hlogBase"));
+            if (!(stackCtx.recSrc.LatestLogicalAddress > kTempInvalidAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:91: stackCtx.recSrc.LatestLogicalAddress > kTempInvalidAddress" + " | " + ("Must have a main-log address after readcache"));
             stackCtx.recSrc.LogicalAddress = stackCtx.recSrc.LatestLogicalAddress;
             stackCtx.recSrc.PhysicalAddress = 0; // do *not* call hlog.GetPhysicalAddress(); LogicalAddress may be below hlog.HeadAddress. Let the caller decide when to do this.
             return false;
@@ -97,8 +95,8 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         bool ReadCacheNeedToWaitForEviction(ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
         {
-            Debug.Assert(stackCtx.hei.IsReadCache, "Can only call ReadCacheNeedToWaitForEviction when hei.IsReadCache is true");
-            Debug.Assert(IsReadCache(stackCtx.recSrc.LatestLogicalAddress), "Can only call ReadCacheNeedToWaitForEviction when stackCtx.recSrc.LatestLogicalAddress is readcache");
+            if (!(stackCtx.hei.IsReadCache)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:100: stackCtx.hei.IsReadCache" + " | " + ("Can only call ReadCacheNeedToWaitForEviction when hei.IsReadCache is true"));
+            if (!(IsReadCache(stackCtx.recSrc.LatestLogicalAddress))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:101: IsReadCache(stackCtx.recSrc.LatestLogicalAddress)" + " | " + ("Can only call ReadCacheNeedToWaitForEviction when stackCtx.recSrc.LatestLogicalAddress is readcache"));
             var logicalAddress = AbsoluteAddress(stackCtx.recSrc.LatestLogicalAddress);
             if (logicalAddress < readcacheBase.HeadAddress)
             {
@@ -115,7 +113,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void SkipReadCache(ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx, out bool didRefresh)
         {
-            Debug.Assert(UseReadCache, "Should not call SkipReadCache if !UseReadCache");
+            if (!(UseReadCache)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:118: UseReadCache" + " | " + ("Should not call SkipReadCache if !UseReadCache"));
             didRefresh = false;
 
         RestartChain:
@@ -214,7 +212,7 @@ namespace Tsavorite.core
                 //  2. Call FindTag on that key in the main store to get the start of the hash chain.
                 //  3. Walk the hash chain's readcache entries, removing records in the "to be removed" range.
                 //     Do not remove Invalid records outside this range; that leads to race conditions.
-                Debug.Assert(!IsReadCache(rcRecordInfo.PreviousAddress) || AbsoluteAddress(rcRecordInfo.PreviousAddress) < rcLogicalAddress, "Invalid record ordering in readcache");
+                if (!(!IsReadCache(rcRecordInfo.PreviousAddress) || AbsoluteAddress(rcRecordInfo.PreviousAddress) < rcLogicalAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:217: !IsReadCache(rcRecordInfo.PreviousAddress) || AbsoluteAddress(rcRecordInfo.PreviousAddress) < rcLogicalAddress" + " | " + ("Invalid record ordering in readcache"));
 
                 // Find the hash index entry for the key in the store's hash table.
                 HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(logRecord));
@@ -250,13 +248,13 @@ namespace Tsavorite.core
                 var mask = state[resizeInfo.version].size_mask;
                 var rc_mask = hei.hash & mask;
                 var pa_mask = storeFunctions.GetKeyHashCode64(logRecord) & mask;
-                Debug.Assert(rc_mask == pa_mask, "The keyHash mask of the hash-chain ReadCache entry does not match the one obtained from the initial readcache address");
+                if (!(rc_mask == pa_mask)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:253: rc_mask == pa_mask" + " | " + ("The keyHash mask of the hash-chain ReadCache entry does not match the one obtained from the initial readcache address"));
 #endif
 
                 // If the record's address is above the eviction range, leave it there and track nextPhysicalAddress.
                 if (AbsoluteAddress(entry.Address) >= rcToLogicalAddress)
                 {
-                    Debug.Assert(!IsReadCache(recordInfo.PreviousAddress) || entry.Address > recordInfo.PreviousAddress, "Invalid ordering in readcache chain");
+                    if (!(!IsReadCache(recordInfo.PreviousAddress) || entry.Address > recordInfo.PreviousAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:259: !IsReadCache(recordInfo.PreviousAddress) || entry.Address > recordInfo.PreviousAddress" + " | " + ("Invalid ordering in readcache chain"));
 
                     nextPhysicalAddress = logRecord.physicalAddress;
                     entry.word = recordInfo.PreviousAddress;
@@ -274,7 +272,7 @@ namespace Tsavorite.core
                         entry.word = nextri.PreviousAddress;
                     }
                     else
-                        Debug.Assert(entry.word == nextri.PreviousAddress, "We should be about to retry nextri.PreviousAddress");
+                        { if (!(entry.word == nextri.PreviousAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ReadCache.cs:277: entry.word == nextri.PreviousAddress" + " | " + ("We should be about to retry nextri.PreviousAddress")); }
                     continue;
                 }
 

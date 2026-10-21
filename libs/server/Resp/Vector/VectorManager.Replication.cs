@@ -5,7 +5,6 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -88,7 +87,7 @@ namespace Garnet.server
         /// </summary>
         internal void ReplicateVectorSetAdd(ReadOnlySpan<byte> key, ref StringInput input, ref StringBasicContext context)
         {
-            Debug.Assert(input.header.cmd == RespCommand.VADD, "Shouldn't be called with anything but VADD inputs");
+            if (!(input.header.cmd == RespCommand.VADD)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:91: input.header.cmd == RespCommand.VADD" + " | " + ("Shouldn't be called with anything but VADD inputs"));
 
             var inputCopy = input;
             inputCopy.arg1 = VADDAppendLogArg;
@@ -120,7 +119,7 @@ namespace Garnet.server
         /// </summary>
         internal void ReplicateVectorSetRemove(ReadOnlySpan<byte> key, ReadOnlySpan<byte> element, ref StringInput input, ref StringBasicContext context)
         {
-            Debug.Assert(input.header.cmd == RespCommand.VREM, "Shouldn't be called with anything but VREM inputs");
+            if (!(input.header.cmd == RespCommand.VREM)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:123: input.header.cmd == RespCommand.VREM" + " | " + ("Shouldn't be called with anything but VREM inputs"));
 
             var inputCopy = input;
             inputCopy.arg1 = VREMAppendLogArg;
@@ -145,7 +144,7 @@ namespace Garnet.server
 
         internal void ReplicateVectorSetSetAttribute(ReadOnlySpan<byte> key, ReadOnlySpan<byte> element, ReadOnlySpan<byte> attribute, ref StringInput input, ref StringBasicContext context)
         {
-            Debug.Assert(input.header.cmd == RespCommand.VSETATTR, "Shouldn't be called with anything but VSETATTR inputs");
+            if (!(input.header.cmd == RespCommand.VSETATTR)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:148: input.header.cmd == RespCommand.VSETATTR" + " | " + ("Shouldn't be called with anything but VSETATTR inputs"));
 
             var inputCopy = input;
             inputCopy.arg1 = VSETATTRAppendLogArg;
@@ -224,7 +223,7 @@ namespace Garnet.server
                 throw new GarnetException("Vector Set preview is disabled during import replay");
             }
 
-            Debug.Assert(input.header.cmd is RespCommand.XVCREATE or RespCommand.XVIMPORT, "Only XVCREATE and XVIMPORT should be redirected here");
+            if (!(input.header.cmd is RespCommand.XVCREATE or RespCommand.XVIMPORT)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:227: input.header.cmd is RespCommand.XVCREATE or RespCommand.XVIMPORT" + " | " + ("Only XVCREATE and XVIMPORT should be redirected here"));
 
             WaitForImportFinalization(key);
 
@@ -300,7 +299,7 @@ namespace Garnet.server
         /// </summary>
         private void ClearMigratedContextRemap()
         {
-            Debug.Assert(Monitor.IsEntered(this), "Migration remap is guarded by lock (this)");
+            if (!(Monitor.IsEntered(this))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:303: Monitor.IsEntered(this)" + " | " + ("Migration remap is guarded by lock (this)"));
 
             migratedContextRemap.Clear();
             migratedContextTargets.Clear();
@@ -393,7 +392,7 @@ namespace Garnet.server
             ref StringInput input
         )
         {
-            Debug.Assert(Volatile.Read(ref replicationReplayStarted) != -1, "VectorManager replication channels were disposed and HandleVectorSetAddReplication was called");
+            if (!(Volatile.Read(ref replicationReplayStarted) != -1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:396: Volatile.Read(ref replicationReplayStarted) != -1" + " | " + ("VectorManager replication channels were disposed and HandleVectorSetAddReplication was called"));
 
             WaitForImportFinalization(key);
 
@@ -413,7 +412,7 @@ namespace Garnet.server
 
                 var value = input.parseState.GetArgSliceByRef(1);
 
-                Debug.Assert(elementNsLen == 4, "Should always receive a 4-byte namespace");
+                if (!(elementNsLen == 4)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:416: elementNsLen == 4" + " | " + ("Should always receive a 4-byte namespace"));
                 ulong ns = BinaryPrimitives.ReadUInt32LittleEndian(elementNsBytes);
 
                 // REPLICAs wouldn't have seen a reservation message, so allocate this on demand
@@ -483,7 +482,7 @@ namespace Garnet.server
                 return;
             }
 
-            Debug.Assert(input.arg1 == VADDAppendLogArg, "Unexpected operation during replication");
+            if (!(input.arg1 == VADDAppendLogArg)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:486: input.arg1 == VADDAppendLogArg" + " | " + ("Unexpected operation during replication"));
 
             // Undo mangling that got replication going
             var inputCopy = input;
@@ -546,7 +545,7 @@ namespace Garnet.server
             if (!queued)
             {
                 logger?.LogCritical("VectorManager replication replay channel dropped a VADD, this should never happen, data loss will occur");
-                Debug.Assert(false, "VectorManager replication replay channel should never drop a VADD");
+                if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:549: false" + " | " + ("VectorManager replication replay channel should never drop a VADD"));
                 CompleteReplayEntry(state);
 
                 throw new GarnetException("Vector replay queue is closed");
@@ -774,7 +773,7 @@ namespace Garnet.server
             if (previousValue == -1 || !completed)
             {
                 logger.LogWarning("VectorManager replication replay tasks failed disposal - probably duplicate call");
-                Debug.Assert(false, "VectorManager replication tasks were already disposed");
+                if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:777: false" + " | " + ("VectorManager replication tasks were already disposed"));
             }
         }
 
@@ -814,8 +813,8 @@ namespace Garnet.server
             // Don't need *WithElement lock here because each element's replays run in order on a single replay task
             using (ReadVectorIndex(storageSession, key, ref input, indexSpan, out var status, out var importPending))
             {
-                Debug.Assert(status == GarnetStatus.OK, "Replication should only occur when a remove is successful, so index must exist");
-                Debug.Assert(!importPending, "Replication should only occur when a remove is successful, so index should not be importing");
+                if (!(status == GarnetStatus.OK)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:817: status == GarnetStatus.OK" + " | " + ("Replication should only occur when a remove is successful, so index must exist"));
+                if (!(!importPending)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:818: !importPending" + " | " + ("Replication should only occur when a remove is successful, so index should not be importing"));
 
                 var remRes = TryRemove(indexSpan, element);
 
@@ -845,8 +844,8 @@ namespace Garnet.server
             // Don't need *WithElement lock here because setattrs won't be concurrent to adds or updates
             using (ReadVectorIndex(storageSession, key, ref inputCopy, indexSpan, out var status, out var importPending))
             {
-                Debug.Assert(status == GarnetStatus.OK, "Replication should only occur when a setattr is successful, so index must exist");
-                Debug.Assert(!importPending, "Replication should only occur when a setattr is successful, so index should not be importing");
+                if (!(status == GarnetStatus.OK)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:848: status == GarnetStatus.OK" + " | " + ("Replication should only occur when a setattr is successful, so index must exist"));
+                if (!(!importPending)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:849: !importPending" + " | " + ("Replication should only occur when a setattr is successful, so index should not be importing"));
 
                 if (!TrySetAttribute(indexSpan, element, attribute))
                 {
@@ -892,10 +891,10 @@ namespace Garnet.server
             {
                 _ = unifiedContext.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                 var more = completedOutputs.Next();
-                Debug.Assert(more);
+                if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:895: more");
                 readStatus = completedOutputs.Current.Status;
                 output = completedOutputs.Current.Output;
-                Debug.Assert(!completedOutputs.Next());
+                if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:898: !completedOutputs.Next()");
                 completedOutputs.Dispose();
             }
 
@@ -915,9 +914,9 @@ namespace Garnet.server
                 {
                     _ = unifiedContext.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                     var more = completedOutputs.Next();
-                    Debug.Assert(more);
+                    if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:918: more");
                     upsertStatus = completedOutputs.Current.Status;
-                    Debug.Assert(!completedOutputs.Next());
+                    if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:920: !completedOutputs.Next()");
                     completedOutputs.Dispose();
                 }
             }

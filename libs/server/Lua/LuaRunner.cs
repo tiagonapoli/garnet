@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Linq;
@@ -511,11 +510,11 @@ namespace Garnet.server
         /// </summary>
         private int LuaWrappedError([ConstantExpected] int nonErrorReturns, ReadOnlySpan<byte> errorMsg)
         {
-            Debug.Assert(nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1, "Cannot safely return this many returns in an error path");
+            if (!(nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:514: nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1" + " | " + ("Cannot safely return this many returns in an error path"));
 
             state.ClearStack();
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1), "Bounds check above should mean this never fails");
+            if (!(state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:518: state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1)" + " | " + ("Bounds check above should mean this never fails"));
 
             for (var i = 0; i < nonErrorReturns; i++)
             {
@@ -540,11 +539,11 @@ namespace Garnet.server
         /// </summary>
         private int LuaWrappedError([ConstantExpected] int nonErrorReturns, int constStringRegistryIndex)
         {
-            Debug.Assert(nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1, "Cannot safely return this many returns in an error path");
+            if (!(nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:543: nonErrorReturns <= LuaStateWrapper.LUA_MINSTACK - 1" + " | " + ("Cannot safely return this many returns in an error path"));
 
             state.ClearStack();
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1), "Should never fail, as nonErrorReturns+1 <= LUA_MINSTACK");
+            if (!(state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:547: state.TryEnsureMinimumStackCapacity(nonErrorReturns + 1)" + " | " + ("Should never fail, as nonErrorReturns+1 <= LUA_MINSTACK"));
 
             for (var i = 0; i < nonErrorReturns; i++)
             {
@@ -613,7 +612,7 @@ namespace Garnet.server
                         }
 
                         state.RawSet(1, curTop + 1, ref setInOkTable);
-                        Debug.Assert(setInOkTable == 1, "Didn't fill table with expected records");
+                        if (!(setInOkTable == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:616: setInOkTable == 1" + " | " + ("Didn't fill table with expected records"));
 
                         return 1;
                     }
@@ -788,11 +787,11 @@ namespace Garnet.server
                             // Set t[k] = v
                             state.RawSet(mapPairCount, curTop + 3, ref setRecordsInMap);
                         }
-                        Debug.Assert(mapPairCount == setRecordsInMap, "Didn't fill table with records");
+                        if (!(mapPairCount == setRecordsInMap)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:791: mapPairCount == setRecordsInMap" + " | " + ("Didn't fill table with records"));
 
                         // Store the sub-table into the parent table
                         state.RawSet(1, curTop + 1, ref setRecordsInTable);
-                        Debug.Assert(setRecordsInMap == 1, "Didn't fill table with records");
+                        if (!(setRecordsInMap == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:795: setRecordsInMap == 1" + " | " + ("Didn't fill table with records"));
 
                         return 1;
                     }
@@ -872,11 +871,11 @@ namespace Garnet.server
                             // Set t[value] = true
                             state.RawSet(setItemCount, curTop + 3, ref setRecordsInSet);
                         }
-                        Debug.Assert(setItemCount == setRecordsInSet, "Didn't fill table with records");
+                        if (!(setItemCount == setRecordsInSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:875: setItemCount == setRecordsInSet" + " | " + ("Didn't fill table with records"));
 
                         // Store the sub-table into the parent table
                         state.RawSet(1, curTop + 1, ref setRecordsInTable);
-                        Debug.Assert(setRecordsInTable == 1, "Didn't fill table with records");
+                        if (!(setRecordsInTable == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:879: setRecordsInTable == 1" + " | " + ("Didn't fill table with records"));
 
                         return 1;
                     }
@@ -986,7 +985,7 @@ namespace Garnet.server
                             state.PushNumber(parsed);
 
                             state.RawSet(1, curTop + 1, ref setRecordsInTable);
-                            Debug.Assert(setRecordsInTable == 1, "Didn't fill table with records");
+                            if (!(setRecordsInTable == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:989: setRecordsInTable == 1" + " | " + ("Didn't fill table with records"));
 
                             return 1;
                         }
@@ -1042,7 +1041,7 @@ namespace Garnet.server
                                 }
 
                                 state.RawSet(1, curTop + 1, ref setRecordsInTable);
-                                Debug.Assert(setRecordsInTable == 1, "Didn't fill table with records");
+                                if (!(setRecordsInTable == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1045: setRecordsInTable == 1" + " | " + ("Didn't fill table with records"));
 
                                 return 1;
                             }
@@ -1109,7 +1108,7 @@ namespace Garnet.server
                             }
 
                             state.RawSet(2, curTop + 1, ref setRecordsInTable);
-                            Debug.Assert(setRecordsInTable == 2, "Didn't fill table with records");
+                            if (!(setRecordsInTable == 2)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1112: setRecordsInTable == 2" + " | " + ("Didn't fill table with records"));
 
                             return 1;
                         }
@@ -1132,7 +1131,7 @@ namespace Garnet.server
             // Space for function
             const int NeededStackSize = 1;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSize), "LUA_MINSTACK should be large enough that this never fails");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1135: state.TryEnsureMinimumStackCapacity(NeededStackSize)" + " | " + ("LUA_MINSTACK should be large enough that this never fails"));
 
             preambleOuterSession = outerSession;
             preambleKeyAndArgvCount = count;
@@ -1195,7 +1194,7 @@ namespace Garnet.server
             // Space for function
             const int NeededStackSize = 1;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSize), "LUA_MINSTACK should be large enough that this never fails");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1198: state.TryEnsureMinimumStackCapacity(NeededStackSize)" + " | " + ("LUA_MINSTACK should be large enough that this never fails"));
 
             try
             {
@@ -1262,7 +1261,7 @@ namespace Garnet.server
                 }
 
                 var ret = MapRespToObject(ref respCur, respEnd);
-                Debug.Assert(respCur == respEnd, "Should have fully consumed response");
+                if (!(respCur == respEnd)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1265: respCur == respEnd" + " | " + ("Should have fully consumed response"));
 
                 return ret;
             }
@@ -1278,13 +1277,13 @@ namespace Garnet.server
                 {
                     case (byte)'+':
                         var simpleStrRes = RespReadUtils.TryReadSimpleString(out var simpleStr, ref cur, end);
-                        Debug.Assert(simpleStrRes, "Should never fail");
+                        if (!(simpleStrRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1281: simpleStrRes" + " | " + ("Should never fail"));
 
                         return simpleStr;
 
                     case (byte)':':
                         var readIntRes = RespReadUtils.TryReadInt64(out var int64, ref cur, end);
-                        Debug.Assert(readIntRes, "Should never fail");
+                        if (!(readIntRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1287: readIntRes" + " | " + ("Should never fail"));
 
                         return int64;
 
@@ -1300,13 +1299,13 @@ namespace Garnet.server
                         }
 
                         var bulkStrRes = RespReadUtils.TryReadStringResponseWithLengthHeader(out var bulkStr, ref cur, end);
-                        Debug.Assert(bulkStrRes, "Should never fail");
+                        if (!(bulkStrRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1303: bulkStrRes" + " | " + ("Should never fail"));
 
                         return bulkStr;
 
                     case (byte)'*':
                         var arrayLengthRes = RespReadUtils.TryReadUnsignedArrayLength(out var itemCount, ref cur, end);
-                        Debug.Assert(arrayLengthRes, "Should never fail");
+                        if (!(arrayLengthRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1309: arrayLengthRes" + " | " + ("Should never fail"));
 
                         if (itemCount == 0)
                         {
@@ -1386,7 +1385,7 @@ namespace Garnet.server
             // Space for key count, value count, and function
             const int NeededStackSize = 3;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSize), "LUA_MINSTACK should be large enough that this never fails");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1389: state.TryEnsureMinimumStackCapacity(NeededStackSize)" + " | " + ("LUA_MINSTACK should be large enough that this never fails"));
 
             if (keyLength > nKeys || argvLength > nArgs)
             {
@@ -1418,7 +1417,7 @@ namespace Garnet.server
             // 1 for sandbox_env, 1 for "KEYS", and 1 for new table
             const int NeededStackSpace = 3;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSpace), "LUA_MINSTACK should ensure this always succeeds");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSpace))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1421: state.TryEnsureMinimumStackCapacity(NeededStackSpace)" + " | " + ("LUA_MINSTACK should ensure this always succeeds"));
 
             // Get sandbox_env and "KEYS" on the stack
             _ = state.RawGetInteger(LuaType.Table, (int)LuaRegistry.Index, sandboxEnvRegistryIndex);
@@ -1451,7 +1450,7 @@ namespace Garnet.server
             // 1 for sandbox_env, 1 for "ARGV", and 1 for new table
             const int NeededStackSpace = 3;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSpace), "LUA_MINSTACK should ensure this always succeeds");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSpace))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1454: state.TryEnsureMinimumStackCapacity(NeededStackSpace)" + " | " + ("LUA_MINSTACK should ensure this always succeeds"));
 
             // Get sandbox_env and "KEYS" on the stack
             _ = state.RawGetInteger(LuaType.Table, (int)LuaRegistry.Index, sandboxEnvRegistryIndex);
@@ -1485,7 +1484,7 @@ namespace Garnet.server
             // Space for function
             const int NeededStackSize = 1;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(NeededStackSize), "LUA_MINSTACK should be large enough that this never fails");
+            if (!(state.TryEnsureMinimumStackCapacity(NeededStackSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1488: state.TryEnsureMinimumStackCapacity(NeededStackSize)" + " | " + ("LUA_MINSTACK should be large enough that this never fails"));
 
             try
             {
@@ -1611,12 +1610,12 @@ namespace Garnet.server
                 if (resp.RespProtocolVersion == 3)
                 {
                     _ = TryWriteResp3Null(this, canSend: true, pop: false, ref resp, out var sendErr);
-                    Debug.Assert(sendErr == -1, "Sending a top level null should always suceed since no stack space is needed");
+                    if (!(sendErr == -1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1614: sendErr == -1" + " | " + ("Sending a top level null should always suceed since no stack space is needed"));
                 }
                 else
                 {
                     _ = TryWriteResp2Null(this, canSend: true, pop: false, ref resp, out var sendErr);
-                    Debug.Assert(sendErr == -1, "Sending a top level null should always suceed since no stack space is needed");
+                    if (!(sendErr == -1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1619: sendErr == -1" + " | " + ("Sending a top level null should always suceed since no stack space is needed"));
                 }
 
                 return;
@@ -1624,7 +1623,7 @@ namespace Garnet.server
 
             var oldCur = resp.BufferCur;
 
-            Debug.Assert(state.TryEnsureMinimumStackCapacity(TopLevelNeededStackSpace), "Caller should have ensured we're < LUA_MINSTACK");
+            if (!(state.TryEnsureMinimumStackCapacity(TopLevelNeededStackSpace))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1627: state.TryEnsureMinimumStackCapacity(TopLevelNeededStackSpace)" + " | " + ("Caller should have ensured we're < LUA_MINSTACK"));
 
             // Copy the value in case we need a second pass
             // 
@@ -1662,8 +1661,8 @@ namespace Garnet.server
 
             // Second pass is required, but now we KNOW it will succeed
             var secondPassRes = TryWriteSingleItem(this, canSend: true, ref resp, out var secondPassErr);
-            Debug.Assert(!secondPassRes, "Should have required a send in this path");
-            Debug.Assert(secondPassErr == -1, "No error should be possible on the second pass");
+            if (!(!secondPassRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1665: !secondPassRes" + " | " + ("Should have required a send in this path"));
+            if (!(secondPassErr == -1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:1666: secondPassErr == -1" + " | " + ("No error should be possible on the second pass"));
 
             // Write out a single RESP item and pop it off the stack, returning true if all fit in the current send buffer
             static bool TryWriteSingleItem(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
@@ -1945,7 +1944,7 @@ namespace Garnet.server
                     return TryWriteTableToArray(runner, canSend, ref resp, out errConstStrIndex);
                 }
 
-                Debug.Fail($"All types should have been handled, found {retType}");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Lua/LuaRunner.cs:1948" + " | " + ($"All types should have been handled, found {retType}"));
                 errConstStrIndex = -1;
                 return true;
             }
@@ -2009,7 +2008,7 @@ namespace Garnet.server
             // Writes the number on the top of the stack, removes it from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteNumber(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Number, "Number was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Number)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2012: runner.state.Type(runner.state.StackTop) == LuaType.Number" + " | " + ("Number was not on top of stack"));
 
                 // Redis unconditionally converts all "number" replies to integer replies so we match that
                 // 
@@ -2115,7 +2114,7 @@ namespace Garnet.server
             // Writes the boolean on the top of the stack, removes it from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteResp3Boolean(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Boolean, "Boolean was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Boolean)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2118: runner.state.Type(runner.state.StackTop) == LuaType.Boolean" + " | " + ("Boolean was not on top of stack"));
 
                 var fitInBuffer = true;
 
@@ -2162,7 +2161,7 @@ namespace Garnet.server
             // Writes the number on the top of the stack as a double, removes it from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteDouble(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Number, "Number was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Number)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2165: runner.state.Type(runner.state.StackTop) == LuaType.Number" + " | " + ("Number was not on top of stack"));
 
                 var fitInBuffer = true;
 
@@ -2191,7 +2190,7 @@ namespace Garnet.server
             // Write a table on the top of the stack as a map, removes it from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteMap(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Table, "Table was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Table)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2194: runner.state.Type(runner.state.StackTop) == LuaType.Table" + " | " + ("Table was not on top of stack"));
 
                 if (!runner.state.TryEnsureMinimumStackCapacity(MapNeededStackSpace))
                 {
@@ -2276,7 +2275,7 @@ namespace Garnet.server
             // Convert a table to an array, where each key-value pair is converted to 2 entries, returning true if all fit in the current send buffer
             static unsafe bool TryWriteMapToArray(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Table, "Table was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Table)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2279: runner.state.Type(runner.state.StackTop) == LuaType.Table" + " | " + ("Table was not on top of stack"));
 
                 if (!runner.state.TryEnsureMinimumStackCapacity(ArrayNeededStackSize))
                 {
@@ -2360,7 +2359,7 @@ namespace Garnet.server
             // Write a table on the top of the stack as a set, removes it from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteSet(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Table, "Table was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Table)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2363: runner.state.Type(runner.state.StackTop) == LuaType.Table" + " | " + ("Table was not on top of stack"));
 
                 if (!runner.state.TryEnsureMinimumStackCapacity(SetNeededStackSize))
                 {
@@ -2436,7 +2435,7 @@ namespace Garnet.server
             // table, then remove the table from the stack, returning true if all fit in the current send buffer
             static unsafe bool TryWriteSetToArray(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Table, "Table was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Table)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2439: runner.state.Type(runner.state.StackTop) == LuaType.Table" + " | " + ("Table was not on top of stack"));
 
                 if (!runner.state.TryEnsureMinimumStackCapacity(SetNeededStackSize))
                 {
@@ -2541,7 +2540,7 @@ namespace Garnet.server
             static unsafe bool TryWriteTableToArray(LuaRunner runner, bool canSend, ref TResponse resp, out int errConstStrIndex)
             {
                 // Redis does not respect metatables, so RAW access is ok here
-                Debug.Assert(runner.state.Type(runner.state.StackTop) == LuaType.Table, "Table was not on top of stack");
+                if (!(runner.state.Type(runner.state.StackTop) == LuaType.Table)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaRunner.cs:2544: runner.state.Type(runner.state.StackTop) == LuaType.Table" + " | " + ("Table was not on top of stack"));
 
                 if (!runner.state.TryEnsureMinimumStackCapacity(TableNeededStackSize))
                 {

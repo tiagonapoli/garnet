@@ -5,7 +5,6 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -45,9 +44,9 @@ namespace Garnet.server
 
                 var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
 
-                Debug.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Shouldn't be migrating to an unused context");
-                Debug.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Shouldn't be migrating to context not marked for it");
-                Debug.Assert(!(contextMetadatas[contextIndex].GetNeedCleanup()?.Contains(contextValue) ?? false), "Shouldn't be migrating into context being deleted");
+                if (!(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:48: contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue)" + " | " + ("Shouldn't be migrating to an unused context"));
+                if (!(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:49: contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue)" + " | " + ("Shouldn't be migrating to context not marked for it"));
+                if (!(!(contextMetadatas[contextIndex].GetNeedCleanup()?.Contains(contextValue) ?? false))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:50: !(contextMetadatas[contextIndex].GetNeedCleanup()?.Contains(contextValue) ?? false)" + " | " + ("Shouldn't be migrating into context being deleted"));
             }
 #endif
 
@@ -117,11 +116,11 @@ namespace Garnet.server
                 {
                     _ = basicCtx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                     var more = completedOutputs.Next();
-                    Debug.Assert(more);
+                    if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:120: more");
                     status = completedOutputs.Current.Status;
                     output = completedOutputs.Current.Output;
                     more = completedOutputs.Next();
-                    Debug.Assert(!more);
+                    if (!(!more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:124: !more");
                     completedOutputs.Dispose();
                 }
             }
@@ -148,7 +147,7 @@ namespace Garnet.server
             ReadIndex(value, out var context, out var dimensions, out var reduceDims, out var quantType, out var buildExplorationFactor, out var numLinks, out var distanceMetric, out var flags, out var indexPtr);
             var startPointId = ReadStartPointId(value);
 
-            Debug.Assert(indexPtr == 0, "Shouldn't receive an index pointer during a migration");
+            if (!(indexPtr == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:151: indexPtr == 0" + " | " + ("Shouldn't receive an index pointer during a migration"));
 
             // Extra validation in DEBUG
 #if DEBUG
@@ -156,8 +155,8 @@ namespace Garnet.server
             {
                 var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
 
-                Debug.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Context should be assigned if we're migrating");
-                Debug.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Context should be marked migrating if we're moving an index key in");
+                if (!(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:159: contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue)" + " | " + ("Context should be assigned if we're migrating"));
+                if (!(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:160: contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue)" + " | " + ("Context should be marked migrating if we're moving an index key in"));
             }
 #endif
 
@@ -165,8 +164,8 @@ namespace Garnet.server
             StorageSession newStorageSession;
             if (ActiveThreadSession == null)
             {
-                Debug.Assert(db != null, "Must have DB if session is not already set");
-                Debug.Assert(storeWrapper != null, "Must have StoreWrapper if session is not already set");
+                if (!(db != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:168: db != null" + " | " + ("Must have DB if session is not already set"));
+                if (!(storeWrapper != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:169: storeWrapper != null" + " | " + ("Must have StoreWrapper if session is not already set"));
 
                 ActiveThreadSession = newStorageSession = new StorageSession(storeWrapper, new(), new(), null, null, db.Id, null, this, this.logger);
             }
@@ -247,7 +246,7 @@ namespace Garnet.server
                         throw new GarnetException("Failed to import migrated Vector Set index, aborting migration");
                     }
 
-                    Debug.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never allocate");
+                    if (!(indexConfigOutput.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:250: indexConfigOutput.SpanByteAndMemory.IsSpanByte" + " | " + ("Should never allocate"));
 
                     SetFlags(key, flags, ref ActiveThreadSession.stringBasicContext, SetImportStateArg);
 
@@ -324,11 +323,11 @@ namespace Garnet.server
                 {
                     _ = basicCtx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                     var more = completedOutputs.Next();
-                    Debug.Assert(more);
+                    if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:327: more");
                     status = completedOutputs.Current.Status;
                     output = completedOutputs.Current.Output;
                     more = completedOutputs.Next();
-                    Debug.Assert(!more);
+                    if (!(!more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:331: !more");
                     completedOutputs.Dispose();
                 }
             }
@@ -381,7 +380,7 @@ namespace Garnet.server
                     DateTime? expiration;
                     if (pttlRes == GarnetStatus.OK)
                     {
-                        Debug.Assert(pttlOutput.SpanByteAndMemory.IsSpanByte, "Should never need to allocate");
+                        if (!(pttlOutput.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:384: pttlOutput.SpanByteAndMemory.IsSpanByte" + " | " + ("Should never need to allocate"));
 
                         unsafe
                         {
@@ -389,7 +388,7 @@ namespace Garnet.server
                             var end = ptr + pttlOutput.SpanByteAndMemory.SpanByte.length;
 
                             var readRes = RespReadUtils.TryReadInt64(out var expirationMillis, ref ptr, end);
-                            Debug.Assert(readRes, "Should never have written something other than a long for PTTL");
+                            if (!(readRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:392: readRes" + " | " + ("Should never have written something other than a long for PTTL"));
 
                             if (expirationMillis >= 0)
                             {
@@ -422,7 +421,7 @@ namespace Garnet.server
         /// </summary>
         public static void UpdateMigratedElementNamespaces(FrozenDictionary<ulong, ulong> oldToNewNamespaces, ref VectorInput readInput, ref VectorOutput readOutput)
         {
-            Debug.Assert(readInput.IsMigrationRead, "Unexpected input");
+            if (!(readInput.IsMigrationRead)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:425: readInput.IsMigrationRead" + " | " + ("Unexpected input"));
 
             DeserializeMigratedElementKey(readOutput.SpanByteAndMemory.Span, out var namespaceBytes, out _, out _);
 
@@ -433,7 +432,7 @@ namespace Garnet.server
                 return;
             }
 
-            Debug.Assert(newNs <= uint.MaxValue, "Shouldn't have reserved such a large context");
+            if (!(newNs <= uint.MaxValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:436: newNs <= uint.MaxValue" + " | " + ("Shouldn't have reserved such a large context"));
 
             BinaryPrimitives.WriteUInt32LittleEndian(namespaceBytes, (uint)newNs);
         }
@@ -487,7 +486,7 @@ namespace Garnet.server
 
             // Namespace length, Namespace
             var nsLength = BinaryPrimitives.ReadInt32LittleEndian(readFrom);
-            Debug.Assert(nsLength == sizeof(uint), "Namespace should always be 4-bytes when deserializing");
+            if (!(nsLength == sizeof(uint))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:490: nsLength == sizeof(uint)" + " | " + ("Namespace should always be 4-bytes when deserializing"));
             readFrom = readFrom[sizeof(uint)..];
             namespaceBytes = readFrom[..nsLength];
             readFrom = readFrom[nsLength..];
@@ -519,7 +518,7 @@ namespace Garnet.server
         /// </summary>
         public static void SerializeMigratedIndexKey(Span<byte> dataBytes, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> valueBytes, DateTime? expiration)
         {
-            Debug.Assert(valueBytes.Length == VectorManager.IndexSize, "Should only ever serialize index");
+            if (!(valueBytes.Length == VectorManager.IndexSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Migration.cs:522: valueBytes.Length == VectorManager.IndexSize" + " | " + ("Should only ever serialize index"));
 
             var writeTo = dataBytes;
 

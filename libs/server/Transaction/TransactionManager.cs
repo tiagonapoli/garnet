@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using Garnet.common;
@@ -182,7 +181,7 @@ namespace Garnet.server
             this.scratchBufferAllocator = scratchBufferAllocator;
 
             var dbFound = storeWrapper.TryGetDatabase(dbId, out var db);
-            Debug.Assert(dbFound);
+            if (!(dbFound)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Transaction/TransactionManager.cs:185: dbFound");
             this.stateMachineDriver = db.StateMachineDriver;
 
             garnetTxMainApi = transactionalGarnetApi;
@@ -407,7 +406,7 @@ namespace Garnet.server
 
         void Log(byte id, ref CustomProcedureInput procInput, CustomTransactionProcedure proc)
         {
-            Debug.Assert(functionsState.StoredProcMode);
+            if (!(functionsState.StoredProcMode)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Transaction/TransactionManager.cs:410: functionsState.StoredProcMode");
 
             if (PerformWrites && appendOnlyFile != null)
                 appendOnlyFile.Log.EnqueueStoredProc(AofEntryType.StoredProcedure, id, txnVersion, stringBasicContext.Session.ID, ref procInput, proc);

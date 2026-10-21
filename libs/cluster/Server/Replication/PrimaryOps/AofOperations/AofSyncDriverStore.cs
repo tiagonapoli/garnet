@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net;
 using Garnet.common;
 using Garnet.server;
@@ -84,7 +83,7 @@ namespace Garnet.cluster
             {
                 for (var i = 0; i < numDrivers; i++)
                 {
-                    Debug.Assert(syncDrivers[i] != null, $"syncDriver cannot be null at {nameof(SafeTruncateAof)}");
+                    if (!(syncDrivers[i] != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:87: syncDrivers[i] != null" + " | " + ($"syncDriver cannot be null at {nameof(SafeTruncateAof)}"));
                     var prevAddress = syncDrivers[i].GetPreviousAddress(physicalSublogIdx);
                     if (prevAddress < TruncatedUntil)
                         TruncatedUntil = prevAddress;
@@ -124,7 +123,7 @@ namespace Garnet.cluster
         /// <param name="truncateUntil">TruncateUntil address</param>
         public void SafeTruncateAof(NodeRole role, in AofAddress truncateUntil)
         {
-            Debug.Assert(role == NodeRole.PRIMARY, $"{nameof(SafeTruncateAof)} should be called only by a PRIMARY node!");
+            if (!(role == NodeRole.PRIMARY)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:127: role == NodeRole.PRIMARY" + " | " + ($"{nameof(SafeTruncateAof)} should be called only by a PRIMARY node!"));
             _lock.WriteLock();
 
             if (_disposed)
@@ -139,7 +138,7 @@ namespace Garnet.cluster
             {
                 for (var i = 0; i < numDrivers; i++)
                 {
-                    Debug.Assert(syncDrivers[i] != null, $"syncDriver cannot be null {nameof(SafeTruncateAof)}");
+                    if (!(syncDrivers[i] != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:142: syncDrivers[i] != null" + " | " + ($"syncDriver cannot be null {nameof(SafeTruncateAof)}"));
                     var previousAddress = syncDrivers[i].PreviousAddress;
                     for (var physicalSublogIdx = 0; physicalSublogIdx < previousAddress.Length; physicalSublogIdx++)
                     {
@@ -353,7 +352,7 @@ namespace Garnet.cluster
                 return false;
             }
 
-            Debug.Assert(aofSyncDriver != null, $"aofSyncTaskInfo should not be null {nameof(TryAddReplicationDriver)}");
+            if (!(aofSyncDriver != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:356: aofSyncDriver != null" + " | " + ($"aofSyncTaskInfo should not be null {nameof(TryAddReplicationDriver)}"));
 
             // Lock to prevent add/remove tasks and truncate operations
             _lock.WriteLock();
@@ -372,7 +371,7 @@ namespace Garnet.cluster
                 for (var i = 0; i < numDrivers; i++)
                 {
                     var syncDriver = syncDrivers[i];
-                    Debug.Assert(syncDriver != null, "syncDriver should not be null");
+                    if (!(syncDriver != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:375: syncDriver != null" + " | " + ("syncDriver should not be null"));
                     if (syncDriver.RemoteNodeId == remoteNodeId)
                     {
                         syncDrivers[i] = aofSyncDriver;
@@ -481,7 +480,7 @@ namespace Garnet.cluster
                     for (var i = 0; i < numDrivers; i++)
                     {
                         var syncDriver = syncDrivers[i];
-                        Debug.Assert(syncDriver != null, $"syncDrive should not be null {nameof(TryAddReplicationDrivers)}");
+                        if (!(syncDriver != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:484: syncDriver != null" + " | " + ($"syncDrive should not be null {nameof(TryAddReplicationDrivers)}"));
                         if (syncDriver.RemoteNodeId == rss.replicaSyncMetadata.originNodeId)
                         {
                             syncDrivers[i] = rss.AofSyncDriver;
@@ -547,7 +546,7 @@ namespace Garnet.cluster
                 for (var i = 0; i < numDrivers; i++)
                 {
                     var syncDriver = syncDrivers[i];
-                    Debug.Assert(syncDriver != null, $"syncDriver should not be null at {nameof(TryRemove)}");
+                    if (!(syncDriver != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:550: syncDriver != null" + " | " + ($"syncDriver should not be null at {nameof(TryRemove)}"));
                     if (syncDriver == aofSyncDriver)
                     {
                         syncDrivers[i] = null;
@@ -656,7 +655,6 @@ namespace Garnet.cluster
             PublishShippedAddresses();
         }
 
-        [Conditional("DEBUG")]
         public void AssertDoesNotExist(string remoteNodeId)
         {
             _lock.ReadLock();
@@ -668,7 +666,7 @@ namespace Garnet.cluster
                 {
                     var syncDriver = syncDrivers[i];
                     if (syncDriver.RemoteNodeId == remoteNodeId)
-                        Debug.Fail($"syncDriver with {remoteNodeId} should not exist!");
+                        global::System.Environment.FailFast("Debug.Fail at libs/cluster/Server/Replication/PrimaryOps/AofOperations/AofSyncDriverStore.cs:671" + " | " + ($"syncDriver with {remoteNodeId} should not exist!"));
                 }
             }
             finally

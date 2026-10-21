@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -108,7 +107,7 @@ namespace Garnet.server
                     {
                         var entryPtr = ptr + entryLength;
                         var logAddressSequenceNumber = currentAddress + (ptr - record);
-                        Debug.Assert(logAddressSequenceNumber > 0, "Entry log address must be positive");
+                        if (!(logAddressSequenceNumber > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/Recover/RecoverLogDriver.cs:111: logAddressSequenceNumber > 0" + " | " + ("Entry log address must be positive"));
                         if (!aofProcessor.SkipReplay(entryPtr, untilSequenceNumber, logAddressSequenceNumber, out var sequenceNumber))
                         {
                             aofProcessor.ProcessAofRecordInternal(physicalSublogIdx, entryPtr, payloadLength, true, out _, logAddressSequenceNumber);

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -40,7 +39,7 @@ namespace Garnet.client
             [UnscopedRef]
             internal ref int GetRef(int instanceId)
             {
-                Debug.Assert(instanceId >= 0 && instanceId < MaxInstances);
+                if (!(instanceId >= 0 && instanceId < MaxInstances)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:43: instanceId >= 0 && instanceId < MaxInstances");
                 return ref Unsafe.Add(ref field0, instanceId);
             }
         }
@@ -288,8 +287,8 @@ namespace Garnet.client
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
-            Debug.Assert(entry > 0, "Trying to refresh unacquired epoch");
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            if (!(entry > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:291: entry > 0" + " | " + ("Trying to refresh unacquired epoch"));
+            if (!((*(tableAligned + entry)).threadId > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:292: (*(tableAligned + entry)).threadId > 0" + " | " + ("Epoch table entry missing threadId"));
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
@@ -342,7 +341,7 @@ namespace Garnet.client
         /// <returns></returns>
         internal long BumpCurrentEpoch()
         {
-            Debug.Assert(ThisInstanceProtected(), "BumpCurrentEpoch must be called on a protected thread");
+            if (!(ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:345: ThisInstanceProtected()" + " | " + ("BumpCurrentEpoch must be called on a protected thread"));
             long nextEpoch = Interlocked.Increment(ref CurrentEpoch);
 
             if (drainCount > 0)
@@ -503,15 +502,13 @@ namespace Garnet.client
         void Acquire()
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
-            Debug.Assert(entry == kInvalidIndex,
-                "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
+            if (!(entry == kInvalidIndex)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:506: entry == kInvalidIndex" + " | " + ("Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously."));
 
             // Reserve an entry in the epoch table for this thread
             ReserveEntryForThread(ref entry);
 
-            Debug.Assert((*(tableAligned + entry)).localCurrentEpoch == 0,
-                "Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
-            Debug.Assert((*(tableAligned + entry)).threadId > 0, "Epoch table entry missing threadId");
+            if (!((*(tableAligned + entry)).localCurrentEpoch == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:512: (*(tableAligned + entry)).localCurrentEpoch == 0" + " | " + ("Trying to acquire protected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously."));
+            if (!((*(tableAligned + entry)).threadId > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:514: (*(tableAligned + entry)).threadId > 0" + " | " + ("Epoch table entry missing threadId"));
 
             // Protect CurrentEpoch by copying it to the instance-specific epoch table
             // so that ComputeNewSafeToReclaimEpoch() will see it.
@@ -532,8 +529,7 @@ namespace Garnet.client
         {
             ref var entry = ref Metadata.Entries.GetRef(instanceId);
 
-            Debug.Assert((*(tableAligned + entry)).localCurrentEpoch != 0,
-                "Trying to release unprotected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously.");
+            if (!((*(tableAligned + entry)).localCurrentEpoch != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/LightEpoch.cs:535: (*(tableAligned + entry)).localCurrentEpoch != 0" + " | " + ("Trying to release unprotected epoch. Make sure you do not re-enter Tsavorite from callbacks or IDevice implementations. If using tasks, use TaskCreationOptions.RunContinuationsAsynchronously."));
 
             // Clear "ThisInstanceProtected()" (non-static epoch table)
             (*(tableAligned + entry)).localCurrentEpoch = 0;

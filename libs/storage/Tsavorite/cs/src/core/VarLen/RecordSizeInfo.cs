@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -126,22 +125,20 @@ namespace Tsavorite.core
         /// Called from Upsert or RMW methods for Span Values with the actual data size of the update value; ensures consistency between the Get*FieldInfo methods and the actual update methods.
         /// Usually called directly to save the cost of calculating actualDataSize twice (in Get*FieldInfo and the actual update methods).
         /// </summary>
-        [Conditional("DEBUG")]
         public static void AssertValueDataLength(int dataSize, in RecordSizeInfo sizeInfo)
         {
-            Debug.Assert(sizeInfo.FieldInfo.ValueSize == dataSize, $"Mismatch between expected value size {sizeInfo.FieldInfo.ValueSize} and actual value size {dataSize}");
+            if (!(sizeInfo.FieldInfo.ValueSize == dataSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/VarLen/RecordSizeInfo.cs:132: sizeInfo.FieldInfo.ValueSize == dataSize" + " | " + ($"Mismatch between expected value size {sizeInfo.FieldInfo.ValueSize} and actual value size {dataSize}"));
         }
 
         /// <summary>Called from Upsert or RMW methods with the final record info; ensures consistency between the Get*FieldInfo methods and the actual update methods./// </summary>
-        [Conditional("DEBUG")]
         public void AssertOptionalsIfSet(RecordDataHeader dataHeader, bool checkETag = true, bool checkExpiration = true)
         {
             if (!IsSet)
                 return;
             if (checkETag)
-                Debug.Assert(FieldInfo.HasETag == dataHeader.HasETag, $"Mismatch between expected HasETag {FieldInfo.HasETag} and actual ETag {dataHeader.HasETag}");
+                { if (!(FieldInfo.HasETag == dataHeader.HasETag)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/VarLen/RecordSizeInfo.cs:142: FieldInfo.HasETag == dataHeader.HasETag" + " | " + ($"Mismatch between expected HasETag {FieldInfo.HasETag} and actual ETag {dataHeader.HasETag}")); }
             if (checkExpiration)
-                Debug.Assert(FieldInfo.HasExpiration == dataHeader.HasExpiration, $"Mismatch between expected HasExpiration {FieldInfo.HasExpiration} and actual HasExpiration {dataHeader.HasExpiration}");
+                { if (!(FieldInfo.HasExpiration == dataHeader.HasExpiration)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/VarLen/RecordSizeInfo.cs:144: FieldInfo.HasExpiration == dataHeader.HasExpiration" + " | " + ($"Mismatch between expected HasExpiration {FieldInfo.HasExpiration} and actual HasExpiration {dataHeader.HasExpiration}")); }
         }
 
         /// <inheritdoc/>

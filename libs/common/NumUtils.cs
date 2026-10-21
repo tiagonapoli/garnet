@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers.Text;
-using System.Diagnostics;
 using System.Numerics;
 
 namespace Garnet.common
@@ -106,7 +105,7 @@ namespace Garnet.common
         /// <param name="result">Byte pointer, will be updated to point after the written number</param>
         public static void WriteDouble(double value, int length, ref byte* result)
         {
-            Debug.Assert(!double.IsNaN(value) && !double.IsInfinity(value), "Cannot convert NaN or Infinity to bytes.");
+            if (!(!double.IsNaN(value) && !double.IsInfinity(value))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/NumUtils.cs:109: !double.IsNaN(value) && !double.IsInfinity(value)" + " | " + ("Cannot convert NaN or Infinity to bytes."));
             var totalLen = CountCharsInDouble(value, out var integerDigits, out var signSize, out var fractionalDigits);
             if (totalLen <= length)
                 WriteDouble(value, integerDigits, fractionalDigits, ref result);
@@ -121,7 +120,7 @@ namespace Garnet.common
         /// <param name="result">Byte pointer, will be updated to point after the written number</param>
         public static void WriteDouble(double value, int integerDigits, int fractionalDigits, ref byte* result)
         {
-            Debug.Assert(!double.IsNaN(value) && !double.IsInfinity(value), "Cannot convert NaN or Infinity to bytes.");
+            if (!(!double.IsNaN(value) && !double.IsInfinity(value))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/NumUtils.cs:124: !double.IsNaN(value) && !double.IsInfinity(value)" + " | " + ("Cannot convert NaN or Infinity to bytes."));
 
             if (value == 0)
             {
@@ -477,7 +476,7 @@ namespace Garnet.common
                 return 1;
             }
 
-            Debug.Assert(!double.IsNaN(value) && !double.IsInfinity(value));
+            if (!(!double.IsNaN(value) && !double.IsInfinity(value))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/NumUtils.cs:480: !double.IsNaN(value) && !double.IsInfinity(value)");
 
             signSize = (byte)(value < 0 ? 1 : 0); // Add sign if the number is negative
             value = Math.Abs(value);

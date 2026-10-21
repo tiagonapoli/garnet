@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 
 namespace Tsavorite.core
@@ -67,14 +66,14 @@ namespace Tsavorite.core
         /// <param name="devices">the devices to compose from</param>
         public UniformPartitionScheme(long chunkSize, IList<IDevice> devices)
         {
-            Debug.Assert(devices.Count != 0, "There cannot be zero shards");
-            Debug.Assert(chunkSize > 0, "chunk size should not be negative");
-            Debug.Assert((chunkSize & (chunkSize - 1)) == 0, "Chunk size must be a power of 2");
+            if (!(devices.Count != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Device/ShardedStorageDevice.cs:70: devices.Count != 0" + " | " + ("There cannot be zero shards"));
+            if (!(chunkSize > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Device/ShardedStorageDevice.cs:71: chunkSize > 0" + " | " + ("chunk size should not be negative"));
+            if (!((chunkSize & (chunkSize - 1)) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Device/ShardedStorageDevice.cs:72: (chunkSize & (chunkSize - 1)) == 0" + " | " + ("Chunk size must be a power of 2"));
             Devices = devices;
             this.chunkSize = chunkSize;
             foreach (IDevice device in Devices)
             {
-                Debug.Assert(chunkSize % device.SectorSize == 0, "A single device sector cannot be partitioned");
+                if (!(chunkSize % device.SectorSize == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Device/ShardedStorageDevice.cs:77: chunkSize % device.SectorSize == 0" + " | " + ("A single device sector cannot be partitioned"));
             }
         }
 

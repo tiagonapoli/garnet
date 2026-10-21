@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -21,7 +20,7 @@ namespace Tsavorite.core
         internal OperationStatus InternalModifiedBitOperation<TKey>(TKey key, out RecordInfo modifiedInfo, bool reset = true)
             where TKey : IKey, allows ref struct
         {
-            Debug.Assert(epoch.ThisInstanceProtected());
+            if (!(epoch.ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ModifiedBitOperation.cs:24: epoch.ThisInstanceProtected()");
 
             HashEntryInfo hei = new(storeFunctions.GetKeyHashCode64(key)); ;
 

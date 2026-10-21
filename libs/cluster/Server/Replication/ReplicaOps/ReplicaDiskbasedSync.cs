@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -87,7 +86,7 @@ namespace Garnet.cluster
                     await Task.Yield();
                 }
 
-                Debug.Assert(IsRecovering);
+                if (!(IsRecovering)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/ReplicaOps/ReplicaDiskbasedSync.cs:90: IsRecovering");
                 GarnetClientSession gcs = null;
                 resetHandler ??= new CancellationTokenSource();
                 try

@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -85,7 +84,7 @@ namespace Garnet.server
                     ProcessOutput(output.SpanByteAndMemory);
                     break;
                 case GarnetStatus.NOTFOUND:
-                    Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                    if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:88: output.SpanByteAndMemory.IsSpanByte");
                     WriteNull();
                     break;
             }
@@ -189,7 +188,7 @@ namespace Garnet.server
                     ProcessOutput(output.SpanByteAndMemory);
                     break;
                 case GarnetStatus.NOTFOUND:
-                    Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                    if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:192: output.SpanByteAndMemory.IsSpanByte");
                     WriteNull();
                     break;
                 case GarnetStatus.WRONGTYPE:
@@ -230,7 +229,7 @@ namespace Garnet.server
                         ProcessOutput(output.SpanByteAndMemory);
                         break;
                     case GarnetStatus.NOTFOUND:
-                        Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                        if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:233: output.SpanByteAndMemory.IsSpanByte");
                         WriteNull();
                         break;
                 }
@@ -488,7 +487,7 @@ namespace Garnet.server
         private bool NetworkGetRange<TGarnetApi>(RespCommand cmd, ref TGarnetApi storageApi)
             where TGarnetApi : IGarnetApi
         {
-            Debug.Assert(cmd is RespCommand.GETRANGE or RespCommand.SUBSTR);
+            if (!(cmd is RespCommand.GETRANGE or RespCommand.SUBSTR)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:491: cmd is RespCommand.GETRANGE or RespCommand.SUBSTR");
 
             if (parseState.Count != 3)
                 return AbortWithWrongNumberOfArguments(cmd.ToString());
@@ -519,7 +518,7 @@ namespace Garnet.server
             else
             {
                 sessionMetrics?.incr_total_notfound();
-                Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:522: output.SpanByteAndMemory.IsSpanByte");
                 while (!RespWriteUtils.TryWriteDirect(CmdStrings.RESP_EMPTY, ref dcurr, dend))
                     SendAndReset();
             }
@@ -730,7 +729,7 @@ namespace Garnet.server
                     }
                     break;
                 case ExpirationOption.KEEPTTL:
-                    Debug.Assert(expiry == 0); // no expiration if KEEPTTL
+                    if (!(expiry == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:733: expiry == 0"); // no expiration if KEEPTTL
                     switch (existOptions)
                     {
                         case ExistOptions.None:
@@ -752,7 +751,7 @@ namespace Garnet.server
         private unsafe bool NetworkSET_EX<TGarnetApi>(RespCommand cmd, ExpirationOption expOption, long expiry, PinnedSpanByte key, PinnedSpanByte val, ref TGarnetApi storageApi)
             where TGarnetApi : IGarnetApi
         {
-            Debug.Assert(cmd == RespCommand.SET);
+            if (!(cmd == RespCommand.SET)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:755: cmd == RespCommand.SET");
 
             var highPrecision = expOption == ExpirationOption.PX;
             if (!TryGetAbsoluteExpiryTicks(expiry, highPrecision, out var valMetadata))
@@ -865,8 +864,8 @@ namespace Garnet.server
         private bool NetworkIncrement<TGarnetApi>(RespCommand cmd, ref TGarnetApi storageApi)
             where TGarnetApi : IGarnetApi
         {
-            Debug.Assert(cmd == RespCommand.INCRBY || cmd == RespCommand.DECRBY || cmd == RespCommand.INCR ||
-                         cmd == RespCommand.DECR);
+            if (!(cmd == RespCommand.INCRBY || cmd == RespCommand.DECRBY || cmd == RespCommand.INCR ||
+                         cmd == RespCommand.DECR)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:868: cmd == RespCommand.INCRBY || cmd == RespCommand.DECRBY || cmd == RespCommand.INCR || cmd == RespCommand.DECR");
 
             if ((parseState.Count < 1 && (cmd == RespCommand.INCR || cmd == RespCommand.DECR))
                 || (parseState.Count < 2 && (cmd == RespCommand.INCRBY || cmd == RespCommand.DECRBY)))
@@ -1863,7 +1862,7 @@ namespace Garnet.server
         /// <param name="cmd">RESP command (FLUSHDB / FLUSHALL)</param>
         void FlushDb(RespCommand cmd)
         {
-            Debug.Assert(cmd is RespCommand.FLUSHDB or RespCommand.FLUSHALL);
+            if (!(cmd is RespCommand.FLUSHDB or RespCommand.FLUSHALL)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:1866: cmd is RespCommand.FLUSHDB or RespCommand.FLUSHALL");
             var unsafeTruncateLog = false;
             var async = false;
             var sync = false;
@@ -2083,9 +2082,9 @@ namespace Garnet.server
                 firstPending = c;
             }
 
-            Debug.Assert(firstPending >= 0);
-            Debug.Assert(c >= firstPending);
-            Debug.Assert(outputArr != null);
+            if (!(firstPending >= 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:2086: firstPending >= 0");
+            if (!(c >= firstPending)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:2087: c >= firstPending");
+            if (!(outputArr != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/BasicCommands.cs:2088: outputArr != null");
 
             if (c - firstPending >= outputArr.Length)
             {

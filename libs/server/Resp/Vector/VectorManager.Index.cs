@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Garnet.common;
@@ -69,8 +68,8 @@ namespace Garnet.server
         {
             AssertHaveStorageSession();
 
-            Debug.Assert((newContext % 8) == 0 && newContext != 0, "Illegal context provided");
-            Debug.Assert(Unsafe.SizeOf<Index>() == Index.Size, "Constant index size is incorrect");
+            if (!((newContext % 8) == 0 && newContext != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:72: (newContext % 8) == 0 && newContext != 0" + " | " + ("Illegal context provided"));
+            if (!(Unsafe.SizeOf<Index>() == Index.Size)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:73: Unsafe.SizeOf<Index>() == Index.Size" + " | " + ("Constant index size is incorrect"));
 
             if (indexSpan.Length != Index.Size)
             {
@@ -107,7 +106,7 @@ namespace Garnet.server
             }
 
             ReadIndex(indexSpan, out _, out _, out _, out _, out _, out _, out _, out _, out var indexPtr);
-            Debug.Assert(indexPtr == 0, "Shouldn't be recreating an index if we already have a pointer");
+            if (!(indexPtr == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:110: indexPtr == 0" + " | " + ("Shouldn't be recreating an index if we already have a pointer"));
 
             ref var asIndex = ref Unsafe.As<byte, Index>(ref MemoryMarshal.GetReference(indexSpan));
             asIndex.IndexPtr = (ulong)newIndexPtr;
@@ -145,7 +144,7 @@ namespace Garnet.server
             out nint indexPtr
         )
         {
-            Debug.Assert(indexValue.Length == Index.Size, $"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted");
+            if (!(indexValue.Length == Index.Size)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:148: indexValue.Length == Index.Size" + " | " + ($"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted"));
 
             ref var asIndex = ref Unsafe.As<byte, Index>(ref MemoryMarshal.GetReference(indexValue));
 
@@ -159,12 +158,12 @@ namespace Garnet.server
             flags = asIndex.Flags;
             indexPtr = (nint)asIndex.IndexPtr;
 
-            Debug.Assert((context % ContextStep) == 0, $"Context ({context}) not as expected (% 4 == {context % 4}), vector set index is probably corrupted");
+            if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:162: (context % ContextStep) == 0" + " | " + ($"Context ({context}) not as expected (% 4 == {context % 4}), vector set index is probably corrupted"));
         }
 
         public static uint ReadStartPointId(ReadOnlySpan<byte> indexValue)
         {
-            Debug.Assert(indexValue.Length == Index.Size, "Index size is incorrect");
+            if (!(indexValue.Length == Index.Size)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:167: indexValue.Length == Index.Size" + " | " + ("Index size is incorrect"));
             return Unsafe.As<byte, Index>(ref MemoryMarshal.GetReference(indexValue)).StartPointId;
         }
 
@@ -176,8 +175,8 @@ namespace Garnet.server
         /// </summary>
         public static void SetContextForMigration(Span<byte> indexValue, ulong newContext)
         {
-            Debug.Assert(newContext != 0, "0 is special, should not be assigning to an index");
-            Debug.Assert(indexValue.Length == Index.Size, $"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted");
+            if (!(newContext != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:179: newContext != 0" + " | " + ("0 is special, should not be assigning to an index"));
+            if (!(indexValue.Length == Index.Size)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:180: indexValue.Length == Index.Size" + " | " + ($"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted"));
 
             ref var asIndex = ref Unsafe.As<byte, Index>(ref MemoryMarshal.GetReference(indexValue));
 
@@ -246,7 +245,7 @@ namespace Garnet.server
 
         internal static void SetIndexFlags(Span<byte> indexValue, VectorSetFlags flags, VectorSetFlags mask)
         {
-            Debug.Assert(indexValue.Length == Index.Size, $"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted");
+            if (!(indexValue.Length == Index.Size)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Index.cs:249: indexValue.Length == Index.Size" + " | " + ($"Index size is incorrect ({indexValue.Length} != {Index.Size}), implies vector set index is probably corrupted"));
 
             ref var asIndex = ref Unsafe.As<byte, Index>(ref MemoryMarshal.GetReference(indexValue));
 

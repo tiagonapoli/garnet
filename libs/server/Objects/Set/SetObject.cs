@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using Garnet.common;
 using Tsavorite.core;
@@ -105,7 +104,7 @@ namespace Garnet.server
                 writer.Write(item);
                 count--;
             }
-            Debug.Assert(count == 0);
+            if (!(count == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Set/SetObject.cs:108: count == 0");
         }
 
         /// <inheritdoc />
@@ -174,7 +173,7 @@ namespace Garnet.server
             else
             {
                 HeapMemorySize -= memorySize;
-                Debug.Assert(HeapMemorySize >= MemoryUtils.HashSetOverhead);
+                if (!(HeapMemorySize >= MemoryUtils.HashSetOverhead)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Set/SetObject.cs:177: HeapMemorySize >= MemoryUtils.HashSetOverhead");
             }
         }
 

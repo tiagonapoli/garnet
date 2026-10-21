@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -348,7 +347,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:351: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)
@@ -391,7 +390,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:394: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(key, LockType.Exclusive);
@@ -521,7 +520,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:524: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)
@@ -562,7 +561,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:565: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(key, LockType.Exclusive);
@@ -789,7 +788,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:792: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)
@@ -830,7 +829,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:833: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(key, LockType.Exclusive);
@@ -949,7 +948,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/ObjectStore/SetOps.cs:952: txnManager.state == TxnState.None");
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)

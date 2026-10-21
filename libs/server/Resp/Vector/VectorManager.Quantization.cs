@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -89,7 +88,7 @@ namespace Garnet.server
             if (!quantizationOrImportChannel.Writer.TryWrite(state))
             {
                 logger?.LogCritical("VectorManager quantization channel rejected a request");
-                Debug.Assert(false, "VectorManager quantization channel should never drop a request");
+                if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Quantization.cs:92: false" + " | " + ("VectorManager quantization channel should never drop a request"));
             }
         }
 

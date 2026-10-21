@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -89,8 +88,8 @@ namespace Tsavorite.core
         public bool ReadRecordObjects<TKey>(ref LogRecord logRecord, TKey requestedKey, int segmentSizeBits)
             where TKey : IKey, allows ref struct
         {
-            Debug.Assert(logRecord.DataHeader.RecordHasObjects, "Inline records should have been checked by the caller");
-            Debug.Assert(logRecord.HasReuseObjectIdForSize, "ReadRecordObjects requires the ReuseObjectIdForSize flag to be set on the ObjectLogPosition");
+            if (!(logRecord.DataHeader.RecordHasObjects)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/ObjectLogReader.cs:92: logRecord.DataHeader.RecordHasObjects" + " | " + ("Inline records should have been checked by the caller"));
+            if (!(logRecord.HasReuseObjectIdForSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/ObjectLogReader.cs:93: logRecord.HasReuseObjectIdForSize" + " | " + ("ReadRecordObjects requires the ReuseObjectIdForSize flag to be set on the ObjectLogPosition"));
             if (readBuffers is null)
                 throw new TsavoriteException("ReadBuffers are required to ReadRecordObjects");
 

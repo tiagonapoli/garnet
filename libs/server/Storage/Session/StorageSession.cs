@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -111,7 +110,7 @@ namespace Garnet.server
             var functions = new MainSessionFunctions(functionsState, readSessionState);
 
             var dbFound = storeWrapper.TryGetDatabase(dbId, out var db);
-            Debug.Assert(dbFound);
+            if (!(dbFound)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/StorageSession.cs:114: dbFound");
 
             this.stateMachineDriver = db.StateMachineDriver;
             var session = db.Store.NewSession<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions>(functions, IsConsistentReadSession);

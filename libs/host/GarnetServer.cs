@@ -169,7 +169,7 @@ namespace Garnet
 
         private void InitializeServer()
         {
-            Debug.Assert(opts != null);
+            if (!(opts != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/host/GarnetServer.cs:172: opts != null");
 
             if (!opts.QuietMode)
             {

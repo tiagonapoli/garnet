@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -134,8 +133,8 @@ namespace Garnet.server
                 totalLength -= prevBuffer.Length;
             }
 
-            Debug.Assert(currScratchBuffer.IsDefault || ScratchBufferOffset == 0);
-            Debug.Assert(TotalLength == (currScratchBuffer.IsDefault ? 0 : currScratchBuffer.Length));
+            if (!(currScratchBuffer.IsDefault || ScratchBufferOffset == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/ArgSlice/ScratchBufferAllocator.cs:137: currScratchBuffer.IsDefault || ScratchBufferOffset == 0");
+            if (!(TotalLength == (currScratchBuffer.IsDefault ? 0 : currScratchBuffer.Length))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/ArgSlice/ScratchBufferAllocator.cs:138: TotalLength == (currScratchBuffer.IsDefault ? 0 : currScratchBuffer.Length)");
         }
 
         /// <summary>
@@ -277,7 +276,7 @@ namespace Garnet.server
 
             var retVal = PinnedSpanByte.FromPinnedPointer(currScratchBuffer.scratchBufferHead + currScratchBuffer.scratchBufferOffset, length);
             currScratchBuffer.scratchBufferOffset += length;
-            Debug.Assert(currScratchBuffer.scratchBufferOffset <= currScratchBuffer.Length);
+            if (!(currScratchBuffer.scratchBufferOffset <= currScratchBuffer.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/ArgSlice/ScratchBufferAllocator.cs:280: currScratchBuffer.scratchBufferOffset <= currScratchBuffer.Length");
             return retVal;
         }
 

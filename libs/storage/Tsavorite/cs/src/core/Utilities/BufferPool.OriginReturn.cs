@@ -508,7 +508,7 @@ namespace Tsavorite.core
                 page.cacheable = false;
                 page.permitBytes = 0;
             }
-            Debug.Assert(bucket.classCapacityBytes >= RoundUp(required_bytes, sectorSize), "selected class capacity is smaller than the rounded request");
+            if (!(bucket.classCapacityBytes >= RoundUp(required_bytes, sectorSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Utilities/BufferPool.OriginReturn.cs:511: bucket.classCapacityBytes >= RoundUp(required_bytes, sectorSize)" + " | " + ("selected class capacity is smaller than the rounded request"));
             return page;
         }
 

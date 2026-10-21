@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using Garnet.common;
 
@@ -51,7 +50,7 @@ namespace Garnet.server
         /// <param name="maxId">The maximal item ID value (can be smaller than minId for descending order of IDs)</param>
         public ExpandableMap(int minSize, int minId, int maxId)
         {
-            Debug.Assert(maxId > minId);
+            if (!(maxId > minId)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Custom/ExpandableMap.cs:54: maxId > minId");
 
             this.Map = null;
             this.minSize = minSize;
@@ -238,7 +237,7 @@ namespace Garnet.server
             {
                 // This struct does not support setting an already set item
                 // This check is not thread-safe, but it is a best-effort attempt at validation.
-                Debug.Assert(Equals(Map[idx], default(T)));
+                if (!(Equals(Map[idx], default(T)))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Custom/ExpandableMap.cs:241: Equals(Map[idx], default(T))");
                 Map[idx] = value;
                 TryUpdateActualSize(id);
                 return true;

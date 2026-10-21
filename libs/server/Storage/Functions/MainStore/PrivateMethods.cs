@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -396,7 +395,7 @@ namespace Garnet.server
 
         static bool TryInPlaceUpdateNumber(ref LogRecord logRecord, ref StringOutput output, ref RMWInfo rmwInfo, long input)
         {
-            Debug.Assert(output.SpanByteAndMemory.IsSpanByte, "This code assumes it is called in-place and did not go pending");
+            if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:399: output.SpanByteAndMemory.IsSpanByte" + " | " + ("This code assumes it is called in-place and did not go pending"));
 
             // Check if the current value in the logRecord contains a valid number and if so, add the input to it.
             if (logRecord.IsPinnedValue)
@@ -473,7 +472,7 @@ namespace Garnet.server
 
         static bool TryInPlaceUpdateNumber(ref LogRecord logRecord, ref StringOutput output, ref RMWInfo rmwInfo, double input)
         {
-            Debug.Assert(output.SpanByteAndMemory.IsSpanByte, "This code assumes it is called in-place and did not go pending");
+            if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:476: output.SpanByteAndMemory.IsSpanByte" + " | " + ("This code assumes it is called in-place and did not go pending"));
 
             // Check if the current value in the logRecord contains a valid double and if so, add the input to it.
             if (logRecord.IsPinnedValue)
@@ -706,12 +705,12 @@ namespace Garnet.server
         /// </summary>
         static bool TryCopyValueLengthToOutput(ReadOnlySpan<byte> value, ref StringOutput output)
         {
-            Debug.Assert(output.SpanByteAndMemory.IsSpanByte, "This code assumes it is called in a non-pending context or in a pending context where dst.SpanByte's pointer remains valid");
+            if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:709: output.SpanByteAndMemory.IsSpanByte" + " | " + ("This code assumes it is called in a non-pending context or in a pending context where dst.SpanByte's pointer remains valid"));
 
             var numDigits = NumUtils.CountDigits(value.Length);
             if (numDigits > output.SpanByteAndMemory.SpanByte.Length)
             {
-                Debug.Fail("Output length overflow in TryCopyValueLengthToOutput");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:714" + " | " + ("Output length overflow in TryCopyValueLengthToOutput"));
                 return false;
             }
 
@@ -862,12 +861,12 @@ namespace Garnet.server
 
             var bitfieldEncodingParsed = input.parseState.TryGetBitfieldEncoding(
                                                 currTokenIdx++, out var bitCount, out var isSigned);
-            Debug.Assert(bitfieldEncodingParsed);
+            if (!(bitfieldEncodingParsed)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:865: bitfieldEncodingParsed");
             var sign = isSigned ? (byte)BitFieldSign.SIGNED : (byte)BitFieldSign.UNSIGNED;
 
             // Calculate number offset from bitCount if offsetArg starts with #
             var offsetParsed = input.parseState.TryGetBitfieldOffset(currTokenIdx++, out var offset, out var multiplyOffset);
-            Debug.Assert(offsetParsed);
+            if (!(offsetParsed)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:870: offsetParsed");
             if (!BitmapManager.TryValidateBitfieldOffset(offset, (byte)bitCount, multiplyOffset, out offset, out _))
                 throw new GarnetException("ERR bit offset is not an integer or out of range");
 
@@ -881,7 +880,7 @@ namespace Garnet.server
             if (currTokenIdx < input.parseState.Count)
             {
                 var overflowTypeParsed = input.parseState.TryGetBitFieldOverflow(currTokenIdx, out var overflowTypeValue);
-                Debug.Assert(overflowTypeParsed);
+                if (!(overflowTypeParsed)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/PrivateMethods.cs:884: overflowTypeParsed");
                 overflowType = (byte)overflowTypeValue;
             }
 

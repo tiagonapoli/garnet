@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Tsavorite.core;
@@ -238,7 +237,7 @@ namespace Garnet.server
         public GarnetStatus VectorSetImport(PinnedSpanByte key, VectorImportTermType termType, PinnedSpanByte id, PinnedSpanByte value,
             out VectorManagerResult result, out ReadOnlySpan<byte> errorMsg)
         {
-            Debug.Assert(Enum.IsDefined(termType) && termType != VectorImportTermType.Invalid, "Should have validate termType before calling");
+            if (!(Enum.IsDefined(termType) && termType != VectorImportTermType.Invalid)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/MainStore/VectorStoreOps.cs:241: Enum.IsDefined(termType) && termType != VectorImportTermType.Invalid" + " | " + ("Should have validate termType before calling"));
 
             if (!vectorManager.IsEnabled)
             {

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -172,7 +171,7 @@ namespace Garnet.common
         /// </summary>
         public ReadOptimizedLock(int estimatedSimultaneousActiveLockers)
         {
-            Debug.Assert(estimatedSimultaneousActiveLockers > 0);
+            if (!(estimatedSimultaneousActiveLockers > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:175: estimatedSimultaneousActiveLockers > 0");
 
             // ~1 per core
             var coreCount = (int)BitOperations.RoundUpToPowerOf2((uint)Environment.ProcessorCount);
@@ -188,7 +187,7 @@ namespace Garnet.common
             {
                 perCoreCounts += (CacheLineSizeBytes / sizeof(int)) - (perCoreCounts % (CacheLineSizeBytes / sizeof(int)));
             }
-            Debug.Assert(perCoreCounts % (CacheLineSizeBytes / sizeof(int)) == 0, "Each core should be whole cache lines of data");
+            if (!(perCoreCounts % (CacheLineSizeBytes / sizeof(int)) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:191: perCoreCounts % (CacheLineSizeBytes / sizeof(int)) == 0" + " | " + ("Each core should be whole cache lines of data"));
 
             perCoreCounts = (int)BitOperations.RoundUpToPowerOf2((uint)perCoreCounts);
 
@@ -233,11 +232,11 @@ namespace Garnet.common
             // Based on: https://github.com/dotnet/runtime/blob/3a95842304008b9ca84c14b4bec9ec99ed5802db/src/libraries/System.Private.CoreLib/src/System/Collections/HashHelpers.cs#L99
             var hashOffset = (uint)(((((perCoreCountsFastMod * (uint)hash) >> 32) + 1) << perCoreCountsMultShift) >> 32);
 
-            Debug.Assert(hashOffset == ((uint)hash % perCoreCounts), "Replacing mod with multiplies failed");
+            if (!(hashOffset == ((uint)hash % perCoreCounts))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:236: hashOffset == ((uint)hash % perCoreCounts)" + " | " + ("Replacing mod with multiplies failed"));
 
             var ix = (int)(startOfCoreCounts + hashOffset);
 
-            Debug.Assert(ix >= 0 && ix < lockCounts.Length, "About to do something out of bounds");
+            if (!(ix >= 0 && ix < lockCounts.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:240: ix >= 0 && ix < lockCounts.Length" + " | " + ("About to do something out of bounds"));
 
             return ix;
         }
@@ -388,7 +387,7 @@ namespace Garnet.common
             else
             {
                 // lockToken.token is ignored
-                Debug.Assert(lockToken.type == LockType.AllExclusive, "Unexpected lock type");
+                if (!(lockToken.type == LockType.AllExclusive)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:391: lockToken.type == LockType.AllExclusive" + " | " + ("Unexpected lock type"));
 
                 for (var i = 0; i < lockCounts.Length; i++)
                 {
@@ -585,9 +584,9 @@ namespace Garnet.common
         /// </summary>
         public readonly bool TryPromoteSharedLock(long hash, ref LockToken lockToken)
         {
-            Debug.Assert(lockToken.type == LockType.Shared, "Expected shared lock type");
-            Debug.Assert(lockToken.token >= 0 && lockToken.token < lockCounts.Length, "Invalid lock token");
-            Debug.Assert(Interlocked.CompareExchange(ref lockCounts[lockToken.token], 0, 0) > 0, "Illegal call when not holding shard lock");
+            if (!(lockToken.type == LockType.Shared)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:588: lockToken.type == LockType.Shared" + " | " + ("Expected shared lock type"));
+            if (!(lockToken.token >= 0 && lockToken.token < lockCounts.Length)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:589: lockToken.token >= 0 && lockToken.token < lockCounts.Length" + " | " + ("Invalid lock token"));
+            if (!(Interlocked.CompareExchange(ref lockCounts[lockToken.token], 0, 0) > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Synchronization/ReadOptimizedLock.cs:590: Interlocked.CompareExchange(ref lockCounts[lockToken.token], 0, 0) > 0" + " | " + ("Illegal call when not holding shard lock"));
 
             ref var countRef = ref MemoryMarshal.GetArrayDataReference(lockCounts);
 

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -285,7 +284,7 @@ namespace Tsavorite.core
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
             where TSourceLogRecord : ISourceLogRecord
         {
-            Debug.Assert(epoch.ThisInstanceProtected(), "This is called only from ScanLookup so the epoch should be protected");
+            if (!(epoch.ThisInstanceProtected())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/AllocatorScan.cs:288: epoch.ThisInstanceProtected()" + " | " + ("This is called only from ScanLookup so the epoch should be protected"));
             var operationState = default(TsavoriteKV<TStoreFunctions, TAllocator>.OperationState<TInput, TOutput, TContext>);
             var keyHash = storeFunctions.GetKeyHashCode64(srcLogRecord);
 
@@ -314,7 +313,7 @@ namespace Tsavorite.core
             {
                 // Closed records only reach here when the iterator was created with includeClosedRecords, which
                 // ScanCursor does when maxAddress is bounded; otherwise SkipOnScan filters them out.
-                Debug.Assert(srcLogRecord.Info.Invalid, "Expected an invalid record if its key's HashBucket is empty");
+                if (!(srcLogRecord.Info.Invalid)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/AllocatorScan.cs:317: srcLogRecord.Info.Invalid" + " | " + ("Expected an invalid record if its key's HashBucket is empty"));
                 return Status.CreateFound();
             }
 

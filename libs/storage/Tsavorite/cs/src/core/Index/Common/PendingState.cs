@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -144,7 +143,7 @@ namespace Tsavorite.core
                 if (requestKey.IsEmpty)
                     requestKey = ConditionallyHoistedKey.Create(key, bufferPool);
                 else
-                    Debug.Assert(sessionFunctions.Store.StoreFunctions.KeysEqual(requestKey, key), "pendingState.requestKey should not change keys");
+                    { if (!(sessionFunctions.Store.StoreFunctions.KeysEqual(requestKey, key))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:147: sessionFunctions.Store.StoreFunctions.KeysEqual(requestKey, key)" + " | " + ("pendingState.requestKey should not change keys")); }
             }
 
             /// <summary>
@@ -160,7 +159,7 @@ namespace Tsavorite.core
             internal void CopyFrom<TSourceLogRecord>(in TSourceLogRecord srcLogRecord, SectorAlignedBufferPool bufferPool, ObjectIdMap transientObjectIdMap)
                 where TSourceLogRecord : ISourceLogRecord
             {
-                Debug.Assert(!diskLogRecord.IsSet, "Should not try to reset pendingState.diskLogRecord");
+                if (!(!diskLogRecord.IsSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:163: !diskLogRecord.IsSet" + " | " + ("Should not try to reset pendingState.diskLogRecord"));
                 if (srcLogRecord.IsMemoryLogRecord)
                 {
                     ref var memoryLogRecord = ref srcLogRecord.AsMemoryLogRecordRef();
@@ -168,7 +167,7 @@ namespace Tsavorite.core
                     return;
                 }
 
-                Debug.Assert(srcLogRecord.IsDiskLogRecord, $"Unknown SrcLogRecord implementation: {srcLogRecord}");
+                if (!(srcLogRecord.IsDiskLogRecord)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:171: srcLogRecord.IsDiskLogRecord" + " | " + ($"Unknown SrcLogRecord implementation: {srcLogRecord}"));
                 ref var inputDiskLogRecord = ref srcLogRecord.AsDiskLogRecordRef();
                 // If the inputDiskLogRecord owns its memory this will efficiently transfer it to the local diskLogRecord; otherwise it will deep copy.
                 diskLogRecord = DiskLogRecord.TransferFrom(ref inputDiskLogRecord, bufferPool);
@@ -176,7 +175,7 @@ namespace Tsavorite.core
 
             internal void TransferFrom(ref DiskLogRecord inputDiskLogRecord, SectorAlignedBufferPool bufferPool)
             {
-                Debug.Assert(!diskLogRecord.IsSet, "Should not try to reset pendingState.diskLogRecord");
+                if (!(!diskLogRecord.IsSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:179: !diskLogRecord.IsSet" + " | " + ("Should not try to reset pendingState.diskLogRecord"));
                 diskLogRecord = DiskLogRecord.TransferFrom(ref inputDiskLogRecord, bufferPool);
             }
 
@@ -187,7 +186,7 @@ namespace Tsavorite.core
             {
                 get
                 {
-                    Debug.Assert(diskLogRecord.IsSet, "pendingState.diskLogRecord must be set for 'DiskLogRecord'");
+                    if (!(diskLogRecord.IsSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:190: diskLogRecord.IsSet" + " | " + ("pendingState.diskLogRecord must be set for 'DiskLogRecord'"));
                     return diskLogRecord;
                 }
             }
@@ -197,7 +196,7 @@ namespace Tsavorite.core
             {
                 get
                 {
-                    Debug.Assert(diskLogRecord.IsSet, "pendingState.diskLogRecord must be set for 'Info'");
+                    if (!(diskLogRecord.IsSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:200: diskLogRecord.IsSet" + " | " + ("pendingState.diskLogRecord must be set for 'Info'"));
                     return diskLogRecord.Info;
                 }
             }
@@ -207,7 +206,7 @@ namespace Tsavorite.core
             {
                 get
                 {
-                    Debug.Assert(diskLogRecord.IsSet, "pendingState.diskLogRecord must be set for 'Key'");
+                    if (!(diskLogRecord.IsSet)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Common/PendingState.cs:210: diskLogRecord.IsSet" + " | " + ("pendingState.diskLogRecord must be set for 'Key'"));
                     return diskLogRecord.Key;
                 }
             }

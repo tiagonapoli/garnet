@@ -6,7 +6,6 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -117,7 +116,7 @@ namespace Garnet.server
         private static void EnsureDistanceBufferSize(ref SpanByteAndMemory buffer, int retrieveCount)
         {
             // Verify no overflow: checked() ensures MaxRetrieveCount * sizeof(float) fits in int32
-            Debug.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * sizeof(float)) > 0);
+            if (!(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * sizeof(float)) > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:120: retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * sizeof(float)) > 0");
             var sizeBytes = retrieveCount * sizeof(float);
             if (sizeBytes > buffer.Length)
             {
@@ -140,7 +139,7 @@ namespace Garnet.server
         private static void EnsureIdBufferSize(ref SpanByteAndMemory buffer, int retrieveCount)
         {
             // Verify no overflow: checked() ensures MaxRetrieveCount * MinimumSpacePerId fits in int32
-            Debug.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * MinimumSpacePerId) > 0);
+            if (!(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * MinimumSpacePerId) > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:143: retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * MinimumSpacePerId) > 0");
             var sizeBytes = retrieveCount * MinimumSpacePerId;
             if (sizeBytes > buffer.Length)
             {
@@ -499,7 +498,7 @@ namespace Garnet.server
             if (!cleanupTaskChannel.TryPublish())
             {
                 logger?.LogCritical("VectorManager cleanup channel rejected a recovery cleanup request");
-                Debug.Assert(false, "VectorManager cleanup channel should never drop a request");
+                if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:502: false" + " | " + ("VectorManager cleanup channel should never drop a request"));
             }
         }
 
@@ -653,7 +652,7 @@ namespace Garnet.server
             if (!quantizationOrImportChannel.Writer.TryComplete())
             {
                 logger?.LogWarning("VectorManager quantization channel was already completed during disposal");
-                Debug.Fail("VectorManager quantization channel was already completed");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Resp/Vector/VectorManager.cs:656" + " | " + ("VectorManager quantization channel was already completed"));
             }
 
             while (quantizationOrImportChannel.Reader.TryRead(out _)) { }
@@ -664,10 +663,10 @@ namespace Garnet.server
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:667: more");
             status = completedOutputs.Current.Status;
             output = completedOutputs.Current.Output;
-            Debug.Assert(!completedOutputs.Next());
+            if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:670: !completedOutputs.Next()");
             completedOutputs.Dispose();
         }
 
@@ -684,11 +683,11 @@ namespace Garnet.server
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:687: more");
             status = completedOutputs.Current.Status;
             output = completedOutputs.Current.Output;
             input = completedOutputs.Current.Input;
-            Debug.Assert(!completedOutputs.Next());
+            if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:691: !completedOutputs.Next()");
             completedOutputs.Dispose();
         }
 
@@ -697,9 +696,9 @@ namespace Garnet.server
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:700: more");
             status = completedOutputs.Current.Status;
-            Debug.Assert(!completedOutputs.Next());
+            if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:702: !completedOutputs.Next()");
             completedOutputs.Dispose();
         }
 
@@ -856,7 +855,7 @@ namespace Garnet.server
             if (!requestCleanupTaskChannel.TryPublish(context))
             {
                 logger?.LogCritical("VectorManager request cleanup channel rejected a delete request");
-                Debug.Assert(false, "VectorManager request cleanup channel should never drop a request");
+                if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:859: false" + " | " + ("VectorManager request cleanup channel should never drop a request"));
                 throw new GarnetException("Could not submit request for Vector Set cleanup, aborting delete");
             }
 
@@ -901,7 +900,7 @@ namespace Garnet.server
                 if (!requestDropTaskChannel.TryPublish())
                 {
                     logger?.LogCritical("VectorManager request drop channel rejected an index drop");
-                    Debug.Assert(false, "VectorManager request drop channel should never drop a request");
+                    if (!(false)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:904: false" + " | " + ("VectorManager request drop channel should never drop a request"));
                 }
             }
         }
@@ -1358,7 +1357,7 @@ namespace Garnet.server
         /// </summary>
         internal int ContinueSearch(ulong context, nint indexPtr, nint oldContinuation, int foundSoFar, ref SpanByteAndMemory outputIds, ref SpanByteAndMemory outputDistances, out nint continuation)
         {
-            Debug.Assert(oldContinuation != 0, "Expected non-zero continuation");
+            if (!(oldContinuation != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1361: oldContinuation != 0" + " | " + ("Expected non-zero continuation"));
 
             // Only ids can grow, so double them each time
             var newIdSpace = MemoryPool<byte>.Shared.Rent(outputIds.Span.Length * 2);
@@ -1373,7 +1372,7 @@ namespace Garnet.server
             }
 
             var writeDistancesInto = outputDistances.Span[(sizeof(float) * foundSoFar)..];
-            Debug.Assert(!writeDistancesInto.IsEmpty, "Expected space for remaining distances");
+            if (!(!writeDistancesInto.IsEmpty)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1376: !writeDistancesInto.IsEmpty" + " | " + ("Expected space for remaining distances"));
 
             int count;
             unsafe
@@ -1389,7 +1388,7 @@ namespace Garnet.server
             // Error case, terminate 
             if (count < 0)
             {
-                Debug.Assert(continuation == 0, "Expected no additional continuations on error result");
+                if (!(continuation == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1392: continuation == 0" + " | " + ("Expected no additional continuations on error result"));
                 return count;
             }
 
@@ -1544,7 +1543,7 @@ namespace Garnet.server
                     return false;
                 }
 
-                Debug.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
+                if (!(internalIdBytes.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1547: internalIdBytes.IsSpanByte" + " | " + ("Internal Id should always be of known size"));
             }
             finally
             {
@@ -1626,7 +1625,7 @@ namespace Garnet.server
                     return false;
                 }
 
-                Debug.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
+                if (!(internalIdBytes.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1629: internalIdBytes.IsSpanByte" + " | " + ("Internal Id should always be of known size"));
             }
             finally
             {
@@ -1683,7 +1682,7 @@ namespace Garnet.server
             var foundInternalId = ReadSizeUnknown(context | DiskANNService.InternalIdMap, element, ref internalIdBytes);
             if (foundInternalId)
             {
-                Debug.Assert(internalIdBytes.IsSpanByte, "Shouldn't have allocated for this op");
+                if (!(internalIdBytes.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1686: internalIdBytes.IsSpanByte" + " | " + ("Shouldn't have allocated for this op"));
                 return true;
             }
 
@@ -1716,7 +1715,7 @@ namespace Garnet.server
                     if (!ids.IsSpanByte)
                     {
                         var getRes = MemoryMarshal.TryGetArray<byte>(ids.Memory.Memory, out var arrSeg);
-                        Debug.Assert(getRes, "Should always be able to get array to pin");
+                        if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1719: getRes" + " | " + ("Should always be able to get array to pin"));
 
                         idsPin?.Free();
                         idsPin = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
@@ -1880,7 +1879,7 @@ namespace Garnet.server
 
             if (found < 0)
             {
-                Debug.Assert(continuation == 0, "Shouldn't have more results after failure");
+                if (!(continuation == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1883: continuation == 0" + " | " + ("Shouldn't have more results after failure"));
 
                 logger?.LogError("GetNeighbors failed with {res} for context {context}", found, context);
 
@@ -1893,7 +1892,7 @@ namespace Garnet.server
 
                 if (additionalResults < 0)
                 {
-                    Debug.Assert(continuation == 0, "Shouldn't have more results after failure");
+                    if (!(continuation == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1896: continuation == 0" + " | " + ("Shouldn't have more results after failure"));
 
                     logger?.LogError("GetNeighbors failed in ContinueSearch with {additionalResults} for context {context}", additionalResults, context);
 
@@ -1913,10 +1912,9 @@ namespace Garnet.server
             return VectorManagerResult.OK;
         }
 
-        [Conditional("DEBUG")]
         private static void AssertHaveStorageSession()
         {
-            Debug.Assert(ActiveThreadSession != null, "Should have StorageSession by now");
+            if (!(ActiveThreadSession != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.cs:1919: ActiveThreadSession != null" + " | " + ("Should have StorageSession by now"));
         }
     }
 }

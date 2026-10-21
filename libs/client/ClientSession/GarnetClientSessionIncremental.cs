@@ -112,7 +112,7 @@ namespace Garnet.client
                 goto done;
             }
 
-            Debug.Assert(end - curr >= 2);
+            if (!(end - curr >= 2)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/ClientSession/GarnetClientSessionIncremental.cs:115: end - curr >= 2");
             *curr++ = (byte)'\r';
             *curr++ = (byte)'\n';
 
@@ -120,7 +120,7 @@ namespace Garnet.client
             var size = (int)(curr - 2 - head - (ExtraSpace - 4));
             TrackIterationProgress(recordCount, size);
             var success = RespWriteUtils.TryWritePaddedBulkStringLength(size, ExtraSpace - 4, ref head, end);
-            Debug.Assert(success);
+            if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/ClientSession/GarnetClientSessionIncremental.cs:123: success");
 
             // Number of key value pairs in payload
             *(int*)head = recordCount;

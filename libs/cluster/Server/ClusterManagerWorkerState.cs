@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -160,10 +159,7 @@ namespace Garnet.cluster
         /// <param name="logger"></param>
         public async Task<(bool Success, ReadOnlyMemory<byte> ErrorMessage)> TryAddReplicaAsync(string nodeid, bool force, bool upgradeLock, ILogger logger = null)
         {
-            Debug.Assert(
-                !upgradeLock || clusterProvider.replicationManager.currentRecoveryStatus == RecoveryStatus.ReadRole,
-                "Lock upgrades are only allowed if caller holds a ReadRole lock"
-            );
+            if (!(!upgradeLock || clusterProvider.replicationManager.currentRecoveryStatus == RecoveryStatus.ReadRole)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/ClusterManagerWorkerState.cs:163: !upgradeLock || clusterProvider.replicationManager.currentRecoveryStatus == RecoveryStatus.ReadRole" + " | " + ("Lock upgrades are only allowed if caller holds a ReadRole lock"));
 
             ReadOnlyMemory<byte> errorMessage = default;
             while (true)

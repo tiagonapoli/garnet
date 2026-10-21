@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -35,7 +34,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static Span<byte> ConvertInlineToOverflow(ref RecordDataHeader dataHeader, long physicalAddress, long valueAddress, long oldValueLength, in RecordSizeInfo sizeInfo, ObjectIdMap objectIdMap)
         {
-            Debug.Assert(dataHeader.ValueIsInline);
+            if (!(dataHeader.ValueIsInline)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:38: dataHeader.ValueIsInline");
 
             // First copy the data. We are converting to overflow so the length is limited to int.
             var newLength = sizeInfo.FieldInfo.ValueSize;
@@ -66,7 +65,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static Span<byte> ConvertValueObjectToOverflow(ref RecordDataHeader dataHeader, long physicalAddress, long valueAddress, in RecordSizeInfo sizeInfo, ObjectIdMap objectIdMap)
         {
-            Debug.Assert(dataHeader.ValueIsObject);
+            if (!(dataHeader.ValueIsObject)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:69: dataHeader.ValueIsObject");
             var overflow = new OverflowByteArray(sizeInfo.FieldInfo.ValueSize, startOffset: 0, endOffset: 0, zeroInit: false);
 
             var objectId = *(int*)valueAddress;
@@ -88,7 +87,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int ConvertInlineToValueObject(ref RecordDataHeader dataHeader, long physicalAddress, long valueAddress, in RecordSizeInfo sizeInfo, ObjectIdMap objectIdMap)
         {
-            Debug.Assert(dataHeader.ValueIsInline);
+            if (!(dataHeader.ValueIsInline)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:91: dataHeader.ValueIsInline");
             var objectId = objectIdMap.Allocate();
             dataHeader.SetValueIsObject();
 
@@ -107,7 +106,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static int ConvertOverflowToValueObject(ref RecordDataHeader dataHeader, long physicalAddress, long valueAddress, in RecordSizeInfo sizeInfo, ObjectIdMap objectIdMap)
         {
-            Debug.Assert(dataHeader.ValueIsOverflow);
+            if (!(dataHeader.ValueIsOverflow)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:110: dataHeader.ValueIsOverflow");
 
             var objectId = *(int*)valueAddress;
             if (objectId != ObjectIdMap.InvalidObjectId)
@@ -129,7 +128,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static Span<byte> ConvertOverflowToInline(ref RecordDataHeader dataHeader, long physicalAddress, long valueAddress, in RecordSizeInfo sizeInfo, ObjectIdMap objectIdMap)
         {
-            Debug.Assert(dataHeader.ValueIsOverflow);
+            if (!(dataHeader.ValueIsOverflow)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:132: dataHeader.ValueIsOverflow");
 
             // First copy the data
             var objectId = *(int*)valueAddress;
@@ -156,7 +155,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static void ClearObjectIdAndConvertToInline(ref RecordDataHeader dataHeader, long fieldAddress, ObjectIdMap objectIdMap, bool isKey)
         {
-            Debug.Assert(isKey ? !dataHeader.KeyIsInline : !dataHeader.ValueIsInline);
+            if (!(isKey ? !dataHeader.KeyIsInline : !dataHeader.ValueIsInline)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogField.cs:159: isKey ? !dataHeader.KeyIsInline : !dataHeader.ValueIsInline");
 
             // We don't have to adjust the filler length, since the field size here isn't changing; we'll just have int-sized "data". This method is called by record disposal, which
             // also clears the optionals, which may adjust filler length. Consistency Note: LogRecord.InitializeForReuse also sets field lengths to zero and sets the filler length.

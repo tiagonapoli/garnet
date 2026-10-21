@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -158,7 +157,7 @@ namespace Garnet.server
 
                 unsafe
                 {
-                    Debug.Assert(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0, "byte[] should be word aligned, or we're in trouble");
+                    if (!(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ElementData.cs:161: ((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0" + " | " + ("byte[] should be word aligned, or we're in trouble"));
                 }
 
                 providedData.CopyTo(toCopyTo);
@@ -180,7 +179,7 @@ namespace Garnet.server
 
                 unsafe
                 {
-                    Debug.Assert(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0, "byte[] should be word aligned, or we're in trouble");
+                    if (!(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ElementData.cs:183: ((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0" + " | " + ("byte[] should be word aligned, or we're in trouble"));
                 }
 
                 var asFloats = MemoryMarshal.Cast<byte, float>(toCopyTo.AsSpan());
@@ -206,7 +205,7 @@ namespace Garnet.server
 
                 unsafe
                 {
-                    Debug.Assert(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0, "byte[] should be word aligned, or we're in trouble");
+                    if (!(((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ElementData.cs:209: ((nint)Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(toCopyTo)) % sizeof(float)) == 0" + " | " + ("byte[] should be word aligned, or we're in trouble"));
                 }
 
                 var asFloats = MemoryMarshal.Cast<byte, float>(toCopyTo.AsSpan());

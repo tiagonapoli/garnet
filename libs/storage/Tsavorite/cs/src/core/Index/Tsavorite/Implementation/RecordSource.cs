@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -119,7 +118,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void SetHasMainLogSrc()
         {
-            Debug.Assert(!IsReadCache(LogicalAddress), "LogicalAddress must be a main log address to set HasMainLogSrc");
+            if (!(!IsReadCache(LogicalAddress))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/RecordSource.cs:122: !IsReadCache(LogicalAddress)" + " | " + ("LogicalAddress must be a main log address to set HasMainLogSrc"));
             internalState |= InternalStates.MainLogSrc;
         }
 
@@ -130,7 +129,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void SetHasReadCacheSrc()
         {
-            Debug.Assert(IsReadCache(LogicalAddress), "LogicalAddress must be a readcache address to set HasReadCacheSrc");
+            if (!(IsReadCache(LogicalAddress))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/RecordSource.cs:133: IsReadCache(LogicalAddress)" + " | " + ("LogicalAddress must be a readcache address to set HasReadCacheSrc"));
             internalState |= InternalStates.ReadCacheSrc;
         }
 
@@ -145,7 +144,7 @@ namespace Tsavorite.core
         internal readonly LogRecord CreateLogRecord()
         {
             // If we have a physical address we must be in the in-memory log.
-            Debug.Assert(PhysicalAddress != 0, "Cannot CreateLogRecord until PhysicalAddress is set");
+            if (!(PhysicalAddress != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/RecordSource.cs:148: PhysicalAddress != 0" + " | " + ("Cannot CreateLogRecord until PhysicalAddress is set"));
             return Allocator.CreateLogRecord(LogicalAddress, PhysicalAddress);
         }
 

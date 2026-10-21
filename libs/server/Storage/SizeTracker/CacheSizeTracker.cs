@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
@@ -40,7 +39,7 @@ namespace Garnet.server
             get => mainLogTracker?.TargetSize ?? 0;
             set
             {
-                Debug.Assert(value >= 0);
+                if (!(value >= 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/SizeTracker/CacheSizeTracker.cs:43: value >= 0");
                 mainLogTracker?.UpdateTargetSize(value, value / HighTargetSizeDeltaFraction, value / LowTargetSizeDeltaFraction);
             }
         }
@@ -57,7 +56,7 @@ namespace Garnet.server
             get => readCacheTracker?.TargetSize ?? 0;
             set
             {
-                Debug.Assert(value >= 0);
+                if (!(value >= 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/SizeTracker/CacheSizeTracker.cs:60: value >= 0");
                 readCacheTracker?.UpdateTargetSize(value, value / HighTargetSizeDeltaFraction, value / LowTargetSizeDeltaFraction);
             }
         }
@@ -113,8 +112,8 @@ namespace Garnet.server
         /// </param>
         public void Initialize(TsavoriteKV<StoreFunctions, StoreAllocator> store, long targetSize, long readCacheTargetSize, ILoggerFactory loggerFactory, long indexMemoryBudget)
         {
-            Debug.Assert(store != null);
-            Debug.Assert(targetSize > 0 || readCacheTargetSize > 0);
+            if (!(store != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/SizeTracker/CacheSizeTracker.cs:116: store != null");
+            if (!(targetSize > 0 || readCacheTargetSize > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/SizeTracker/CacheSizeTracker.cs:117: targetSize > 0 || readCacheTargetSize > 0");
 
             if (targetSize > 0)
             {

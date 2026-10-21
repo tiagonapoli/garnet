@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Garnet.common;
 using Garnet.server.BfTreeInterop;
@@ -292,7 +291,7 @@ namespace Garnet.server
                     return GarnetStatus.OK;
                 }
 
-                Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+                if (!(output.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/MainStore/RangeIndexOps.cs:295: output.SpanByteAndMemory.IsSpanByte");
 
                 var bufLen = output.SpanByteAndMemory.Length;
                 var maxValueSize = (int)stub.MaxRecordSize;

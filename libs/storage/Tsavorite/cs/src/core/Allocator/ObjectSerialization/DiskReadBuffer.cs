@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -100,7 +99,7 @@ namespace Tsavorite.core
             bufferFilePos.Offset += (uint)currentPosition;
 
             // We only read from one segment into one buffer, so we should never exceed the segment size with this increment.
-            Debug.Assert(bufferFilePos.Offset < bufferFilePos.SegmentSize, $"Incremented bufferFilePos.Offset {bufferFilePos.Offset} should be < bufferFilePos.SegmentSize {bufferFilePos.SegmentSize}");
+            if (!(bufferFilePos.Offset < bufferFilePos.SegmentSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskReadBuffer.cs:103: bufferFilePos.Offset < bufferFilePos.SegmentSize" + " | " + ($"Incremented bufferFilePos.Offset {bufferFilePos.Offset} should be < bufferFilePos.SegmentSize {bufferFilePos.SegmentSize}"));
             return bufferFilePos;
         }
 

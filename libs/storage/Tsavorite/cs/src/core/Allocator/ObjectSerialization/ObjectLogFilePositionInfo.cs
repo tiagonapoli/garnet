@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 
@@ -96,7 +95,7 @@ namespace Tsavorite.core
             set
             {
                 var mask = (ulong)(1L << SegmentSizeBits) - 1L;
-                Debug.Assert((value & ~mask) <= SegmentSize, $"New Offset ({value & ~mask}) exceeds max segment size");
+                if (!((value & ~mask) <= SegmentSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/ObjectLogFilePositionInfo.cs:99: (value & ~mask) <= SegmentSize" + " | " + ($"New Offset ({value & ~mask}) exceeds max segment size"));
                 word = (word & ~mask) | (value & mask);
             }
         }
@@ -163,8 +162,8 @@ namespace Tsavorite.core
 
         public static ulong operator -(ObjectLogFilePositionInfo left, ObjectLogFilePositionInfo right)
         {
-            Debug.Assert(left.SegmentSizeBits == right.SegmentSizeBits, "Segment size bits must match to compute distance");
-            Debug.Assert((left.word & SegmentAndOffsetMask) >= (right.word & SegmentAndOffsetMask), "comparison position must be greater");
+            if (!(left.SegmentSizeBits == right.SegmentSizeBits)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/ObjectLogFilePositionInfo.cs:166: left.SegmentSizeBits == right.SegmentSizeBits" + " | " + ("Segment size bits must match to compute distance"));
+            if (!((left.word & SegmentAndOffsetMask) >= (right.word & SegmentAndOffsetMask))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/ObjectLogFilePositionInfo.cs:167: (left.word & SegmentAndOffsetMask) >= (right.word & SegmentAndOffsetMask)" + " | " + ("comparison position must be greater"));
             var segmentDiff = (ulong)(left.SegmentId - right.SegmentId);
             if (segmentDiff == 0)
                 return left.Offset - right.Offset;

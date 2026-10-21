@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 
@@ -53,7 +52,7 @@ namespace Tsavorite.core
 
         internal void WaitUntilFreeAndInitialize(int endPosition)
         {
-            Debug.Assert(IsAligned(endPosition, (int)device.SectorSize), $"endPosition {endPosition} is not sector-aligned");
+            if (!(IsAligned(endPosition, (int)device.SectorSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:56: IsAligned(endPosition, (int)device.SectorSize)" + " | " + ($"endPosition {endPosition} is not sector-aligned"));
 
             // First wait for any pending write in this buffer to complete. If this is our first time in this buffer there won't be a CountdownEvent yet;
             // we defer that because we may not need all the buffers in the circular buffer.
@@ -82,19 +81,19 @@ namespace Tsavorite.core
 
         internal void FlushToDevice(ref ObjectLogFilePositionInfo filePosition, DeviceIOCompletionCallback callback, DiskWriteCallbackContext pageWriteCallbackContext)
         {
-            Debug.Assert(currentPosition <= endPosition, $"currentPosition ({currentPosition}) cannot exceed endPosition ({endPosition})");
+            if (!(currentPosition <= endPosition)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:85: currentPosition <= endPosition" + " | " + ($"currentPosition ({currentPosition}) cannot exceed endPosition ({endPosition})"));
 
             // We are flushing the buffer. currentPosition must already be sector-aligned; either it is at endPosition (which is always sector-aligned),
             // which is the normal "buffer is full so flush it" handling, or it is less than endPosition which means it is called from one of:
             //   a. OnPartialFlushComplete, in which case the caller has sector-aligned it before calling this
             //   b. OverflowByteArray sector-aligning writes at the beginning or end, which means we copied a sector-aligned number of bytes to the buffer.
-            Debug.Assert(IsAligned(currentPosition, (int)device.SectorSize), $"currentPosition ({currentPosition}) is not sector-aligned");
-            Debug.Assert(IsAligned(filePosition.Offset, (int)device.SectorSize), $"FlushToDevice starting file flush position ({filePosition}) is not sector-aligned");
+            if (!(IsAligned(currentPosition, (int)device.SectorSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:91: IsAligned(currentPosition, (int)device.SectorSize)" + " | " + ($"currentPosition ({currentPosition}) is not sector-aligned"));
+            if (!(IsAligned(filePosition.Offset, (int)device.SectorSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:92: IsAligned(filePosition.Offset, (int)device.SectorSize)" + " | " + ($"FlushToDevice starting file flush position ({filePosition}) is not sector-aligned"));
             pageWriteCallbackContext.SetBufferCountdownEvent(IncrementOrResetCountdown(ref countdownEvent));
 
             var flushLength = (uint)(currentPosition - flushedUntilPosition);
-            Debug.Assert(IsAligned(flushLength, (int)device.SectorSize), $"flushLength {flushLength} is not sector-aligned");
-            Debug.Assert(flushLength <= filePosition.RemainingSizeInSegment, $"flushLength ({flushLength}) cannot be greater than filePosition.RemainingSize ({filePosition.RemainingSizeInSegment})");
+            if (!(IsAligned(flushLength, (int)device.SectorSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:96: IsAligned(flushLength, (int)device.SectorSize)" + " | " + ($"flushLength {flushLength} is not sector-aligned"));
+            if (!(flushLength <= filePosition.RemainingSizeInSegment)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:97: flushLength <= filePosition.RemainingSizeInSegment" + " | " + ($"flushLength ({flushLength}) cannot be greater than filePosition.RemainingSize ({filePosition.RemainingSizeInSegment})"));
 
             var spanPtr = memory.GetValidPointer() + flushedUntilPosition;
             device.WriteAsync((IntPtr)spanPtr, filePosition.SegmentId, filePosition.Offset, flushLength, callback, pageWriteCallbackContext);
@@ -111,7 +110,7 @@ namespace Tsavorite.core
             memory?.Return();
             memory = null;
 
-            Debug.Assert(countdownEvent is null || countdownEvent.CurrentCount == 0, $"Unexpected count ({countdownEvent.CurrentCount}) remains");
+            if (!(countdownEvent is null || countdownEvent.CurrentCount == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/ObjectSerialization/DiskWriteBuffer.cs:114: countdownEvent is null || countdownEvent.CurrentCount == 0" + " | " + ($"Unexpected count ({countdownEvent.CurrentCount}) remains"));
             countdownEvent?.Dispose();
             countdownEvent = null;
         }

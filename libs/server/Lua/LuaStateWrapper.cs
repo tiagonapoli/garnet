@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -157,7 +156,7 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void CallFromLuaEntered(IntPtr luaStatePtr)
         {
-            Debug.Assert(luaStatePtr == state, "Unexpected Lua state presented");
+            if (!(luaStatePtr == state)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:160: luaStatePtr == state" + " | " + ("Unexpected Lua state presented"));
 
             StackTop = NativeMethods.GetTop(state);
             curStackSize = StackTop > LUA_MINSTACK ? StackTop : LUA_MINSTACK;
@@ -172,9 +171,9 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal void KnownCallFromLuaEntered(IntPtr luaStatePtr, [ConstantExpected] int knownArgumentCount)
         {
-            Debug.Assert(luaStatePtr == state, "Unexpected Lua state presented");
-            Debug.Assert(knownArgumentCount is >= 0 and <= LUA_MINSTACK, "known argument must be >= 0 and <= LUA_MINSTACK");
-            Debug.Assert(NativeMethods.GetTop(state) == knownArgumentCount, "knowArgumentCount is incorrect");
+            if (!(luaStatePtr == state)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:175: luaStatePtr == state" + " | " + ("Unexpected Lua state presented"));
+            if (!(knownArgumentCount is >= 0 and <= LUA_MINSTACK)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:176: knownArgumentCount is >= 0 and <= LUA_MINSTACK" + " | " + ("known argument must be >= 0 and <= LUA_MINSTACK"));
+            if (!(NativeMethods.GetTop(state) == knownArgumentCount)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:177: NativeMethods.GetTop(state) == knownArgumentCount" + " | " + ("knowArgumentCount is incorrect"));
 
             StackTop = knownArgumentCount;
             curStackSize = LUA_MINSTACK;
@@ -314,7 +313,7 @@ namespace Garnet.server
         {
             AssertLuaStackIndexInBounds(stackIndex);
 
-            Debug.Assert(tableIndex >= 1 && tableIndex <= tableArraySize, "Assigning index in table could cause allocation");
+            if (!(tableIndex >= 1 && tableIndex <= tableArraySize)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:317: tableIndex >= 1 && tableIndex <= tableArraySize" + " | " + ("Assigning index in table could cause allocation"));
 
             NativeMethods.RawSetInteger(state, stackIndex, tableIndex);
             UpdateStackTop(-1);
@@ -331,7 +330,7 @@ namespace Garnet.server
             AssertLuaStackIndexInBounds(stackIndex);
 
             setRecordCount++;
-            Debug.Assert(tableRecordCount >= 1 && setRecordCount <= tableRecordCount, "Assigning key in table could cause allocation");
+            if (!(tableRecordCount >= 1 && setRecordCount <= tableRecordCount)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:334: tableRecordCount >= 1 && setRecordCount <= tableRecordCount" + " | " + ("Assigning key in table could cause allocation"));
 
             NativeMethods.RawSet(state, stackIndex);
             UpdateStackTop(-2);
@@ -349,7 +348,7 @@ namespace Garnet.server
             AssertLuaStackNotFull();
 
             var actual = NativeMethods.RawGetInteger(state, stackIndex, tableIndex);
-            Debug.Assert(expectedType == null || actual == expectedType, "Unexpected type received");
+            if (!(expectedType == null || actual == expectedType)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:352: expectedType == null || actual == expectedType" + " | " + ("Unexpected type received"));
 
             UpdateStackTop(1);
 
@@ -367,7 +366,7 @@ namespace Garnet.server
             AssertLuaStackIndexInBounds(stackIndex);
 
             var actual = NativeMethods.RawGet(state, stackIndex);
-            Debug.Assert(expectedType == null || actual == expectedType, "Unexpected type received");
+            if (!(expectedType == null || actual == expectedType)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:370: expectedType == null || actual == expectedType" + " | " + ("Unexpected type received"));
 
             AssertLuaStackExpected();
 
@@ -432,7 +431,7 @@ namespace Garnet.server
             AssertLuaStackNotFull();
 
             var type = NativeMethods.GetGlobal(state, nullTerminatedGlobalName);
-            Debug.Assert(type == expectedType, "Unexpected type received");
+            if (!(type == expectedType)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:435: type == expectedType" + " | " + ("Unexpected type received"));
 
             UpdateStackTop(1);
         }
@@ -513,12 +512,12 @@ namespace Garnet.server
         {
             AssertLuaStackIndexInBounds(stackIndex);
 
-            Debug.Assert(Type(stackIndex) is LuaType.Number, "Called with non-number");
+            if (!(Type(stackIndex) is LuaType.Number)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:516: Type(stackIndex) is LuaType.Number" + " | " + ("Called with non-number"));
 
             EnterInfallibleAllocationRegion();
 
             var convRes = NativeMethods.CheckBuffer(state, stackIndex, out str);
-            Debug.Assert(convRes, "Conversion failed, this should not happen");
+            if (!(convRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:521: convRes" + " | " + ("Conversion failed, this should not happen"));
 
             return TryExitInfallibleAllocationRegion();
         }
@@ -534,7 +533,7 @@ namespace Garnet.server
         {
             AssertLuaStackIndexInBounds(stackIndex);
 
-            Debug.Assert(Type(stackIndex) is LuaType.String, "Called with non-string");
+            if (!(Type(stackIndex) is LuaType.String)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:537: Type(stackIndex) is LuaType.String" + " | " + ("Called with non-string"));
 
             NativeMethods.KnownStringToBuffer(state, stackIndex, out str);
         }
@@ -669,7 +668,7 @@ namespace Garnet.server
         internal readonly void Rotate(int stackIndex, int n)
         {
             AssertLuaStackIndexInBounds(stackIndex);
-            Debug.Assert(Math.Abs(n) <= (StackTop - stackIndex), "Rotation cannot be larger than slice being rotated");
+            if (!(Math.Abs(n) <= (StackTop - stackIndex))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:672: Math.Abs(n) <= (StackTop - stackIndex)" + " | " + ("Rotation cannot be larger than slice being rotated"));
 
             NativeMethods.Rotate(state, stackIndex, n);
         }
@@ -770,37 +769,33 @@ namespace Garnet.server
         /// <summary>
         /// Check that the given index refers to a valid part of the stack.
         /// </summary>
-        [Conditional("DEBUG")]
         private readonly void AssertLuaStackIndexInBounds(int stackIndex)
         {
-            Debug.Assert(stackIndex == (int)LuaRegistry.Index || (stackIndex > 0 && stackIndex <= StackTop), "Lua stack index out of bounds");
+            if (!(stackIndex == (int)LuaRegistry.Index || (stackIndex > 0 && stackIndex <= StackTop))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:776: stackIndex == (int)LuaRegistry.Index || (stackIndex > 0 && stackIndex <= StackTop)" + " | " + ("Lua stack index out of bounds"));
         }
 
         /// <summary>
         /// Check that the Lua stack top is where expected in DEBUG builds.
         /// </summary>
-        [Conditional("DEBUG")]
         private readonly void AssertLuaStackExpected()
         {
-            Debug.Assert(NativeMethods.GetTop(state) == StackTop, "Lua stack not where expected");
+            if (!(NativeMethods.GetTop(state) == StackTop)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:785: NativeMethods.GetTop(state) == StackTop" + " | " + ("Lua stack not where expected"));
         }
 
         /// <summary>
         /// Check that there's space to push some number of elements.
         /// </summary>
-        [Conditional("DEBUG")]
         private readonly void AssertLuaStackNotFull(int probe = 1)
         {
-            Debug.Assert((StackTop + probe) <= curStackSize, "Lua stack should have been grown before pushing");
+            if (!((StackTop + probe) <= curStackSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:794: (StackTop + probe) <= curStackSize" + " | " + ("Lua stack should have been grown before pushing"));
         }
 
         /// <summary>
         /// Check that there's space to push some number of elements.
         /// </summary>
-        [Conditional("DEBUG")]
         private readonly void AssertLuaStackNotEmpty()
         {
-            Debug.Assert(StackTop > 0, "Lua stack should not be empty when called");
+            if (!(StackTop > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:803: StackTop > 0" + " | " + ("Lua stack should not be empty when called"));
         }
     }
 
@@ -875,7 +870,7 @@ namespace Garnet.server
                 // See: https://www.lua.org/manual/5.4/manual.html#lua_Alloc
 
                 var handle = (GCHandle)udPtr;
-                Debug.Assert(handle.IsAllocated, "GCHandle should always be valid");
+                if (!(handle.IsAllocated)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/LuaStateWrapper.cs:878: handle.IsAllocated" + " | " + ("GCHandle should always be valid"));
 
                 var customAllocator = (ILuaAllocator)handle.Target;
 

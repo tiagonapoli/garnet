@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -202,7 +201,7 @@ namespace Garnet.server
                 count--;
             }
 
-            Debug.Assert(count == 0);
+            if (!(count == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObject.cs:205: count == 0");
         }
 
         /// <inheritdoc />
@@ -304,7 +303,7 @@ namespace Garnet.server
             else
             {
                 HeapMemorySize -= memorySize;
-                Debug.Assert(HeapMemorySize >= MemoryUtils.DictionaryOverhead);
+                if (!(HeapMemorySize >= MemoryUtils.DictionaryOverhead)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObject.cs:307: HeapMemorySize >= MemoryUtils.DictionaryOverhead");
             }
         }
 
@@ -333,7 +332,7 @@ namespace Garnet.server
             else
             {
                 HeapMemorySize -= memorySize;
-                Debug.Assert(this.HeapMemorySize >= MemoryUtils.DictionaryOverhead);
+                if (!(this.HeapMemorySize >= MemoryUtils.DictionaryOverhead)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObject.cs:336: this.HeapMemorySize >= MemoryUtils.DictionaryOverhead");
             }
         }
 
@@ -513,7 +512,7 @@ namespace Garnet.server
             // Called only when we have verified the key exists
             DeleteExpiredItems();
             var success = hashSpanLookup.TryAdd(key, value);
-            Debug.Assert(success);
+            if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObject.cs:516: success");
 
             UpdateSize(key, value, add: true);
         }

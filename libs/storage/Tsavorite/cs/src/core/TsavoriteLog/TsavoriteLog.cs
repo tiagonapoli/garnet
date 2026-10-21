@@ -4,7 +4,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -571,7 +570,7 @@ namespace Tsavorite.core
         /// <param name="lastCommitNum"></param>
         public void Initialize(long beginAddress, long committedUntilAddress, long lastCommitNum = 0)
         {
-            Debug.Assert(!readOnlyMode);
+            if (!(!readOnlyMode)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/TsavoriteLog/TsavoriteLog.cs:574: !readOnlyMode");
 
             try
             {
@@ -1001,7 +1000,7 @@ namespace Tsavorite.core
             var length = entryBytes.Length;
 
             // Length should be pre-aligned
-            Debug.Assert(length == Align(length));
+            if (!(length == Align(length))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/TsavoriteLog/TsavoriteLog.cs:1004: length == Align(length)");
             logicalAddress = 0;
             var allocatedLength = length;
             ValidateAllocatedLength(allocatedLength);
@@ -1439,7 +1438,7 @@ namespace Tsavorite.core
                     return logicalAddress;
 
                 // logicalAddress less than 0 (RETRY_NOW) should already have been handled. We expect flushEvent to be signaled.
-                Debug.Assert(logicalAddress == 0);
+                if (!(logicalAddress == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/TsavoriteLog/TsavoriteLog.cs:1442: logicalAddress == 0");
 
                 // Clear in-flight slot before suspending, re-publish after resuming
                 EndInflightEnqueue();
@@ -1482,7 +1481,7 @@ namespace Tsavorite.core
                     return logicalAddress;
 
                 // logicalAddress less than 0 (RETRY_NOW) should already have been handled
-                Debug.Assert(logicalAddress == 0);
+                if (!(logicalAddress == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/TsavoriteLog/TsavoriteLog.cs:1485: logicalAddress == 0");
 
                 // Clear in-flight slot before suspending, re-publish after resuming
                 EndInflightEnqueue();

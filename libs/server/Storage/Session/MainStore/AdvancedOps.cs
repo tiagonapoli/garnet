@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -38,7 +37,7 @@ namespace Garnet.server
         public bool GET_CompletePending<TStringContext>((GarnetStatus, StringOutput)[] outputArr, bool wait, ref TStringContext context)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
-            Debug.Assert(outputArr != null);
+            if (!(outputArr != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/MainStore/AdvancedOps.cs:41: outputArr != null");
 
             latencyMetrics?.Start(LatencyMetricsType.PENDING_LAT);
             var ret = context.CompletePendingWithOutputs(out var completedOutputs, wait);

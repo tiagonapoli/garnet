@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using Garnet.common;
 using Garnet.server.ACL;
 using Garnet.server.Auth;
@@ -305,7 +304,7 @@ namespace Garnet.server
             var aclAuthenticator = (GarnetACLAuthenticator)_authenticator;
 
             // Return the name of the currently authenticated user.
-            Debug.Assert(aclAuthenticator.GetUserHandle()?.User != null);
+            if (!(aclAuthenticator.GetUserHandle()?.User != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/ACLCommands.cs:308: aclAuthenticator.GetUserHandle()?.User != null");
 
             WriteAsciiBulkString(aclAuthenticator.GetUserHandle().User.Name);
 
@@ -331,8 +330,8 @@ namespace Garnet.server
                 return true;
 
             // NOTE: This is temporary as long as ACL operations are only supported when using the ACL authenticator
-            Debug.Assert(storeWrapper.serverOptions.AuthSettings != null);
-            Debug.Assert(storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings));
+            if (!(storeWrapper.serverOptions.AuthSettings != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/ACLCommands.cs:334: storeWrapper.serverOptions.AuthSettings != null");
+            if (!(storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/ACLCommands.cs:335: storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings)");
             var aclAuthenticationSettings = (AclAuthenticationSettings)storeWrapper.serverOptions.AuthSettings;
 
             // Try to reload the configured ACL configuration file
@@ -371,8 +370,8 @@ namespace Garnet.server
                 return true;
 
             // NOTE: This is temporary as long as ACL operations are only supported when using the ACL authenticator
-            Debug.Assert(storeWrapper.serverOptions.AuthSettings != null);
-            Debug.Assert(storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings));
+            if (!(storeWrapper.serverOptions.AuthSettings != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/ACLCommands.cs:374: storeWrapper.serverOptions.AuthSettings != null");
+            if (!(storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/ACLCommands.cs:375: storeWrapper.serverOptions.AuthSettings.GetType().BaseType == typeof(AclAuthenticationSettings)");
             var aclAuthenticationSettings = (AclAuthenticationSettings)storeWrapper.serverOptions.AuthSettings;
 
             try

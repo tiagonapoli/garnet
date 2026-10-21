@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading;
 
 namespace Tsavorite.core
@@ -56,7 +55,7 @@ namespace Tsavorite.core
 
         void ReturnPage(int index)
         {
-            Debug.Assert(index < BufferSize);
+            if (!(index < BufferSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/TsavoriteLogAllocatorImpl.cs:59: index < BufferSize");
             if (pagePointers[index] != default)
             {
                 if (useNativeLogPages)

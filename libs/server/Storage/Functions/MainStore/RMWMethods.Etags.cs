@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -90,7 +89,7 @@ namespace Garnet.server
                     return IPUResult.Failed;
                 if (!logRecord.TrySetPinnedValueSpan(inputValue, valueAddress, ref valueLength))
                 {
-                    Debug.Fail("Should have succeeded in growing the value as we have ensured there was space there already");
+                    global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:93" + " | " + ("Should have succeeded in growing the value as we have ensured there was space there already"));
                     return IPUResult.Failed;
                 }
             }
@@ -106,7 +105,7 @@ namespace Garnet.server
             var newEtag = cmd is RespCommand.SETIFMATCH ? (existingEtag + 1) : etagFromClient;
             if (!logRecord.TrySetETag(newEtag))
             {
-                Debug.Fail("Should have succeeded in setting ETag as we should have ensured there was space there already");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:109" + " | " + ("Should have succeeded in setting ETag as we should have ensured there was space there already"));
                 return IPUResult.Failed;
             }
 
@@ -135,7 +134,7 @@ namespace Garnet.server
                     return IPUResult.Failed;
                 if (!logRecord.TrySetPinnedValueSpan(inputValue, valueAddress, ref valueLength))
                 {
-                    Debug.Fail("Should have succeeded in growing the value as we have ensured there was space there already");
+                    global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:138" + " | " + ("Should have succeeded in growing the value as we have ensured there was space there already"));
                     return IPUResult.Failed;
                 }
             }
@@ -150,7 +149,7 @@ namespace Garnet.server
             var newEtag = existingEtag + 1;
             if (!logRecord.TrySetETag(newEtag))
             {
-                Debug.Fail("Should have succeeded in setting ETag");
+                global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:153" + " | " + ("Should have succeeded in setting ETag"));
                 return IPUResult.Failed;
             }
 
@@ -265,7 +264,7 @@ namespace Garnet.server
                 _ = logRecord.TrySetExpiration(input.arg1);
 
             // the increment on initial etag is for satisfying the variant that any key with no etag is the same as a zero'd etag
-            Debug.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
+            if (!(sizeInfo.FieldInfo.HasETag)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:268: sizeInfo.FieldInfo.HasETag" + " | " + ("Expected sizeInfo.FieldInfo.HasETag to be true"));
             var newEtag = input.parseState.GetLong(1) + (cmd == RespCommand.SETIFMATCH ? 1 : 0);
             _ = logRecord.TrySetETag(newEtag);
 
@@ -293,7 +292,7 @@ namespace Garnet.server
             if (!logRecord.TrySetValueSpanAndPrepareOptionals(newInputValue, in sizeInfo))
                 return false;
 
-            Debug.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
+            if (!(sizeInfo.FieldInfo.HasETag)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Functions/MainStore/RMWMethods.Etags.cs:296: sizeInfo.FieldInfo.HasETag" + " | " + ("Expected sizeInfo.FieldInfo.HasETag to be true"));
             _ = logRecord.TrySetETag(LogRecord.NoETag + 1);
 
             // Set expiration if provided

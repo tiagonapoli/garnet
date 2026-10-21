@@ -742,7 +742,7 @@ namespace Garnet.client
                     if (param2 != null)
                         RespWriteUtils.TryWriteUtf8BulkString(param2, ref curr, end);
 
-                    Debug.Assert(curr == end);
+                    if (!(curr == end)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/GarnetClient.cs:745: curr == end");
                 }
                 #endregion
 
@@ -855,7 +855,7 @@ namespace Garnet.client
                     if (!param2.IsEmpty)
                         RespWriteUtils.TryWriteBulkString(param2.Span, ref curr, end);
 
-                    Debug.Assert(curr == end);
+                    if (!(curr == end)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/GarnetClient.cs:858: curr == end");
                 }
                 #endregion
 
@@ -967,7 +967,7 @@ namespace Garnet.client
                     RespWriteUtils.TryWriteBulkString(param1, ref curr, end);
                     RespWriteUtils.TryWriteBulkString(param2, ref curr, end);
 
-                    Debug.Assert(curr == end);
+                    if (!(curr == end)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/GarnetClient.cs:970: curr == end");
                 }
                 #endregion
 
@@ -1059,7 +1059,7 @@ namespace Garnet.client
                             RespWriteUtils.TryWriteUtf8BulkString(arg, ref curr, end);
                     }
 
-                    Debug.Assert(curr == end);
+                    if (!(curr == end)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/GarnetClient.cs:1062: curr == end");
                 }
                 #endregion
 
@@ -1174,7 +1174,7 @@ namespace Garnet.client
                         foreach (var arg in args)
                             RespWriteUtils.TryWriteBulkString(arg.Span, ref curr, end);
                     }
-                    Debug.Assert(curr == end);
+                    if (!(curr == end)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/GarnetClient.cs:1177: curr == end");
                 }
                 #endregion
 

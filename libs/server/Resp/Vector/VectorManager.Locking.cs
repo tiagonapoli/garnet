@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -45,9 +44,9 @@ namespace Garnet.server
             /// </summary>
             internal VectorSetLock WithElementLock(ref int elementLock)
             {
-                Debug.Assert(!Unsafe.IsNullRef(ref elementLock), "Element lock must be non-null");
-                Debug.Assert(elementLock == int.MinValue, "Element lock must already be acquired");
-                Debug.Assert(Unsafe.IsNullRef(ref this.elementLock), "Cannot associate with second element lock");
+                if (!(!Unsafe.IsNullRef(ref elementLock))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:48: !Unsafe.IsNullRef(ref elementLock)" + " | " + ("Element lock must be non-null"));
+                if (!(elementLock == int.MinValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:49: elementLock == int.MinValue" + " | " + ("Element lock must already be acquired"));
+                if (!(Unsafe.IsNullRef(ref this.elementLock))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:50: Unsafe.IsNullRef(ref this.elementLock)" + " | " + ("Cannot associate with second element lock"));
 
                 return new(in lockableCtx, lockToken, ref elementLock);
             }
@@ -55,7 +54,7 @@ namespace Garnet.server
             /// <inheritdoc/>
             public void Dispose()
             {
-                Debug.Assert(ActiveThreadSession != null, "Shouldn't exit context when not in one");
+                if (!(ActiveThreadSession != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:58: ActiveThreadSession != null" + " | " + ("Shouldn't exit context when not in one"));
                 ActiveThreadSession = null;
 
                 if (Unsafe.IsNullRef(in lockableCtx))
@@ -68,7 +67,7 @@ namespace Garnet.server
                 if (!Unsafe.IsNullRef(ref elementLock))
                 {
                     var oldVal = Interlocked.Exchange(ref elementLock, 0);
-                    Debug.Assert(oldVal == int.MinValue, "Unlock failed");
+                    if (!(oldVal == int.MinValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:71: oldVal == int.MinValue" + " | " + ("Unlock failed"));
                 }
             }
         }
@@ -151,9 +150,9 @@ namespace Garnet.server
         /// </summary>
         private VectorSetLock ReadVectorIndexCore(StorageSession storageSession, ReadOnlySpan<byte> key, ref StringInput input, scoped Span<byte> indexSpan, bool nonBlocking, out GarnetStatus status, out bool wouldBlock, out bool importPending)
         {
-            Debug.Assert(indexSpan.Length == IndexSizeBytes, "Insufficient space for index");
+            if (!(indexSpan.Length == IndexSizeBytes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:154: indexSpan.Length == IndexSizeBytes" + " | " + ("Insufficient space for index"));
 
-            Debug.Assert(ActiveThreadSession == null, "Shouldn't enter context when already in one");
+            if (!(ActiveThreadSession == null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:156: ActiveThreadSession == null" + " | " + ("Shouldn't enter context when already in one"));
             ActiveThreadSession = storageSession;
             wouldBlock = false;
             try
@@ -214,7 +213,7 @@ namespace Garnet.server
                     try
                     {
                         readRes = storageSession.Read_MainStore(key, ref input, ref indexConfigOutput, ref storageSession.stringBasicContext);
-                        Debug.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never need to move index onto the heap");
+                        if (!(indexConfigOutput.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:217: indexConfigOutput.SpanByteAndMemory.IsSpanByte" + " | " + ("Should never need to move index onto the heap"));
                     }
                     catch
                     {
@@ -417,7 +416,7 @@ namespace Garnet.server
         /// </summary>
         private VectorSetLock SharedReadLock(ReadOptimizedLock.LockToken lockToken)
         {
-            Debug.Assert(!lockToken.IsExclusive, "Read commands must never hold an exclusive Vector Set index lock");
+            if (!(!lockToken.IsExclusive)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:420: !lockToken.IsExclusive" + " | " + ("Read commands must never hold an exclusive Vector Set index lock"));
 
             return new(in vectorSetLocks, lockToken);
         }
@@ -458,9 +457,9 @@ namespace Garnet.server
             bool demandCreate = false
         )
         {
-            Debug.Assert(indexSpan.Length == IndexSizeBytes, "Insufficient space for index");
+            if (!(indexSpan.Length == IndexSizeBytes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:461: indexSpan.Length == IndexSizeBytes" + " | " + ("Insufficient space for index"));
 
-            Debug.Assert(ActiveThreadSession == null, "Shouldn't enter context when already in one");
+            if (!(ActiveThreadSession == null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:463: ActiveThreadSession == null" + " | " + ("Shouldn't enter context when already in one"));
             ActiveThreadSession = storageSession;
             try
             {
@@ -491,7 +490,7 @@ namespace Garnet.server
                     try
                     {
                         readRes = storageSession.Read_MainStore(key, ref input, ref indexConfigOutput, ref storageSession.stringBasicContext);
-                        Debug.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never need to move index onto the heap");
+                        if (!(indexConfigOutput.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:494: indexConfigOutput.SpanByteAndMemory.IsSpanByte" + " | " + ("Should never need to move index onto the heap"));
                     }
                     catch
                     {
@@ -720,9 +719,9 @@ namespace Garnet.server
         /// </summary>
         internal VectorSetLock ReadForDeleteVectorIndex(StorageSession storageSession, ReadOnlySpan<byte> key, ref StringInput input, scoped Span<byte> indexSpan, out GarnetStatus status)
         {
-            Debug.Assert(indexSpan.Length == IndexSizeBytes, "Insufficient space for index");
+            if (!(indexSpan.Length == IndexSizeBytes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:723: indexSpan.Length == IndexSizeBytes" + " | " + ("Insufficient space for index"));
 
-            Debug.Assert(ActiveThreadSession == null, "Shouldn't enter context when already in one");
+            if (!(ActiveThreadSession == null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:725: ActiveThreadSession == null" + " | " + ("Shouldn't enter context when already in one"));
             ActiveThreadSession = storageSession;
 
             var indexConfigOutput = StringOutput.FromPinnedSpan(indexSpan);
@@ -732,7 +731,7 @@ namespace Garnet.server
             try
             {
                 status = storageSession.Read_MainStore(key, ref input, ref indexConfigOutput, ref storageSession.stringBasicContext);
-                Debug.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never need to move index onto the heap");
+                if (!(indexConfigOutput.SpanByteAndMemory.IsSpanByte)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Locking.cs:735: indexConfigOutput.SpanByteAndMemory.IsSpanByte" + " | " + ("Should never need to move index onto the heap"));
             }
             catch
             {

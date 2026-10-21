@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 #pragma warning disable CS1591 // Missing XML comment for publicly visible type or member
@@ -290,7 +289,7 @@ namespace Tsavorite.core
                 if (DataHeader.ValueIsObject)
                 {
                     var (valueLength, valueAddress) = DataHeader.GetValueFieldInfo(physicalAddress);
-                    Debug.Assert(valueLength == ObjectIdMap.ObjectIdSize, $"valueLength {valueLength} should be ObjectIdSize {ObjectIdMap.ObjectIdSize}");
+                    if (!(valueLength == ObjectIdMap.ObjectIdSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:293: valueLength == ObjectIdMap.ObjectIdSize" + " | " + ($"valueLength {valueLength} should be ObjectIdSize {ObjectIdMap.ObjectIdSize}"));
                     *(int*)valueAddress = objectIdMap.AllocateAndSet(value);
 
                     // Clear the object log file position.
@@ -330,7 +329,7 @@ namespace Tsavorite.core
 
             if (!DataHeader.ValueIsObject)
                 ThrowTsavoriteException("SetDeserializedValueObject should only be called by Deserialization with ValueIsObject==true");
-            Debug.Assert(valueLength == ObjectIdMap.ObjectIdSize, $"valueLength {valueLength} should be ObjectIdSize {ObjectIdMap.ObjectIdSize}");
+            if (!(valueLength == ObjectIdMap.ObjectIdSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:333: valueLength == ObjectIdMap.ObjectIdSize" + " | " + ($"valueLength {valueLength} should be ObjectIdSize {ObjectIdMap.ObjectIdSize}"));
 
             *(int*)valueAddress = objectIdMap.AllocateAndSet(heapObject);
 
@@ -481,7 +480,7 @@ namespace Tsavorite.core
         public static int GetAllocatedSize(long physicalAddress)
         {
             // Ensure this isn't called accidentally on a null record; it is used by revivification so that should never happen.
-            Debug.Assert(!(*(RecordInfo*)physicalAddress).IsNull, "GetAllocatedSize should not be called on a null RecordInfo");
+            if (!(!(*(RecordInfo*)physicalAddress).IsNull)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:484: !(*(RecordInfo*)physicalAddress).IsNull" + " | " + ("GetAllocatedSize should not be called on a null RecordInfo"));
             return (*(RecordDataHeader*)(physicalAddress + RecordInfo.Size)).GetRecordLength();
         }
 
@@ -544,7 +543,7 @@ namespace Tsavorite.core
 
             if (sizeInfo.KeyIsInline)
             {
-                Debug.Assert(key.KeyBytes.Length == sizeInfo.InlineKeySize, $"Key length {key.KeyBytes.Length} != sizeInfo.InlineKeySize {sizeInfo.InlineKeySize}");
+                if (!(key.KeyBytes.Length == sizeInfo.InlineKeySize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:547: key.KeyBytes.Length == sizeInfo.InlineKeySize" + " | " + ($"Key length {key.KeyBytes.Length} != sizeInfo.InlineKeySize {sizeInfo.InlineKeySize}"));
                 key.KeyBytes.CopyTo(new Span<byte>((byte*)keyAddress, sizeInfo.InlineKeySize));
             }
             else
@@ -583,7 +582,7 @@ namespace Tsavorite.core
                 }
                 else
                 {
-                    Debug.Assert(sizeInfo.FieldInfo.ValueSize == ObjectIdMap.ObjectIdSize, $"Expected object size ({ObjectIdMap.ObjectIdSize}) for Object ValueSize but was {sizeInfo.FieldInfo.ValueSize}");
+                    if (!(sizeInfo.FieldInfo.ValueSize == ObjectIdMap.ObjectIdSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:586: sizeInfo.FieldInfo.ValueSize == ObjectIdMap.ObjectIdSize" + " | " + ($"Expected object size ({ObjectIdMap.ObjectIdSize}) for Object ValueSize but was {sizeInfo.FieldInfo.ValueSize}"));
 
                     // Unlike for Keys and Overflow values, we do not set the objectId here; we wait for the UMD operation to do that.
                     *(int*)valueAddress = ObjectIdMap.InvalidObjectId;
@@ -639,7 +638,7 @@ namespace Tsavorite.core
         internal static ReadOnlySpan<byte> GetInlineKey(long physicalAddress)
         {
             var dataHeader = *(RecordDataHeader*)(physicalAddress + RecordInfo.Size);
-            Debug.Assert(dataHeader.KeyIsInline, "Key must be inline");
+            if (!(dataHeader.KeyIsInline)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:642: dataHeader.KeyIsInline" + " | " + ("Key must be inline"));
             var (length, dataAddress) = dataHeader.GetKeyFieldInfo(physicalAddress);
             return new((byte*)dataAddress, length);
         }
@@ -658,7 +657,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public readonly bool TrySetContentLengths(int newValueSize, in RecordSizeInfo sizeInfo, bool zeroInit = false)
         {
-            Debug.Assert(newValueSize == sizeInfo.FieldInfo.ValueSize, $"Mismatched value size; expected {sizeInfo.FieldInfo.ValueSize}, actual {newValueSize}");
+            if (!(newValueSize == sizeInfo.FieldInfo.ValueSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:661: newValueSize == sizeInfo.FieldInfo.ValueSize" + " | " + ($"Mismatched value size; expected {sizeInfo.FieldInfo.ValueSize}, actual {newValueSize}"));
             return TrySetContentLengthsAndPrepareOptionals(in sizeInfo, zeroInit, out _ /*valueAddress*/);
         }
 
@@ -755,13 +754,12 @@ namespace Tsavorite.core
                 {
                     if (sizeInfo.ValueIsOverflow)
                     {
-                        Debug.Assert(inlineValueGrowth == ObjectIdMap.ObjectIdSize - oldInlineValueSize,
-                                    $"ValueGrowth {inlineValueGrowth} does not equal expected {oldInlineValueSize - ObjectIdMap.ObjectIdSize}");
+                        if (!(inlineValueGrowth == ObjectIdMap.ObjectIdSize - oldInlineValueSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:758: inlineValueGrowth == ObjectIdMap.ObjectIdSize - oldInlineValueSize" + " | " + ($"ValueGrowth {inlineValueGrowth} does not equal expected {oldInlineValueSize - ObjectIdMap.ObjectIdSize}"));
                         _ = LogField.ConvertInlineToOverflow(ref localDataHeader, physicalAddress, valueAddress, oldInlineValueSize, in sizeInfo, objectIdMap);
                     }
                     else
                     {
-                        Debug.Assert(sizeInfo.ValueIsObject, "Expected ValueIsObject to be set, pt 1");
+                        if (!(sizeInfo.ValueIsObject)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:764: sizeInfo.ValueIsObject" + " | " + ("Expected ValueIsObject to be set, pt 1"));
                         _ = LogField.ConvertInlineToValueObject(ref localDataHeader, physicalAddress, valueAddress, in sizeInfo, objectIdMap);
                     }
                     // After conversion away from inline, set ValueLength to ObjectIdSize to match the post-conversion state.
@@ -776,14 +774,14 @@ namespace Tsavorite.core
                     }
                     else
                     {
-                        Debug.Assert(sizeInfo.ValueIsObject, "Expected ValueIsObject to be set, pt 2");
+                        if (!(sizeInfo.ValueIsObject)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:779: sizeInfo.ValueIsObject" + " | " + ("Expected ValueIsObject to be set, pt 2"));
                         _ = LogField.ConvertOverflowToValueObject(ref localDataHeader, physicalAddress, valueAddress, in sizeInfo, objectIdMap);
                         // ObjectId-sized; localDataHeader.ValueLength remains ObjectIdSize
                     }
                 }
                 else
                 {
-                    Debug.Assert(localDataHeader.ValueIsObject, "Expected ValueIsObject to be set, pt 3");
+                    if (!(localDataHeader.ValueIsObject)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:786: localDataHeader.ValueIsObject" + " | " + ("Expected ValueIsObject to be set, pt 3"));
 
                     if (sizeInfo.ValueIsInline)
                     {
@@ -792,7 +790,7 @@ namespace Tsavorite.core
                     }
                     else
                     {
-                        Debug.Assert(sizeInfo.ValueIsOverflow, "Expected ValueIsOverflow to be true");
+                        if (!(sizeInfo.ValueIsOverflow)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:795: sizeInfo.ValueIsOverflow" + " | " + ("Expected ValueIsOverflow to be true"));
                         _ = LogField.ConvertValueObjectToOverflow(ref localDataHeader, physicalAddress, valueAddress, in sizeInfo, objectIdMap);
                         // ObjectId-sized; localDataHeader.ValueLength remains ObjectIdSize
                     }
@@ -824,8 +822,8 @@ namespace Tsavorite.core
             // record length the old RDH represented), so a scanner reading either the pre- or post-install RDH gets a consistent record extent.
             SetDataHeader(localDataHeader);
 
-            Debug.Assert(localDataHeader.ValueIsInline == sizeInfo.ValueIsInline, "Final ValueIsInline is inconsistent");
-            Debug.Assert(!localDataHeader.ValueIsInline || ValueSpan.Length <= sizeInfo.MaxInlineValueSize, $"Inline ValueSpan.Length {ValueSpan.Length} is greater than sizeInfo.MaxInlineValueSpanSize {sizeInfo.MaxInlineValueSize}");
+            if (!(localDataHeader.ValueIsInline == sizeInfo.ValueIsInline)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:827: localDataHeader.ValueIsInline == sizeInfo.ValueIsInline" + " | " + ("Final ValueIsInline is inconsistent"));
+            if (!(!localDataHeader.ValueIsInline || ValueSpan.Length <= sizeInfo.MaxInlineValueSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:828: !localDataHeader.ValueIsInline || ValueSpan.Length <= sizeInfo.MaxInlineValueSize" + " | " + ($"Inline ValueSpan.Length {ValueSpan.Length} is greater than sizeInfo.MaxInlineValueSpanSize {sizeInfo.MaxInlineValueSize}"));
             return true;
         }
 
@@ -844,7 +842,7 @@ namespace Tsavorite.core
         {
             if (!DataHeader.ValueIsInline)
             {
-                Debug.Fail($"{nameof(TrySetPinnedValueLength)} should only be called when Value is known to be inline, such as INCRBY");
+                global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:847" + " | " + ($"{nameof(TrySetPinnedValueLength)} should only be called when Value is known to be inline, such as INCRBY"));
                 return false;
             }
 
@@ -978,11 +976,11 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public readonly bool TrySetValueObject(IHeapObject value)
         {
-            Debug.Assert(DataHeader.ValueIsObject, $"Cannot call this overload of {GetCurrentMethodName()} for non-object Value");
+            if (!(DataHeader.ValueIsObject)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:981: DataHeader.ValueIsObject" + " | " + ($"Cannot call this overload of {GetCurrentMethodName()} for non-object Value"));
 
             if (!DataHeader.ValueIsObject)
             {
-                Debug.Fail($"Cannot call {GetCurrentMethodName()} with no {nameof(RecordSizeInfo)} when !ValueIsObject");
+                global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:985" + " | " + ($"Cannot call {GetCurrentMethodName()} with no {nameof(RecordSizeInfo)} when !ValueIsObject"));
                 return false;
             }
 
@@ -1043,7 +1041,7 @@ namespace Tsavorite.core
         {
             get
             {
-                Debug.Assert(HasNamespace, "Shouldn't call if !HasNamespace");
+                if (!(HasNamespace)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1046: HasNamespace" + " | " + ("Shouldn't call if !HasNamespace"));
                 return Namespace;
             }
         }
@@ -1063,7 +1061,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal readonly void InitializeForReuse(in RecordSizeInfo sizeInfo)
         {
-            Debug.Assert(!DataHeader.HasETag && !DataHeader.HasExpiration, "Record should not have ETag or Expiration here");
+            if (!(!DataHeader.HasETag && !DataHeader.HasExpiration)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1066: !DataHeader.HasETag && !DataHeader.HasExpiration" + " | " + ("Record should not have ETag or Expiration here"));
 
             // This is called after the record has been allocated, so it's at the tail (or very close to it), and before it is returned to the TryBlockAllocate
             // caller. So all we need to do is initialize it to a consistent RecordLength state. We could make this a little leaner for this case but this is
@@ -1305,7 +1303,7 @@ namespace Tsavorite.core
             {
                 if (srcLogRecord.DataHeader.ValueIsOverflow)
                 {
-                    Debug.Assert(DataHeader.ValueIsOverflow, "Expected this.DataHeader.ValueIsOverflow to be set already");
+                    if (!(DataHeader.ValueIsOverflow)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1308: DataHeader.ValueIsOverflow" + " | " + ("Expected this.DataHeader.ValueIsOverflow to be set already"));
                     ValueOverflow = srcLogRecord.ValueOverflow;
                 }
                 else
@@ -1315,7 +1313,7 @@ namespace Tsavorite.core
                     // which means mutations on the destination affect the source's reported heap size
                     // at eviction time, causing accounting drift in logSizeTracker. A naive Clone()
                     // here causes CanDoHashExpireLTM to crash — needs investigation in a follow-up.
-                    Debug.Assert(srcLogRecord.ValueObject is not null, "Expected srcLogRecord.ValueObject to be set (or deserialized) already");
+                    if (!(srcLogRecord.ValueObject is not null)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1318: srcLogRecord.ValueObject is not null" + " | " + ("Expected srcLogRecord.ValueObject to be set (or deserialized) already"));
                     if (!TrySetValueObjectAndPrepareOptionals(srcLogRecord.ValueObject, in sizeInfo))
                         return false;
                 }
@@ -1330,7 +1328,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public readonly void PopulateRecordSizeInfoForIPU(ref RecordSizeInfo sizeInfo)
         {
-            Debug.Assert(sizeInfo.word == 0, "RecordSizeInfo should not be resused");
+            if (!(sizeInfo.word == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1333: sizeInfo.word == 0" + " | " + ("RecordSizeInfo should not be resused"));
 
             var dataHeader = DataHeader;
             var (keyLength, existingValueLength) = dataHeader.GetKVLengths(physicalAddress, out var eTagLen, out var expirationLen, out var objectLogPositionLen, out var fillerLen, out _ /*valueAddress*/);
@@ -1518,7 +1516,7 @@ namespace Tsavorite.core
         {
             if (DataHeader.RecordIsInline)   // ValueIsInline is true; if the record is fully inline, we should not be called here
             {
-                Debug.Fail("Cannot call SetObjectLogRecordStartPositionAndLength for an inline record");
+                global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1521" + " | " + ("Cannot call SetObjectLogRecordStartPositionAndLength for an inline record"));
                 return;
             }
 
@@ -1575,7 +1573,7 @@ namespace Tsavorite.core
         {
             if (DataHeader.RecordIsInline)
             {
-                Debug.Fail("Cannot call RepointObjectLogPosition for an inline record");
+                global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1578" + " | " + ("Cannot call RepointObjectLogPosition for an inline record"));
                 return;
             }
 
@@ -1600,7 +1598,7 @@ namespace Tsavorite.core
                 // Combine low 12 bits (RDH) with next 32 bits (int* slot at keyAddress).
                 var keyHighBits = (ulong)(uint)*(int*)keyAddress;
                 var combinedKeyLength = (keyHighBits << RecordDataHeader.kKeyLengthBits) | (ulong)(uint)dataHeader.GetKeyLengthRaw();
-                Debug.Assert(combinedKeyLength <= int.MaxValue, $"Key length {combinedKeyLength} exceeds int.MaxValue");
+                if (!(combinedKeyLength <= int.MaxValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1603: combinedKeyLength <= int.MaxValue" + " | " + ($"Key length {combinedKeyLength} exceeds int.MaxValue"));
                 keyLength = (int)combinedKeyLength;
             }
             else // KeyIsInline is true; keyLength will be ignored
@@ -1617,7 +1615,7 @@ namespace Tsavorite.core
                 valueObjectLength = 0;
                 if (dataHeader.RecordIsInline) // If the record is fully inline, we should not be called here
                 {
-                    Debug.Fail("Cannot call GetObjectLogRecordStartPositionAndLengths for an inline record");
+                    global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1620" + " | " + ("Cannot call GetObjectLogRecordStartPositionAndLengths for an inline record"));
                     return 0;
                 }
             }
@@ -1643,7 +1641,7 @@ namespace Tsavorite.core
         {
             if (DataHeader.RecordIsInline)
             {
-                Debug.Fail("Cannot call SetRecoveredObjectLogRecordStartPositionAndLengths for an inline record");
+                global::System.Environment.FailFast("Debug.Fail at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1646" + " | " + ("Cannot call SetRecoveredObjectLogRecordStartPositionAndLengths for an inline record"));
                 return 0;
             }
 
@@ -1707,8 +1705,8 @@ namespace Tsavorite.core
         internal readonly void OnObjectReadComplete()
         {
             // Simply assert Key and Value lengths. We should always have the check for !InlineKey/Value returning ObjectIdSize.
-            Debug.Assert(DataHeader.KeyIsInline || DataHeader.KeyLength == ObjectIdMap.ObjectIdSize, "Expected KeyLength to always be ObjectIdSize for non-inline key");
-            Debug.Assert(DataHeader.ValueIsInline || DataHeader.ValueLength == ObjectIdMap.ObjectIdSize, "Expected ValueLength to always be ObjectIdSize for non-inline value");
+            if (!(DataHeader.KeyIsInline || DataHeader.KeyLength == ObjectIdMap.ObjectIdSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1710: DataHeader.KeyIsInline || DataHeader.KeyLength == ObjectIdMap.ObjectIdSize" + " | " + ("Expected KeyLength to always be ObjectIdSize for non-inline key"));
+            if (!(DataHeader.ValueIsInline || DataHeader.ValueLength == ObjectIdMap.ObjectIdSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/LogRecord.cs:1711: DataHeader.ValueIsInline || DataHeader.ValueLength == ObjectIdMap.ObjectIdSize" + " | " + ("Expected ValueLength to always be ObjectIdSize for non-inline value"));
 #if false
             var dataHeader = DataHeader;
             var modified = false;

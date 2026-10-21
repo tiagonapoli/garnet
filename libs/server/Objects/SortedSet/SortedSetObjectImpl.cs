@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using Garnet.common;
 
@@ -190,10 +189,10 @@ namespace Garnet.server
 
                         sortedSetDict[member] = score;
                         var success = sortedSet.Remove((scoreStored, member));
-                        Debug.Assert(success);
+                        if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/SortedSet/SortedSetObjectImpl.cs:193: success");
                         success = sortedSet.Add((score, member));
                         _ = TryRemoveExpiration(member);
-                        Debug.Assert(success);
+                        if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/SortedSet/SortedSetObjectImpl.cs:196: success");
 
                         // If CH flag is set, add changed member to final count
                         if ((options & SortedSetAddOption.CH) == SortedSetAddOption.CH)
@@ -243,7 +242,7 @@ namespace Garnet.server
         private void SortedSetLength(ref ObjectOutput output)
         {
             // Check both objects
-            Debug.Assert(sortedSetDict.Count == sortedSet.Count, "SortedSet object is not in sync.");
+            if (!(sortedSetDict.Count == sortedSet.Count)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/SortedSet/SortedSetObjectImpl.cs:246: sortedSetDict.Count == sortedSet.Count" + " | " + ("SortedSet object is not in sync."));
             output.result1 = Count();
         }
 
@@ -1069,8 +1068,8 @@ namespace Garnet.server
             {
                 // this exception is thrown when the SortedSet is empty or
                 // when the supplied minimum is larger than the sortedset maximum.
-                Debug.Assert(sortedSet.Count == 0 ||
-                             new ReadOnlySpan<byte>(sortedSet.Max.Element).SequenceCompareTo(minValueChars) < 0);
+                if (!(sortedSet.Count == 0 ||
+                             new ReadOnlySpan<byte>(sortedSet.Max.Element).SequenceCompareTo(minValueChars) < 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/SortedSet/SortedSetObjectImpl.cs:1072: sortedSet.Count == 0 || new ReadOnlySpan<byte>(sortedSet.Max.Element).SequenceCompareTo(minValueChars) < 0");
             }
 
             errorCode = 0;

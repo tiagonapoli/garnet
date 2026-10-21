@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 #if DEBUG
-using System.Diagnostics;
 #endif
 using System.Runtime.CompilerServices;
 using Garnet.common;
@@ -60,7 +59,7 @@ namespace Garnet.server
             var offset = args.offset;
             var bitCount = (byte)(args.typeInfo & 0x7F);
 #if DEBUG
-            Debug.Assert(TryValidateBitfieldOffset(offset, bitCount, multiplyOffset: false, out _, out var endOffset));
+            if (!(TryValidateBitfieldOffset(offset, bitCount, multiplyOffset: false, out _, out var endOffset))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Bitmap/BitmapManagerBitfield.cs:63: TryValidateBitfieldOffset(offset, bitCount, multiplyOffset: false, out _, out var endOffset)");
 #else
             var endOffset = offset + bitCount - 1;
 #endif

@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Garnet.common;
@@ -18,7 +17,7 @@ namespace Garnet.cluster
 
         private ClusterSlotVerificationResult SingleKeySlotVerify(ref ClusterConfig config, ref PinnedSpanByte keySlice, bool readOnly, bool SessionAsking, bool waitForStableSlot, int slot = -1)
         {
-            Debug.Assert(!waitForStableSlot || (waitForStableSlot && !readOnly), "Shouldn't see Vector Set writes and readonly at same time");
+            if (!(!waitForStableSlot || (waitForStableSlot && !readOnly))) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Session/SlotVerification/ClusterSlotVerify.cs:21: !waitForStableSlot || (waitForStableSlot && !readOnly)" + " | " + ("Shouldn't see Vector Set writes and readonly at same time"));
 
             return readOnly ? SingleKeyReadSlotVerify(ref config, ref keySlice) : SingleKeyReadWriteSlotVerify(waitForStableSlot, ref config, ref keySlice);
 

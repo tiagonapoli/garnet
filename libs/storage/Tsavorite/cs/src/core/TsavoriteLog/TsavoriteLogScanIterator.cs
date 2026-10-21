@@ -4,7 +4,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -700,7 +699,7 @@ namespace Tsavorite.core
                     foundCommit = true;
                     info.Initialize(new ReadOnlySpan<byte>((void*)(headerSize + physicalAddress), entryLength));
 
-                    Debug.Assert(info.CommitNum != -1);
+                    if (!(info.CommitNum != -1)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/TsavoriteLog/TsavoriteLogScanIterator.cs:703: info.CommitNum != -1");
 
                     // If we have already found the commit number we are looking for, can stop early
                     if (info.CommitNum == commitNum) break;

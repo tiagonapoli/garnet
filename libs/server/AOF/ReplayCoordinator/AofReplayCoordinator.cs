@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
@@ -229,7 +228,7 @@ namespace Garnet.server
                                     break;
                                 default:
                                     // BasicHeader from SL-era AOF: all replay tasks participate.
-                                    Debug.Assert(headerType is not AofHeaderType.BasicChunkHeader and not AofHeaderType.ShardedChunkHeader, "Chunked headers should not be encountered as they were added after *LogTransactionHeader");
+                                    if (!(headerType is not AofHeaderType.BasicChunkHeader and not AofHeaderType.ShardedChunkHeader)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/ReplayCoordinator/AofReplayCoordinator.cs:232: headerType is not AofHeaderType.BasicChunkHeader and not AofHeaderType.ShardedChunkHeader" + " | " + ("Chunked headers should not be encountered as they were added after *LogTransactionHeader"));
                                     logAccessCount = (short)serverOptions.AofReplayTaskCount;
                                     startSeqNum = logAddressSequenceNumber;
                                     break;
@@ -362,7 +361,7 @@ namespace Garnet.server
             internal void ProcessFuzzyRegionTransactionGroup(int sublogIdx, byte* ptr, bool asReplica, long entryAddress = 0)
             {
                 var txnGroupBuffer = aofReplayContext[sublogIdx].txnGroupBuffer;
-                Debug.Assert(txnGroupBuffer != null);
+                if (!(txnGroupBuffer != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/ReplayCoordinator/AofReplayCoordinator.cs:365: txnGroupBuffer != null");
 
                 // Every buffered commit marker is recorded together with its group, so the two stay in step. If they
                 // do not, a transaction's operations have been lost; fail loudly rather than silently skipping them.
@@ -723,7 +722,7 @@ namespace Garnet.server
             /// <param name="operation">The operation to execute</param>
             internal void ProcessSynchronizedOperation(int sublogIdx, long sequenceNumber, short participantCount, int barrierId, Func<Task> operation)
             {
-                Debug.Assert(serverOptions.MultiLogEnabled);
+                if (!(serverOptions.MultiLogEnabled)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/AOF/ReplayCoordinator/AofReplayCoordinator.cs:726: serverOptions.MultiLogEnabled");
 
                 // Synchronize execution across sublogs
                 var leaderBarrier = GetBarrier(barrierId, sequenceNumber, participantCount);

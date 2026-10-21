@@ -4,7 +4,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading.Tasks;
 using Garnet.client;
 using Garnet.common;
@@ -62,10 +61,10 @@ namespace Garnet.cluster
             {
                 _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                 var more = completedOutputs.Next();
-                Debug.Assert(more);
+                if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Migration/MigrateSessionCommonUtils.cs:65: more");
                 status = completedOutputs.Current.Status;
                 output = completedOutputs.Current.Output;
-                Debug.Assert(!completedOutputs.Next());
+                if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Migration/MigrateSessionCommonUtils.cs:68: !completedOutputs.Next()");
                 completedOutputs.Dispose();
             }
         }

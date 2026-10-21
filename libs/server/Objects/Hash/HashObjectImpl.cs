@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -312,7 +311,7 @@ namespace Garnet.server
 
                 var formattedValue = (Span<byte>)stackalloc byte[NumUtils.MaximumFormatInt64Length];
                 var success = result.TryFormat(formattedValue, out var bytesWritten, provider: CultureInfo.InvariantCulture);
-                Debug.Assert(success);
+                if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObjectImpl.cs:315: success");
 
                 formattedValue = formattedValue.Slice(0, bytesWritten);
 
@@ -389,7 +388,7 @@ namespace Garnet.server
 
                 var formattedValue = (Span<byte>)stackalloc byte[NumUtils.MaximumFormatDoubleLength];
                 var success = result.TryFormat(formattedValue, out var bytesWritten, provider: CultureInfo.InvariantCulture);
-                Debug.Assert(success);
+                if (!(success)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Objects/Hash/HashObjectImpl.cs:392: success");
 
                 formattedValue = formattedValue.Slice(0, bytesWritten);
 

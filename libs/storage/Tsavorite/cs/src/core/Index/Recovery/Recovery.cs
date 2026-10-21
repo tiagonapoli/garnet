@@ -948,7 +948,7 @@ namespace Tsavorite.core
             if (recoverFromAddress > startLogicalAddressOfPage)
             {
                 pageFromAddressOffset = hlogBase.GetOffsetOnPage(recoverFromAddress);
-                Debug.Assert(pageFromAddressOffset >= hlogBase.pageHeaderSize, $"pageFromAddressOffset {pageFromAddressOffset} must be >= hlogBase.pageHeaderSize {hlogBase.pageHeaderSize} (which may be 0)");
+                if (!(pageFromAddressOffset >= hlogBase.pageHeaderSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:951: pageFromAddressOffset >= hlogBase.pageHeaderSize" + " | " + ($"pageFromAddressOffset {pageFromAddressOffset} must be >= hlogBase.pageHeaderSize {hlogBase.pageHeaderSize} (which may be 0)"));
             }
             if (untilAddress < endLogicalAddressOfPage)
                 pageUntilAddressOffset = hlogBase.GetOffsetOnPage(untilAddress);
@@ -1316,9 +1316,8 @@ namespace Tsavorite.core
                 }
 
                 long recordSize = logRecord.AllocatedSize;
-                Debug.Assert(recordSize > 0 && recordSize <= endOffset - recordOffset,
-                    $"recordSize {recordSize} must be > 0 and <= remaining page space (possibly limited by untilAddress) {pageSize - endOffset};" +
-                    $" recordOffset {recordOffset}, endOffset {endOffset}, pageSize {pageSize}");
+                if (!(recordSize > 0 && recordSize <= endOffset - recordOffset)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:1319: recordSize > 0 && recordSize <= endOffset - recordOffset" + " | " + ($"recordSize {recordSize} must be > 0 and <= remaining page space (possibly limited by untilAddress) {pageSize - endOffset};" +
+                    $" recordOffset {recordOffset}, endOffset {endOffset}, pageSize {pageSize}"));
                 recordOffset += recordSize;
             }
         }
@@ -1341,8 +1340,8 @@ namespace Tsavorite.core
         private unsafe bool RecoverFromPage(long recoverFromAddress, long pageFromAddressOffset, long pageUntilAddressOffset,
                                      long pageStartLogicalAddress, long pageStartPhysicalAddress, in RecoveryOptions options)
         {
-            Debug.Assert(pageFromAddressOffset >= hlogBase.pageHeaderSize, $"fromLogicalAddressInPage {pageFromAddressOffset} must be >= hlogBase.pageHeaderSize {hlogBase.pageHeaderSize} (which may be 0)");
-            Debug.Assert(pageUntilAddressOffset <= hlogBase.GetPageSize(), $"pageSize {pageUntilAddressOffset} must be <= PageSize {hlogBase.GetPageSize()}");
+            if (!(pageFromAddressOffset >= hlogBase.pageHeaderSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:1344: pageFromAddressOffset >= hlogBase.pageHeaderSize" + " | " + ($"fromLogicalAddressInPage {pageFromAddressOffset} must be >= hlogBase.pageHeaderSize {hlogBase.pageHeaderSize} (which may be 0)"));
+            if (!(pageUntilAddressOffset <= hlogBase.GetPageSize())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:1345: pageUntilAddressOffset <= hlogBase.GetPageSize()" + " | " + ($"pageSize {pageUntilAddressOffset} must be <= PageSize {hlogBase.GetPageSize()}"));
             var touched = false;
 
             var recordOffset = pageFromAddressOffset;
@@ -1462,8 +1461,8 @@ namespace Tsavorite.core
                 if (head > headAddress)
                     headAddress = head;
             }
-            Debug.Assert(beginAddress <= headAddress);
-            Debug.Assert(headAddress <= untilAddress);
+            if (!(beginAddress <= headAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:1465: beginAddress <= headAddress");
+            if (!(headAddress <= untilAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Recovery/Recovery.cs:1466: headAddress <= untilAddress");
 
             // Special cases: we do not load any records into memory
             if ((beginAddress == untilAddress) || // Empty log

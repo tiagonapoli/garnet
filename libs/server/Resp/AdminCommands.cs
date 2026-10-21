@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -123,7 +122,7 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool CheckACLPermissions(RespCommand cmd)
         {
-            Debug.Assert(!_authenticator.IsAuthenticated || (_userHandle != null));
+            if (!(!_authenticator.IsAuthenticated || (_userHandle != null))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/AdminCommands.cs:126: !_authenticator.IsAuthenticated || (_userHandle != null)");
 
             // Custom (extension) commands need per-name allow/deny on top of the bitmap check.
             // Route them through a separate method so the built-in command hot path stays branch-free.
@@ -602,9 +601,9 @@ namespace Garnet.server
             if (ModuleUtils.LoadAssemblies([modulePath], storeWrapper.serverOptions.ExtensionBinPaths,
                 storeWrapper.serverOptions.ExtensionAllowUnsignedAssemblies, out var loadedAssemblies, out errorMsg))
             {
-                Debug.Assert(loadedAssemblies != null);
+                if (!(loadedAssemblies != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/AdminCommands.cs:605: loadedAssemblies != null");
                 var assembliesList = loadedAssemblies.ToList();
-                Debug.Assert(assembliesList.Count == 1, "Only one assembly per module load");
+                if (!(assembliesList.Count == 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/AdminCommands.cs:607: assembliesList.Count == 1" + " | " + ("Only one assembly per module load"));
 
                 if (ModuleRegistrar.Instance.LoadModule(customCommandManager, assembliesList[0], moduleArgs, logger, out errorMsg))
                 {
@@ -1065,7 +1064,7 @@ namespace Garnet.server
             }
 
             var dbFound = storeWrapper.TryGetOrAddDatabase(dbId, out var db, out _);
-            Debug.Assert(dbFound);
+            if (!(dbFound)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/AdminCommands.cs:1068: dbFound");
 
             var seconds = db.LastSaveTime.ToUnixTimeSeconds();
             while (!RespWriteUtils.TryWriteInt64(seconds, ref dcurr, dend))

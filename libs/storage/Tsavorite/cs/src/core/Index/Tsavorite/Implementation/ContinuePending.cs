@@ -1,8 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
-
 namespace Tsavorite.core
 {
     public unsafe partial class TsavoriteKV<TStoreFunctions, TAllocator> : TsavoriteBase
@@ -47,7 +45,7 @@ namespace Tsavorite.core
             {
                 if (!FindTagAndTryEphemeralSLock<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, out var status))
                 {
-                    Debug.Assert(status != OperationStatus.NOTFOUND, "Expected to FindTag in InternalContinuePendingRead");
+                    if (!(status != OperationStatus.NOTFOUND)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ContinuePending.cs:50: status != OperationStatus.NOTFOUND" + " | " + ("Expected to FindTag in InternalContinuePendingRead"));
                     if (HandleImmediateRetryStatus<TInput, TOutput, TContext, TSessionFunctionsWrapper>(status, sessionFunctions, ref operationState))
                         continue;
                     return status;
@@ -268,7 +266,7 @@ namespace Tsavorite.core
                     // now below HeadAddress and there is at least one record below HeadAddress but above InitialLatestLogicalAddress. We must do InternalRMW.
                     if (stackCtx.recSrc.LogicalAddress > operationState.initialLatestLogicalAddress)
                     {
-                        Debug.Assert(operationState.initialLatestLogicalAddress < hlogBase.HeadAddress, "Failed to search all in-memory records");
+                        if (!(operationState.initialLatestLogicalAddress < hlogBase.HeadAddress)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/ContinuePending.cs:271: operationState.initialLatestLogicalAddress < hlogBase.HeadAddress" + " | " + ("Failed to search all in-memory records"));
                         break;
                     }
 

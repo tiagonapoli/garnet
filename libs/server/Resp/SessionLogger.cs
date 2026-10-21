@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet.server
@@ -14,7 +13,7 @@ namespace Garnet.server
 
         public SessionLogger(ILogger logger, string sessionId)
         {
-            Debug.Assert(logger != null);
+            if (!(logger != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/SessionLogger.cs:17: logger != null");
             _logger = logger;
             _sessionIdPrefix = sessionId;
         }

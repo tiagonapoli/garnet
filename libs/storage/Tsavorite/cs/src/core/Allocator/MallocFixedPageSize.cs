@@ -5,7 +5,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -159,8 +158,8 @@ namespace Tsavorite.core
         private unsafe MallocFixedPageSize(int levelCount, ILogger logger)
         {
             // Level 0 is allocated below and every level-0 allocation pre-allocates level 1, so two levels are the minimum.
-            Debug.Assert(levelCount >= MinLevelCount, "levelCount must be at least MinLevelCount");
-            Debug.Assert(levelCount <= MaxLevelCount, "levelCount must be at most MaxLevelCount");
+            if (!(levelCount >= MinLevelCount)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:162: levelCount >= MinLevelCount" + " | " + ("levelCount must be at least MinLevelCount"));
+            if (!(levelCount <= MaxLevelCount)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:163: levelCount <= MaxLevelCount" + " | " + ("levelCount must be at most MaxLevelCount"));
 
             this.levelCount = levelCount;
             ordinaryAllocationLimit = MaxAllocationCount;
@@ -198,7 +197,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public long GetPhysicalAddress(long logicalAddress)
         {
-            Debug.Assert(IsBlittable, "GetPhysicalAddress requires the values to be blittable");
+            if (!(IsBlittable)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:201: IsBlittable" + " | " + ("GetPhysicalAddress requires the values to be blittable"));
             return (long)pointers[logicalAddress >> PageSizeBits] + (logicalAddress & PageSizeMask) * RecordSize;
         }
 
@@ -210,7 +209,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe ref T Get(long index)
         {
-            Debug.Assert(index != InvalidAllocationIndex, "Invalid allocation index");
+            if (!(index != InvalidAllocationIndex)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:213: index != InvalidAllocationIndex" + " | " + ("Invalid allocation index"));
             if (IsBlittable)
                 return ref Unsafe.AsRef<T>((byte*)(pointers[index >> PageSizeBits]) + (index & PageSizeMask) * RecordSize);
             else
@@ -225,7 +224,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe void Set(long index, ref T value)
         {
-            Debug.Assert(index != InvalidAllocationIndex, "Invalid allocation index");
+            if (!(index != InvalidAllocationIndex)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:228: index != InvalidAllocationIndex" + " | " + ("Invalid allocation index"));
             if (IsBlittable)
                 Unsafe.AsRef<T>((byte*)(pointers[index >> PageSizeBits]) + (index & PageSizeMask) * RecordSize) = value;
             else
@@ -278,7 +277,7 @@ namespace Tsavorite.core
         public unsafe long BulkAllocate()
         {
 #if DEBUG
-            Debug.Assert(allocationMode != AllocationMode.Single, "Cannot mix Single and Bulk allocation modes");
+            if (!(allocationMode != AllocationMode.Single)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:281: allocationMode != AllocationMode.Single" + " | " + ("Cannot mix Single and Bulk allocation modes"));
             allocationMode = AllocationMode.Bulk;
 #endif
             return InternalAllocate(AllocateChunkSize, useReservation: false);
@@ -300,7 +299,7 @@ namespace Tsavorite.core
         internal unsafe long Allocate(bool useReservation)
         {
 #if DEBUG
-            Debug.Assert(allocationMode != AllocationMode.Bulk, "Cannot mix Single and Bulk allocation modes");
+            if (!(allocationMode != AllocationMode.Bulk)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:303: allocationMode != AllocationMode.Bulk" + " | " + ("Cannot mix Single and Bulk allocation modes"));
             allocationMode = AllocationMode.Single;
 #endif
             return InternalAllocate(1, useReservation);
@@ -746,7 +745,7 @@ namespace Tsavorite.core
                     }
                     numBytesRead += length;
                 }
-                Debug.Assert(numBytesRead == numBytesToRead);
+                if (!(numBytesRead == numBytesToRead)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/MallocFixedPageSize.cs:749: numBytesRead == numBytesToRead");
             }
             catch
             {

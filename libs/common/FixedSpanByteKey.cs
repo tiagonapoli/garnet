@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Tsavorite.core;
 
@@ -48,7 +47,7 @@ namespace Garnet.common
         {
             get
             {
-                Debug.Fail("Should never be called on FixedSpanByteKey");
+                global::System.Environment.FailFast("Debug.Fail at libs/common/FixedSpanByteKey.cs:51" + " | " + ("Should never be called on FixedSpanByteKey"));
                 return [];
             }
         }

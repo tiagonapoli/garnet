@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using Garnet.common;
 using Tsavorite.core;
 
@@ -20,10 +19,10 @@ namespace Garnet.server
         {
             unified.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            if (!(more)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/UnifiedStore/CompletePending.cs:23: more");
             status = completedOutputs.Current.Status;
             output = completedOutputs.Current.Output;
-            Debug.Assert(!completedOutputs.Next());
+            if (!(!completedOutputs.Next())) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/UnifiedStore/CompletePending.cs:26: !completedOutputs.Next()");
             completedOutputs.Dispose();
         }
     }

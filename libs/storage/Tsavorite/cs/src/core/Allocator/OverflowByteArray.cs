@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -120,9 +119,9 @@ namespace Tsavorite.core
 
         internal readonly void SetOffsets(int offsetFromStart, int offsetFromEnd)
         {
-            Debug.Assert(offsetFromStart > 0 && offsetFromStart < Array.Length - 1, "offsetFromStart is out of range");
-            Debug.Assert(offsetFromEnd > 0 && offsetFromEnd < Array.Length - 1, "offsetFromEnd is out of range");
-            Debug.Assert(offsetFromStart < offsetFromEnd, "offsetFromStart must be less than offsetFromEnd");
+            if (!(offsetFromStart > 0 && offsetFromStart < Array.Length - 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/OverflowByteArray.cs:123: offsetFromStart > 0 && offsetFromStart < Array.Length - 1" + " | " + ("offsetFromStart is out of range"));
+            if (!(offsetFromEnd > 0 && offsetFromEnd < Array.Length - 1)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/OverflowByteArray.cs:124: offsetFromEnd > 0 && offsetFromEnd < Array.Length - 1" + " | " + ("offsetFromEnd is out of range"));
+            if (!(offsetFromStart < offsetFromEnd)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/OverflowByteArray.cs:125: offsetFromStart < offsetFromEnd" + " | " + ("offsetFromStart must be less than offsetFromEnd"));
             ref var header = ref Unsafe.As<byte, OverflowHeader>(ref Array[0]);
             header.startOffset = offsetFromStart;
             header.endOffset = offsetFromEnd;

@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -21,7 +21,7 @@ namespace Garnet.server
 
         internal unsafe ScriptHashKey(ReadOnlySpan<byte> stackSpan)
         {
-            Debug.Assert(stackSpan.Length == SessionScriptCache.SHA1Len, "Only one valid length for script hash keys");
+            if (!(stackSpan.Length == SessionScriptCache.SHA1Len)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Lua/ScriptHashKey.cs:24: stackSpan.Length == SessionScriptCache.SHA1Len" + " | " + ("Only one valid length for script hash keys"));
 
             ptr = (long*)Unsafe.AsPointer(ref MemoryMarshal.GetReference(stackSpan));
         }

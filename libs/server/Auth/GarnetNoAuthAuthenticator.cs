@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 
 namespace Garnet.server.Auth
 {
@@ -16,7 +15,7 @@ namespace Garnet.server.Auth
 
         public bool Authenticate(ReadOnlySpan<byte> password, ReadOnlySpan<byte> username)
         {
-            Debug.Fail("No auth authenticator should never authenticate.");
+            global::System.Environment.FailFast("Debug.Fail at libs/server/Auth/GarnetNoAuthAuthenticator.cs:19" + " | " + ("No auth authenticator should never authenticate."));
             return false;
         }
     }

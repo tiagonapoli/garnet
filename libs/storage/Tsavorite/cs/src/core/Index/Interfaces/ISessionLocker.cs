@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -79,39 +78,35 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryLockEphemeralExclusive(TsavoriteKV<TStoreFunctions, TAllocator> store, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
         {
-            Debug.Assert(store.LockTable.IsLockedExclusive(ref stackCtx.hei),
-                        $"Attempting to use a non-XLocked key in a Transactional context (requesting XLock):"
+            if (!(store.LockTable.IsLockedExclusive(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Interfaces/ISessionLocker.cs:82: store.LockTable.IsLockedExclusive(ref stackCtx.hei)" + " | " + ($"Attempting to use a non-XLocked key in a Transactional context (requesting XLock):"
                         + $" XLocked {store.LockTable.IsLockedExclusive(ref stackCtx.hei)},"
-                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}");
+                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}"));
             return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryLockEphemeralShared(TsavoriteKV<TStoreFunctions, TAllocator> store, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
         {
-            Debug.Assert(store.LockTable.IsLocked(ref stackCtx.hei),
-                        $"Attempting to use a non-Locked (S or X) key in a Transactional context (requesting SLock):"
+            if (!(store.LockTable.IsLocked(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Interfaces/ISessionLocker.cs:92: store.LockTable.IsLocked(ref stackCtx.hei)" + " | " + ($"Attempting to use a non-Locked (S or X) key in a Transactional context (requesting SLock):"
                         + $" XLocked {store.LockTable.IsLockedExclusive(ref stackCtx.hei)},"
-                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}");
+                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}"));
             return true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void UnlockEphemeralExclusive(TsavoriteKV<TStoreFunctions, TAllocator> store, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
         {
-            Debug.Assert(store.LockTable.IsLockedExclusive(ref stackCtx.hei),
-                        $"Attempting to unlock a non-XLocked key in a Transactional context (requesting XLock):"
+            if (!(store.LockTable.IsLockedExclusive(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Interfaces/ISessionLocker.cs:102: store.LockTable.IsLockedExclusive(ref stackCtx.hei)" + " | " + ($"Attempting to unlock a non-XLocked key in a Transactional context (requesting XLock):"
                         + $" XLocked {store.LockTable.IsLockedExclusive(ref stackCtx.hei)},"
-                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}");
+                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}"));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void UnlockEphemeralShared(TsavoriteKV<TStoreFunctions, TAllocator> store, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx)
         {
-            Debug.Assert(store.LockTable.IsLockedShared(ref stackCtx.hei),
-                        $"Attempting to use a non-XLocked key in a Transactional context (requesting XLock):"
+            if (!(store.LockTable.IsLockedShared(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Interfaces/ISessionLocker.cs:111: store.LockTable.IsLockedShared(ref stackCtx.hei)" + " | " + ($"Attempting to use a non-XLocked key in a Transactional context (requesting XLock):"
                         + $" XLocked {store.LockTable.IsLockedExclusive(ref stackCtx.hei)},"
-                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}");
+                        + $" Slocked {store.LockTable.IsLockedShared(ref stackCtx.hei)}"));
         }
     }
 }

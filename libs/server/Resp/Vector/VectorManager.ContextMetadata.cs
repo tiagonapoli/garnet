@@ -4,7 +4,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -62,9 +61,9 @@ namespace Garnet.server
 
             public readonly bool IsInUse(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:65: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:66: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:67: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
@@ -74,9 +73,9 @@ namespace Garnet.server
 
             public readonly bool IsMigrating(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:77: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:78: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:79: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
@@ -86,9 +85,9 @@ namespace Garnet.server
 
             public readonly bool IsCleaningUp(bool allowZero, ulong context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:89: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:90: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:91: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
@@ -177,7 +176,7 @@ namespace Garnet.server
                 {
                     var ctx = NextNotInUse(allowZero);
 
-                    Debug.Assert(ctx != null, "Context should be locked, so this should never fail");
+                    if (!(ctx != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:180: ctx != null" + " | " + ("Context should be locked, so this should never fail"));
 
                     reserved.Add(ctx.Value);
 
@@ -190,14 +189,14 @@ namespace Garnet.server
 
             public void MarkInUse(bool allowZero, ushort context, ushort hashSlot)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:193: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:194: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:195: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) == 0, "About to mark context which is already in use");
+                if (!((inUse & mask) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:200: (inUse & mask) == 0" + " | " + ("About to mark context which is already in use"));
                 inUse |= mask;
 
                 slots[(int)bitIx] = hashSlot;
@@ -207,15 +206,15 @@ namespace Garnet.server
 
             public void MarkMigrating(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:210: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:211: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:212: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "About to mark migrating a context which is not in use");
-                Debug.Assert((migrating & mask) == 0, "About to mark migrating a context which is already migrating");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:217: (inUse & mask) != 0" + " | " + ("About to mark migrating a context which is not in use"));
+                if (!((migrating & mask) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:218: (migrating & mask) == 0" + " | " + ("About to mark migrating a context which is already migrating"));
                 migrating |= mask;
 
                 Version++;
@@ -223,16 +222,16 @@ namespace Garnet.server
 
             public void MarkMigrationComplete(bool allowZero, ushort context, ushort hashSlot)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:226: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:227: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:228: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "Should already be in use");
-                Debug.Assert((migrating & mask) != 0, "Should be migrating target");
-                Debug.Assert(slots[(int)bitIx] == ushort.MaxValue, "Hash slot should not be known yet");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:233: (inUse & mask) != 0" + " | " + ("Should already be in use"));
+                if (!((migrating & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:234: (migrating & mask) != 0" + " | " + ("Should be migrating target"));
+                if (!(slots[(int)bitIx] == ushort.MaxValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:235: slots[(int)bitIx] == ushort.MaxValue" + " | " + ("Hash slot should not be known yet"));
 
                 migrating &= ~mask;
 
@@ -243,15 +242,15 @@ namespace Garnet.server
 
             public void MarkCleaningUp(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:246: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:247: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:248: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "About to mark for cleanup when not actually in use");
-                Debug.Assert((cleaningUp & mask) == 0, "About to mark for cleanup when already marked");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:253: (inUse & mask) != 0" + " | " + ("About to mark for cleanup when not actually in use"));
+                if (!((cleaningUp & mask) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:254: (cleaningUp & mask) == 0" + " | " + ("About to mark for cleanup when already marked"));
                 cleaningUp |= mask;
 
                 // If this slot were migrating, it isn't anymore
@@ -264,15 +263,15 @@ namespace Garnet.server
 
             public void ClearIsCleaningUp(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:267: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:268: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:269: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "Should be in use if was marked for cleanup");
-                Debug.Assert((cleaningUp & mask) != 0, "About to clear cleanup when not marked for cleanup");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:274: (inUse & mask) != 0" + " | " + ("Should be in use if was marked for cleanup"));
+                if (!((cleaningUp & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:275: (cleaningUp & mask) != 0" + " | " + ("About to clear cleanup when not marked for cleanup"));
                 cleaningUp &= ~mask;
 
                 Version++;
@@ -280,15 +279,15 @@ namespace Garnet.server
 
             public void FinishedCleaningUp(bool allowZero, ushort context)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:283: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:284: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:285: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "Cleaned up context which isn't in use");
-                Debug.Assert((cleaningUp & mask) != 0, "Cleaned up context not marked for it");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:290: (inUse & mask) != 0" + " | " + ("Cleaned up context which isn't in use"));
+                if (!((cleaningUp & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:291: (cleaningUp & mask) != 0" + " | " + ("Cleaned up context not marked for it"));
                 cleaningUp &= ~mask;
                 inUse &= ~mask;
 
@@ -299,15 +298,15 @@ namespace Garnet.server
 
             public void UpdateHashSlot(bool allowZero, ushort context, ushort slot)
             {
-                Debug.Assert(allowZero || context != 0, "Zero context not permitted here");
-                Debug.Assert((context % ContextStep) == 0, "Should only consider whole block of context, not a sub-bit");
-                Debug.Assert((context / ContextStep) < 64, "Context larger than expected");
+                if (!(allowZero || context != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:302: allowZero || context != 0" + " | " + ("Zero context not permitted here"));
+                if (!((context % ContextStep) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:303: (context % ContextStep) == 0" + " | " + ("Should only consider whole block of context, not a sub-bit"));
+                if (!((context / ContextStep) < 64)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:304: (context / ContextStep) < 64" + " | " + ("Context larger than expected"));
 
                 var bitIx = context / ContextStep;
                 var mask = 1UL << (byte)bitIx;
 
-                Debug.Assert((inUse & mask) != 0, "Updating hash slot for context not in use");
-                Debug.Assert((cleaningUp & mask) == 0, "Updating hash slot for context being cleaned up");
+                if (!((inUse & mask) != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:309: (inUse & mask) != 0" + " | " + ("Updating hash slot for context not in use"));
+                if (!((cleaningUp & mask) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:310: (cleaningUp & mask) == 0" + " | " + ("Updating hash slot for context being cleaned up"));
 
                 slots[(int)bitIx] = slot;
 
@@ -711,7 +710,7 @@ namespace Garnet.server
         /// </summary>
         public static ulong ExtractContextFromNamespaces(ReadOnlySpan<byte> namespaceBytes)
         {
-            Debug.Assert(namespaceBytes.Length is (sizeof(byte) or sizeof(uint)), "Namespace size unexpected");
+            if (!(namespaceBytes.Length is (sizeof(byte) or sizeof(uint)))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:714: namespaceBytes.Length is (sizeof(byte) or sizeof(uint))" + " | " + ("Namespace size unexpected"));
 
             ulong ns;
             if (namespaceBytes.Length == 1)
@@ -735,8 +734,8 @@ namespace Garnet.server
         /// </summary>
         public static void StoreContextInNamespace(ulong context, ref Span<byte> namespaceBytes)
         {
-            Debug.Assert(namespaceBytes.Length >= sizeof(uint), "Insufficient space in provided Span");
-            Debug.Assert(context is > 0 and <= uint.MaxValue, "Context must be (0, uint.MaxValue]");
+            if (!(namespaceBytes.Length >= sizeof(uint))) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:738: namespaceBytes.Length >= sizeof(uint)" + " | " + ("Insufficient space in provided Span"));
+            if (!(context is > 0 and <= uint.MaxValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.ContextMetadata.cs:739: context is > 0 and <= uint.MaxValue" + " | " + ("Context must be (0, uint.MaxValue]"));
 
             if (context <= RecordNamespace.MaximumSingleByteNamespaceValue)
             {

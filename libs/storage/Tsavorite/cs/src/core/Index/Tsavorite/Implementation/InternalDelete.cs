@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -98,7 +97,7 @@ namespace Tsavorite.core
                                 srcLogRecord = stackCtx.recSrc.CreateLogRecord();
                             goto CreateNewRecord;
                         default:
-                            Debug.Assert(latchDestination == LatchDestination.NormalProcessing, "Unknown latchDestination value; expected NormalProcessing");
+                            if (!(latchDestination == LatchDestination.NormalProcessing)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalDelete.cs:101: latchDestination == LatchDestination.NormalProcessing" + " | " + ("Unknown latchDestination value; expected NormalProcessing"));
                             break;
                     }
                 }
@@ -153,14 +152,14 @@ namespace Tsavorite.core
                 }
 
                 // Either on-disk or no record exists - drop through to create new record.
-                Debug.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei), "A Transactional-session Delete() of an on-disk or non-existent key requires a LockTable lock");
+                if (!(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei))) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalDelete.cs:156: !sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei)" + " | " + ("A Transactional-session Delete() of an on-disk or non-existent key requires a LockTable lock"));
 
             CreateNewRecord:
                 // Immutable region or new record
                 status = CreateNewRecordDelete(key, ref srcLogRecord, ref operationState, sessionFunctions, ref stackCtx, ref deleteInfo);
 
                 // We should never return "SUCCESS" for a new record operation: it returns NOTFOUND on success.
-                Debug.Assert(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS);
+                if (!(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalDelete.cs:163: OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS");
                 goto Done;
             }
             finally
@@ -203,7 +202,7 @@ namespace Tsavorite.core
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
             var sizeInfo = hlog.GetDeleteRecordSize(key);
-            Debug.Assert(!sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration, $"Delete new-record sizeInfo should not have HasETag {sizeInfo.FieldInfo.HasETag} or HasExpiration {sizeInfo.FieldInfo.HasExpiration}");
+            if (!(!sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/InternalDelete.cs:206: !sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration" + " | " + ($"Delete new-record sizeInfo should not have HasETag {sizeInfo.FieldInfo.HasETag} or HasExpiration {sizeInfo.FieldInfo.HasExpiration}"));
 
             AllocateOptions allocOptions = new()
             {

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1077,7 +1076,7 @@ namespace Garnet.server
                 bytesRead = buffer.Length;
 
                 var parsed = ParseCommand(writeErrorOnFailure: false, out var res);
-                Debug.Assert(res, "Should never pass an incomplete buffer");
+                if (!(res)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Parser/RespCommand.cs:1080: res" + " | " + ("Should never pass an incomplete buffer"));
 
                 return parsed;
             }
@@ -1186,8 +1185,8 @@ namespace Garnet.server
                 }
             }
 
-            Debug.Assert(cmd != RespCommand.NONE, "ParseCommand should never return NONE - expected INVALID for unrecognized commands");
-            Debug.Assert(count >= 0 || cmd == RespCommand.INVALID, "Argument count must be non-negative for valid commands");
+            if (!(cmd != RespCommand.NONE)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Parser/RespCommand.cs:1189: cmd != RespCommand.NONE" + " | " + ("ParseCommand should never return NONE - expected INVALID for unrecognized commands"));
+            if (!(count >= 0 || cmd == RespCommand.INVALID)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Parser/RespCommand.cs:1190: count >= 0 || cmd == RespCommand.INVALID" + " | " + ("Argument count must be non-negative for valid commands"));
             if (count > MaxRespArrayLength)
             {
                 RespParsingException.ThrowExcessiveArgumentCount(count, MaxRespArrayLength);

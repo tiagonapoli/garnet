@@ -1,11 +1,11 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
 #if DEBUG
 using System.Collections.Concurrent;
-#endif
 using System.Diagnostics;
+#endif
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -209,7 +209,7 @@ namespace Garnet.common
                     }
                 }
             }
-            Debug.Assert(totalReferences > 0, $"Return with {totalReferences}");
+            if (!(totalReferences > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Memory/LimitedFixedBufferPool.cs:212: totalReferences > 0" + " | " + ($"Return with {totalReferences}"));
             Interlocked.Decrement(ref totalReferences);
         }
 
@@ -409,8 +409,8 @@ namespace Garnet.common
         /// <returns></returns>
         public static int GetLevel(int minAllocationSize, int requestedSize)
         {
-            Debug.Assert(BitOperations.IsPow2(minAllocationSize));
-            Debug.Assert(BitOperations.IsPow2(requestedSize));
+            if (!(BitOperations.IsPow2(minAllocationSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Memory/LimitedFixedBufferPool.cs:412: BitOperations.IsPow2(minAllocationSize)");
+            if (!(BitOperations.IsPow2(requestedSize))) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Memory/LimitedFixedBufferPool.cs:413: BitOperations.IsPow2(requestedSize)");
             var level = requestedSize / minAllocationSize;
 
             return level == 1 ? 0 : BitOperations.Log2((uint)level - 1) + 1;

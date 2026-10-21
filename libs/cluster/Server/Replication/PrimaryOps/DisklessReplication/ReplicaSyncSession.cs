@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Threading.Tasks;
 using Garnet.client;
 using Garnet.common;
@@ -184,7 +183,7 @@ namespace Garnet.cluster
             try
             {
                 await signalCompletion.WaitAsync(token).ConfigureAwait(false);
-                Debug.Assert(ssInfo.syncStatus is SyncStatus.SUCCESS or SyncStatus.FAILED);
+                if (!(ssInfo.syncStatus is SyncStatus.SUCCESS or SyncStatus.FAILED)) global::System.Environment.FailFast("Debug.Assert failed at libs/cluster/Server/Replication/PrimaryOps/DisklessReplication/ReplicaSyncSession.cs:187: ssInfo.syncStatus is SyncStatus.SUCCESS or SyncStatus.FAILED");
             }
             catch (Exception ex)
             {

@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -117,7 +116,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public ref T AsRef<T>() where T : unmanaged
         {
-            Debug.Assert(length == Unsafe.SizeOf<T>());
+            if (!(length == Unsafe.SizeOf<T>())) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/VarLen/PinnedSpanByte.cs:120: length == Unsafe.SizeOf<T>()");
             return ref Unsafe.AsRef<T>((T*)ptr);
         }
 

@@ -3,7 +3,6 @@
 
 using System;
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Tsavorite.core;
 
@@ -60,8 +59,8 @@ namespace Garnet.common
         public VectorElementKey(ReadOnlySpan<byte> namespaceBytes, ReadOnlySpan<byte> key)
         {
             RecordNamespace.AssertValid(namespaceBytes);
-            Debug.Assert(namespaceBytes.Length == 1 || (namespaceBytes.Length % 4) == 0, "Namespace must be either 1-byte or a multiple of 4-bytes long");
-            Debug.Assert(namespaceBytes.Length != 4 || BinaryPrimitives.ReadUInt32LittleEndian(namespaceBytes) > RecordNamespace.MaximumSingleByteNamespaceValue, $"A context of {RecordNamespace.MaximumSingleByteNamespaceValue} or less must be stored in a single byte");
+            if (!(namespaceBytes.Length == 1 || (namespaceBytes.Length % 4) == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/VectorElementKey.cs:63: namespaceBytes.Length == 1 || (namespaceBytes.Length % 4) == 0" + " | " + ("Namespace must be either 1-byte or a multiple of 4-bytes long"));
+            if (!(namespaceBytes.Length != 4 || BinaryPrimitives.ReadUInt32LittleEndian(namespaceBytes) > RecordNamespace.MaximumSingleByteNamespaceValue)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/VectorElementKey.cs:64: namespaceBytes.Length != 4 || BinaryPrimitives.ReadUInt32LittleEndian(namespaceBytes) > RecordNamespace.MaximumSingleByteNamespaceValue" + " | " + ($"A context of {RecordNamespace.MaximumSingleByteNamespaceValue} or less must be stored in a single byte"));
 
             KeyBytes = key;
             NamespaceBytes = namespaceBytes;

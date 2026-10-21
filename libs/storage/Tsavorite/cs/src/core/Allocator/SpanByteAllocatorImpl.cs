@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -53,7 +52,7 @@ namespace Tsavorite.core
 
         void ReturnPage(int index)
         {
-            Debug.Assert(index < BufferSize);
+            if (!(index < BufferSize)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/SpanByteAllocatorImpl.cs:56: index < BufferSize");
             if (pagePointers[index] != default)
             {
                 if (useNativeLogPages)
@@ -172,7 +171,7 @@ namespace Tsavorite.core
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void PopulateRecordSizeInfo(ref RecordSizeInfo sizeInfo)
         {
-            Debug.Assert(sizeInfo.word == 0, "RecordSizeInfo should not be reused");
+            if (!(sizeInfo.word == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Allocator/SpanByteAllocatorImpl.cs:175: sizeInfo.word == 0" + " | " + ("RecordSizeInfo should not be reused"));
 
             // For SpanByteAllocator, we are always inline.
             // Key

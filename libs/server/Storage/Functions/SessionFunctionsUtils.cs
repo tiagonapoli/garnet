@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -167,7 +166,7 @@ namespace Garnet.server
             if (expiration != 0)
             {
                 if (!logRecord.TrySetExpiration(expiration))
-                    Debug.Fail("Should have succeeded in setting Expiration as we should have ensured there was space there already");
+                    global::System.Environment.FailFast("Debug.Fail at libs/server/Storage/Functions/SessionFunctionsUtils.cs:170" + " | " + ("Should have succeeded in setting Expiration as we should have ensured there was space there already"));
             }
             else if (logRecord.DataHeader.HasExpiration)
                 _ = logRecord.RemoveExpiration();

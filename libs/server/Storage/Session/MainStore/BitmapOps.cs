@@ -4,7 +4,6 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Text;
 using Garnet.common;
 using Tsavorite.core;
@@ -89,7 +88,7 @@ namespace Garnet.server
             if (txnManager.state != TxnState.Running)
             {
                 createTransaction = true;
-                Debug.Assert(txnManager.state == TxnState.None);
+                if (!(txnManager.state == TxnState.None)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/MainStore/BitmapOps.cs:92: txnManager.state == TxnState.None");
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Main);
                 txnManager.SaveKeyEntryToLock(keys[0], LockType.Exclusive);
                 for (var i = 1; i < keys.Length; i++)
@@ -458,7 +457,7 @@ namespace Garnet.server
                 status = Read_MainStore(key.ReadOnlySpan, ref input, ref output, ref context);
             else
             {
-                Debug.Assert(input.header.cmd != RespCommand.BITFIELD_RO);
+                if (!(input.header.cmd != RespCommand.BITFIELD_RO)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Storage/Session/MainStore/BitmapOps.cs:461: input.header.cmd != RespCommand.BITFIELD_RO");
                 status = RMW_MainStore(key.ReadOnlySpan, ref input, ref output, ref context);
             }
             return status;

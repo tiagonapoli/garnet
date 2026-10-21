@@ -174,7 +174,7 @@ namespace Garnet.common
         {
             lock (@lock)
             {
-                Debug.Assert(parkingSuspensions > 0, "ResumeParking without a matching SuspendParking");
+                if (!(parkingSuspensions > 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Testing/ExceptionInjectionHelper.cs:177: parkingSuspensions > 0" + " | " + ("ResumeParking without a matching SuspendParking"));
                 parkingSuspensions--;
             }
         }

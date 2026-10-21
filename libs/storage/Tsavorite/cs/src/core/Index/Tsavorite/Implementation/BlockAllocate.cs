@@ -1,7 +1,6 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -30,7 +29,7 @@ namespace Tsavorite.core
             }
 
             // logicalAddress less than 0 (RETRY_NOW) should already have been handled. We expect flushEvent to be signaled.
-            Debug.Assert(logicalAddress == 0, "Expected RETRY_LATER");
+            if (!(logicalAddress == 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/storage/Tsavorite/cs/src/core/Index/Tsavorite/Implementation/BlockAllocate.cs:33: logicalAddress == 0" + " | " + ("Expected RETRY_LATER"));
             internalStatus = OperationStatus.ALLOCATE_FAILED;
             return false;
         }

@@ -12,7 +12,6 @@
 //         TaskToApm.End<int>(asyncResult);
 
 #nullable enable
-using System.Diagnostics;
 using Garnet.common;
 
 namespace System.Threading.Tasks
@@ -77,7 +76,7 @@ namespace System.Threading.Tasks
             /// <param name="callback">Callback to invoke when the wrapped task completes.</param>
             internal TaskAsyncResult(Task task, object? state, AsyncCallback? callback)
             {
-                Debug.Assert(task != null);
+                if (!(task != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Networking/TaskToApm.cs:80: task != null");
                 _task = task;
                 AsyncState = state;
 
@@ -102,8 +101,8 @@ namespace System.Threading.Tasks
             /// <summary>Invokes the callback.</summary>
             private void InvokeCallback()
             {
-                Debug.Assert(!CompletedSynchronously);
-                Debug.Assert(_callback != null);
+                if (!(!CompletedSynchronously)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Networking/TaskToApm.cs:105: !CompletedSynchronously");
+                if (!(_callback != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/common/Networking/TaskToApm.cs:106: _callback != null");
                 _callback.Invoke(this);
             }
 

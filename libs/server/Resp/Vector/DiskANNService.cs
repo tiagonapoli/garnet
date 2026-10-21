@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Tsavorite.core;
@@ -69,7 +68,7 @@ namespace Garnet.server
             {
                 var ret = NativeDiskANNMethods.create_index(context, dimensions, reduceDims, quantType, distanceMetric, buildExplorationFactor, numLinks, startPointId, (nint)readCallback, (nint)writeCallback, (nint)deleteCallback, (nint)readModifyWriteCallback, (nint)filterCallback, (nint)logCallback, out quantizationRequested);
 
-                Debug.Assert(ret != 0, "create_index failed, returning a null pointer - this shouldn't be possible");
+                if (!(ret != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:72: ret != 0" + " | " + ("create_index failed, returning a null pointer - this shouldn't be possible"));
 
                 return ret;
             }
@@ -172,7 +171,7 @@ namespace Garnet.server
             }
             else
             {
-                Debug.Assert(res == NativeDiskANNMethods.DiskANNInsertResult.SuccessStartTraining, "Unexpected DiskANNInsertResult");
+                if (!(res == NativeDiskANNMethods.DiskANNInsertResult.SuccessStartTraining)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:175: res == NativeDiskANNMethods.DiskANNInsertResult.SuccessStartTraining" + " | " + ("Unexpected DiskANNInsertResult"));
 
                 needsQuantization = true;
                 return InsertResult.SuccessInsert;
@@ -225,7 +224,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:228: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -241,7 +240,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:244: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -313,7 +312,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:316: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -329,7 +328,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:332: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -393,7 +392,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:396: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -409,7 +408,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    if (!(getRes)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:412: getRes" + " | " + ("Should always be able to get array to pin"));
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));

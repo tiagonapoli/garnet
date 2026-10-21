@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -519,7 +518,7 @@ namespace Garnet.client
         /// <exception cref="Exception"></exception>
         public unsafe void ExecuteClusterAppendLog(string nodeId, int physicalSublogIdx, long previousAddress, long currentAddress, long nextAddress, long payloadPtr, int payloadLength)
         {
-            Debug.Assert(nodeId != null);
+            if (!(nodeId != null)) global::System.Environment.FailFast("Debug.Assert failed at libs/client/ClientSession/GarnetClientSession.cs:522: nodeId != null");
 
             var curr = offset;
             var arraySize = 8;
