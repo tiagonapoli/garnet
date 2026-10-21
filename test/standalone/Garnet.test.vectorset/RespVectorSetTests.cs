@@ -5112,6 +5112,60 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A copy-update of a read-only index record hands the DiskANN index pointer to the new record, so the superseded
+        /// source must not keep it: page eviction calls OnEvict for the source and would request drop_index of an index
+        /// that is still live (or, after the Vector Set is deleted, a second drop of a freed index).
+        /// </summary>
+        [Test]
+        public void VectorSetCopyUpdateClearsSourceIndexPointer([Values("VADD", "VREM", "VSETATTR")] string operation)
+        {
+            var cmd = Enum.Parse<RespCommand>(operation);
+            var arg1 = operation switch { "VADD" => VectorManager.VADDAppendLogArg, "VREM" => VectorManager.VREMAppendLogArg, _ => VectorManager.VSETATTRAppendLogArg };
+
+            // A single-bucket hash index makes a tag collision cheap to find.
+            TearDown();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, aofMemorySize: DefaultAOFMemorySize, enableVectorSetPreview: true, indexSize: "64");
+            server.Start();
+            server.Provider.StoreWrapper.DefaultDatabase.VectorManager.AllocateTestContexts(preAllocatedContexts);
+
+            var key = $"{nameof(VectorSetCopyUpdateClearsSourceIndexPointer)}:{operation}";
+            var keyBytes = Encoding.ASCII.GetBytes(key);
+            var store = server.Provider.StoreWrapper.store;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [key, "VALUES", "3", "1", "2", "3", new byte[] { 1, 0, 0, 0 }]));
+            VectorManager.ReadIndex(ReadRawVectorStub(key), out _, out _, out _, out _, out _, out _, out _, out _, out var liveIndexPtr);
+            ClassicAssert.AreNotEqual((nint)0, liveIndexPtr, "the live index record must hold a DiskANN index pointer");
+
+            // The colliding key heads the tag chain, so the copy-update cannot elide the source record.
+            ClassicAssert.IsTrue(db.StringSet(FindKeyWithSameHashTagAndBucket(keyBytes), "x"));
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var status = SimulateVectorSetStubRmw(key, cmd, arg1, out _);
+            ClassicAssert.IsTrue(status.Record.CopyUpdated, $"a read-only {operation} append-log RMW must take the CopyUpdater path (got {status})");
+
+            VectorManager.ReadIndex(ReadRawVectorStub(key), out _, out _, out _, out _, out _, out _, out _, out _, out var tailIndexPtr);
+            ClassicAssert.AreEqual(liveIndexPtr, tailIndexPtr, "the copy-updated record must own the live index pointer");
+
+            // Eviction calls OnEvict for every record that is not null, invalid, or a tombstone.
+            var holders = new List<long>();
+            using (var iter = store.Log.Scan(store.Log.HeadAddress, store.Log.TailAddress, includeClosedRecords: true))
+            {
+                while (iter.GetNext())
+                {
+                    if (iter.Info.IsNull || iter.Info.Invalid || iter.Info.Tombstone || iter.RecordType != VectorManager.RecordType || !iter.Key.SequenceEqual(keyBytes))
+                        continue;
+
+                    VectorManager.ReadIndex(iter.ValueSpan, out _, out _, out _, out _, out _, out _, out _, out _, out var indexPtr);
+                    if (indexPtr != 0)
+                        holders.Add(iter.CurrentAddress);
+                }
+            }
+
+            ClassicAssert.AreEqual(1, holders.Count, $"{operation} copy-update left {holders.Count} evictable records holding index pointer 0x{liveIndexPtr:X}: {string.Join(", ", holders)}");
+        }
+
+        /// <summary>
         /// Deleting a read-only Vector Set index record that cannot be elided (a newer record with the same hash tag is
         /// ahead of it in the tag chain) seals the source record without invalidating it. The Deleted trigger drops the
         /// DiskANN index, so the sealed record must not keep the index pointer: page eviction calls OnEvict for it, which
