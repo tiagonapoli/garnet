@@ -5,7 +5,11 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
+using Garnet.client;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -164,6 +168,80 @@ namespace Garnet.test.cluster
 
             // Final sanity: the surviving node still serves commands.
             ClassicAssert.IsTrue(NodeResponds(publisherIndex), "Surviving node was unresponsive at end of test");
+        }
+
+        [Test, Order(2), CancelAfter(120_000)]
+        public async Task ClusterPublishNotBlockedByUnresponsivePeerAsync(CancellationToken cancellationToken)
+        {
+            const int clusterTimeoutSeconds = 60;
+            const int publishWindowSeconds = 15;
+            context.CreateInstances(2, disablePubSub: false, timeout: clusterTimeoutSeconds);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(primary_count: 2, replica_count: 0, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(0, 1, context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(1, 0, context.logger);
+
+            var publisherEndpoint = context.clusterTestUtils.GetEndPoint(0);
+            var peerEndpoint = context.clusterTestUtils.GetEndPoint(1);
+
+            // Replace the peer with one that accepts TCP connections but never replies, like a frozen process.
+            context.ShutdownNode(1);
+            var silentPeer = new TcpListener(peerEndpoint);
+            silentPeer.Start();
+            using var silentPeerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var gossipHandshakes = 0;
+            var acceptedSockets = new List<Socket>();
+            var acceptTask = Task.Run(async () =>
+            {
+                while (!silentPeerCts.IsCancellationRequested)
+                {
+                    var socket = await silentPeer.AcceptSocketAsync(silentPeerCts.Token);
+                    lock (acceptedSockets) acceptedSockets.Add(socket);
+                    _ = Task.Run(async () =>
+                    {
+                        var received = new StringBuilder();
+                        var buffer = new byte[4096];
+                        while (true)
+                        {
+                            var read = await socket.ReceiveAsync(buffer, SocketFlags.None, silentPeerCts.Token);
+                            if (read == 0) break;
+                            _ = received.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                            // The gossip GarnetClient identifies itself with CLIENT SETINFO LIB-NAME GarnetClient.
+                            if (received.ToString().Contains("GarnetClient"))
+                            {
+                                _ = Interlocked.Increment(ref gossipHandshakes);
+                                break;
+                            }
+                        }
+                    });
+                }
+            });
+
+            try
+            {
+                // The restarted publisher recovers its config and starts connecting to the silent peer.
+                context.RestartNode(0);
+                while (Volatile.Read(ref gossipHandshakes) < 1)
+                    await Task.Delay(100, cancellationToken);
+
+                using var client = new GarnetClient(publisherEndpoint);
+                await client.ConnectAsync(cancellationToken);
+                var publish = client.ExecuteForLongResultAsync("PUBLISH", ["test-silent-peer-channel", "message"]);
+                var completed = await Task.WhenAny(publish, Task.Delay(TimeSpan.FromSeconds(publishWindowSeconds), cancellationToken));
+                ClassicAssert.AreSame(publish, completed, $"PUBLISH did not complete within {publishWindowSeconds}s; forwarding is blocked on connecting to the unresponsive peer");
+                ClassicAssert.AreEqual(0, await publish);
+            }
+            finally
+            {
+                silentPeerCts.Cancel();
+                silentPeer.Stop();
+                lock (acceptedSockets)
+                {
+                    foreach (var socket in acceptedSockets)
+                        socket.Dispose();
+                }
+                try { await acceptTask; } catch { }
+            }
         }
 
         private static ConfigurationOptions SingleNodeConfig(EndPoint endpoint)
