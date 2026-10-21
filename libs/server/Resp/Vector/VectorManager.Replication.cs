@@ -27,12 +27,15 @@ namespace Garnet.server
     public sealed partial class VectorManager
     {
         /// <summary>
-        /// Represents a copied VADD or XVIMPORT term being replayed during replication.
+        /// Represents a copied VADD, VREM, or XVIMPORT term being replayed during replication.
         /// </summary>
-        private readonly record struct VectorSetReplicationState(Memory<byte> Key, uint Dims, uint ReduceDims, VectorValueType ValueType, Memory<byte> Values, Memory<byte> Element, VectorQuantType Quantizer, uint BuildExplorationFactor, Memory<byte> Attributes, uint NumLinks, VectorDistanceMetricType DistanceMetric, uint? ImportTermType = null);
+        private readonly record struct VectorSetReplicationState(Memory<byte> Key, uint Dims, uint ReduceDims, VectorValueType ValueType, Memory<byte> Values, Memory<byte> Element, VectorQuantType Quantizer, uint BuildExplorationFactor, Memory<byte> Attributes, uint NumLinks, VectorDistanceMetricType DistanceMetric, uint? ImportTermType = null, bool IsRemove = false);
 
         private int replicationReplayStarted;
         private uint nextRoundRobinIndex;
+
+        // Round-robin (XVIMPORT) replays are not ordered by element, so element-ordered replays must drain them first
+        private int pendingRoundRobinReplays;
         private CountingEventSlim replicationBlockEvent;
         private readonly Channel<VectorSetReplicationState>[] replicationReplayChannels;
         private readonly Task[] replicationReplayTasks;
@@ -536,13 +539,15 @@ namespace Garnet.server
 
             // We need a running count of pending VADDs so WaitForVectorOperationsToComplete can work
             replicationBlockEvent.Increment();
+            if (state.ImportTermType.HasValue)
+                _ = Interlocked.Increment(ref pendingRoundRobinReplays);
+
             var queued = replicationReplayChannels[replayChannelIndex].Writer.TryWrite(state);
             if (!queued)
             {
                 logger?.LogCritical("VectorManager replication replay channel dropped a VADD, this should never happen, data loss will occur");
                 Debug.Assert(false, "VectorManager replication replay channel should never drop a VADD");
-                replicationBlockEvent.Decrement();
-                ReleaseReplayEntry(state);
+                CompleteReplayEntry(state);
 
                 throw new GarnetException("Vector replay queue is closed");
             }
@@ -603,8 +608,7 @@ namespace Garnet.server
                                 }
                                 finally
                                 {
-                                    ReleaseReplayEntry(entry);
-                                    self.replicationBlockEvent.Decrement();
+                                    self.CompleteReplayEntry(entry);
                                 }
                             }
                         }
@@ -623,7 +627,7 @@ namespace Garnet.server
 
             static unsafe void ApplyVectorSetReplay(VectorManager self, StorageSession storageSession, VectorSetReplicationState state, ref SessionParseState reusableParseState)
             {
-                var (keyBytes, dims, reduceDims, valueType, valuesBytes, elementBytes, quantizer, buildExplorationFactor, attributesBytes, numLinks, distanceMetric, importTermType) = state;
+                var (keyBytes, dims, reduceDims, valueType, valuesBytes, elementBytes, quantizer, buildExplorationFactor, attributesBytes, numLinks, distanceMetric, importTermType, isRemove) = state;
                 {
                     Span<byte> indexSpan = stackalloc byte[IndexSizeBytes];
 
@@ -646,6 +650,12 @@ namespace Garnet.server
                                 throw new GarnetException($"XVIMPORT replay failed: {importStatus}, {importResult}, {Encoding.UTF8.GetString(error)}");
                             }
 
+                            return;
+                        }
+
+                        if (isRemove)
+                        {
+                            self.ApplyVectorSetRemoveReplay(storageSession, key, element, ref reusableParseState);
                             return;
                         }
 
@@ -726,13 +736,21 @@ namespace Garnet.server
                 var replicationReplayChannelReader = replicationReplayChannels[i].Reader;
                 while (replicationReplayChannelReader.TryRead(out var entry))
                 {
-                    ReleaseReplayEntry(entry);
-                    replicationBlockEvent.Decrement();
+                    CompleteReplayEntry(entry);
                     abandoned++;
                 }
             }
 
             return abandoned;
+        }
+
+        private void CompleteReplayEntry(VectorSetReplicationState entry)
+        {
+            ReleaseReplayEntry(entry);
+            if (entry.ImportTermType.HasValue)
+                _ = Interlocked.Decrement(ref pendingRoundRobinReplays);
+
+            replicationBlockEvent.Decrement();
         }
 
         /// <summary>
@@ -762,24 +780,42 @@ namespace Garnet.server
         /// Vector Set removes are phrased as reads (once the index is created), so they require special handling.
         /// 
         /// Operations that are faked up by <see cref="ReplicateVectorSetRemove"/> running on the Primary get diverted here on a Replica.
+        /// The remove is queued on the same replay task as every other update to its element, so it stays ordered with
+        /// that element's VADDs without waiting for unrelated ones.
         /// </summary>
-        internal void HandleVectorSetRemoveReplication(StorageSession storageSession, ReadOnlySpan<byte> key, ref StringInput input)
+        internal void HandleVectorSetRemoveReplication(Func<RespServerSession> obtainServerSession, ReadOnlySpan<byte> key, ref StringInput input)
         {
             WaitForImportFinalization(key);
 
+            // Imported elements are replayed round-robin, so they may sit on a different task than a later remove of them
+            if (Volatile.Read(ref pendingRoundRobinReplays) > 0)
+                WaitForVectorOperationsToComplete();
+
+            var element = input.parseState.GetArgSliceByRef(0).ReadOnlySpan;
+
+            var keyBytes = ArrayPool<byte>.Shared.Rent(key.Length).AsMemory(0, key.Length);
+            key.CopyTo(keyBytes.Span);
+
+            var elementBytes = ArrayPool<byte>.Shared.Rent(element.Length).AsMemory(0, element.Length);
+            element.CopyTo(elementBytes.Span);
+
+            QueueVectorReplay(new(keyBytes, 0, 0, default, default, elementBytes, default, 0, default, 0, default, IsRemove: true), obtainServerSession, roundRobinReplays: false);
+        }
+
+        private void ApplyVectorSetRemoveReplay(StorageSession storageSession, ReadOnlySpan<byte> key, ReadOnlySpan<byte> element, ref SessionParseState reusableParseState)
+        {
             Span<byte> indexSpan = stackalloc byte[IndexSizeBytes];
-            var element = input.parseState.GetArgSliceByRef(0);
 
-            var inputCopy = input;
-            inputCopy.arg1 = default;
+            reusableParseState.InitializeWithArgument(PinnedSpanByte.FromPinnedSpan(element));
+            StringInput input = new(RespCommand.VREM, ref reusableParseState);
 
-            // Don't need *WithElement lock here because removes won't be concurrent to adds or updates
-            using (ReadVectorIndex(storageSession, key, ref inputCopy, indexSpan, out var status, out var importPending))
+            // Don't need *WithElement lock here because each element's replays run in order on a single replay task
+            using (ReadVectorIndex(storageSession, key, ref input, indexSpan, out var status, out var importPending))
             {
                 Debug.Assert(status == GarnetStatus.OK, "Replication should only occur when a remove is successful, so index must exist");
                 Debug.Assert(!importPending, "Replication should only occur when a remove is successful, so index should not be importing");
 
-                var remRes = TryRemove(indexSpan, element.ReadOnlySpan);
+                var remRes = TryRemove(indexSpan, element);
 
                 if (remRes != VectorManagerResult.OK)
                 {

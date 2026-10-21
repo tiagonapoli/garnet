@@ -644,6 +644,12 @@ namespace Garnet.server
                 return true;
             }
 
+            if (input.header.cmd == RespCommand.VREM)
+            {
+                vectorManager.HandleVectorSetRemoveReplication(obtainServerSession, key, ref input);
+                return true;
+            }
+
             // Must sequence releative to other operations
             vectorManager.WaitForVectorOperationsToComplete();
 
@@ -652,9 +658,6 @@ namespace Garnet.server
                 case RespCommand.XVCREATE:
                 case RespCommand.XVIMPORT:
                     vectorManager.HandleVectorSetImportReplication(storageSession, obtainServerSession, key, ref input);
-                    return true;
-                case RespCommand.VREM:
-                    vectorManager.HandleVectorSetRemoveReplication(storageSession, key, ref input);
                     return true;
                 case RespCommand.VSETATTR:
                     vectorManager.HandleVectorSetSetAttributeReplication(storageSession, key, ref input);
