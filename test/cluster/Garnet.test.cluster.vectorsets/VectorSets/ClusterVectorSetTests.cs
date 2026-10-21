@@ -2374,6 +2374,122 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(primaryType, replicaType, "Replica diverged from primary after replaying a synthetic VADD against a String key");
         }
 
+        /// <summary>
+        /// A replica VREM must not wait for an unrelated element's VADD that is still replaying. The VADD and the VREMs
+        /// are shipped in one AOF batch, the VADD's replay task is parked, and VREMs of elements on other replay tasks
+        /// must still apply on the replica.
+        /// </summary>
+        [Test]
+        public async Task ReplicaVREMNotBlockedByPendingVADDReplayAsync()
+        {
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const int PrimaryIndex = 0;
+            const int SecondaryIndex = 1;
+            const string Key = nameof(ReplicaVREMNotBlockedByPendingVADDReplayAsync);
+            const string ParkedElement = "parked";
+
+            _ = await SimpleSetupClusterAsync(DefaultShards, primaryCount: 1, replicaCount: 1, useTLS: false).ConfigureAwait(false);
+
+            var primary = (IPEndPoint)context.endpoints[PrimaryIndex];
+            var secondary = (IPEndPoint)context.endpoints[SecondaryIndex];
+
+            ClassicAssert.AreEqual("master", context.clusterTestUtils.RoleCommand(primary).Value);
+            ClassicAssert.AreEqual("slave", context.clusterTestUtils.RoleCommand(secondary).Value);
+
+            var replicaVectorManager = GetStoreWrapper(context.nodes[SecondaryIndex]).DefaultDatabase.VectorManager;
+            var replayChannelCount = ((Array)typeof(VectorManager).GetField("replicationReplayChannels", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(replicaVectorManager)).Length;
+            if (replayChannelCount < 2)
+            {
+                Assert.Ignore("Needs at least two vector replay tasks");
+            }
+
+            // Replays of an element are routed by its hash, so pick removed elements that land on other tasks than the parked VADD.
+            static int ReplayChannel(string element, int channelCount) => (int)((uint)Tsavorite.core.SpanByteComparer.StaticGetHashCode64(Encoding.UTF8.GetBytes(element)) % channelCount);
+            var parkedChannel = ReplayChannel(ParkedElement, replayChannelCount);
+            var removedElements = Enumerable.Range(0, 1000).Select(static i => $"removed{i}").Where(e => ReplayChannel(e, replayChannelCount) != parkedChannel).Take(4).ToArray();
+
+            foreach (var element in removedElements)
+            {
+                var addRes = (int)context.clusterTestUtils.Execute(primary, "VADD", [new RedisKey(Key), "VALUES", "3", "1", "2", "3", element, "NOQUANT"]);
+                ClassicAssert.AreEqual(1, addRes);
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, SecondaryIndex);
+
+            var readonlyOnReplica = (string)context.clusterTestUtils.Execute(secondary, "READONLY", []);
+            ClassicAssert.AreEqual("OK", readonlyOnReplica);
+
+            ExceptionInjectionHelper.EnableException(ExceptionInjectionType.VectorSet_Pause_Replica_VADD_Replay);
+            try
+            {
+                try
+                {
+                    // Hold the primary's AOF shipping so the VADD and the VREMs reach the replica in one batch, as they do under load.
+                    ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Hold_Aof_Sync_Between_Sends);
+                    ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Pause_Aof_Sync_Between_Sends);
+                    try
+                    {
+                        var setRes = (string)context.clusterTestUtils.Execute(primary, "SET", [new RedisKey(Key + "_flush"), "1"]);
+                        ClassicAssert.AreEqual("OK", setRes);
+
+                        await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.Replication_Pause_Aof_Sync_Between_Sends).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+
+                        var addRes = (int)context.clusterTestUtils.Execute(primary, "VADD", [new RedisKey(Key), "VALUES", "3", "4", "5", "6", ParkedElement, "NOQUANT"]);
+                        ClassicAssert.AreEqual(1, addRes);
+
+                        foreach (var element in removedElements)
+                        {
+                            var remRes = (int)context.clusterTestUtils.Execute(primary, "VREM", [new RedisKey(Key), element]);
+                            ClassicAssert.AreEqual(1, remRes);
+                        }
+                    }
+                    finally
+                    {
+                        ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_Pause_Aof_Sync_Between_Sends);
+                        ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_Hold_Aof_Sync_Between_Sends);
+                    }
+
+                    // Wait until the replica's replay task for the new element has parked.
+                    await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.VectorSet_Pause_Replica_VADD_Replay).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+
+                    var deadline = Stopwatch.StartNew();
+                    while (true)
+                    {
+                        var stillPresent = removedElements.Where(e => (int)context.clusterTestUtils.Execute(secondary, "VISMEMBER", [new RedisKey(Key), e]) == 1).ToArray();
+                        if (stillPresent.Length == 0)
+                        {
+                            break;
+                        }
+
+                        if (deadline.Elapsed > TimeSpan.FromSeconds(30))
+                        {
+                            Assert.Fail($"Replica VREM of [{string.Join(", ", stillPresent)}] blocked behind the pending VADD replay of '{ParkedElement}'");
+                        }
+
+                        await Task.Delay(50).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    // Release the parked replay task.
+                    ExceptionInjectionHelper.EnableException(ExceptionInjectionType.VectorSet_Pause_Replica_VADD_Replay);
+                }
+
+                context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, SecondaryIndex);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.VectorSet_Pause_Replica_VADD_Replay);
+            }
+
+            ClassicAssert.AreEqual(1, (int)context.clusterTestUtils.Execute(secondary, "VISMEMBER", [new RedisKey(Key), ParkedElement]));
+            foreach (var element in removedElements)
+            {
+                ClassicAssert.AreEqual(0, (int)context.clusterTestUtils.Execute(secondary, "VISMEMBER", [new RedisKey(Key), element]));
+            }
+        }
+
         [Test]
         public async Task VSETATTRReplicatesAsync([Values(32, 3 * 1024 * 1024)] int attributeSize)
         {

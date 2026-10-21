@@ -666,6 +666,8 @@ namespace Garnet.server
 
                         StringInput input = new(RespCommand.VADD, ref reusableParseState);
 
+                        ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.VectorSet_Pause_Replica_VADD_Replay);
+
                         // Equivalent to VectorStoreOps.VectorSetAdd
                         //
                         // We still need locking here because the replays may proceed in parallel

@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 namespace Garnet.common
@@ -172,5 +172,18 @@ namespace Garnet.common
         /// While set, background replay stays parked right after applying the commit-metadata record it paused on.
         /// </summary>
         Replication_Hold_After_Replay_Commit_Metadata,
+        /// <summary>
+        /// Vector Set replica: pause a VADD replay task before it takes the index lock.
+        /// </summary>
+        VectorSet_Pause_Replica_VADD_Replay,
+        /// <summary>
+        /// Primary AOF sync task: signals arrival between shipped batches, then waits while
+        /// <see cref="Replication_Hold_Aof_Sync_Between_Sends"/> is enabled.
+        /// </summary>
+        Replication_Pause_Aof_Sync_Between_Sends,
+        /// <summary>
+        /// Primary AOF sync task: holds shipping while enabled, after <see cref="Replication_Pause_Aof_Sync_Between_Sends"/> triggers.
+        /// </summary>
+        Replication_Hold_Aof_Sync_Between_Sends,
     }
 }
