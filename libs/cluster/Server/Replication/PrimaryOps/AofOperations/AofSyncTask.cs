@@ -227,6 +227,9 @@ namespace Garnet.cluster
             {
                 cts.Token.ThrowIfCancellationRequested();
 
+                if (ExceptionInjectionHelper.TriggerCondition(ExceptionInjectionType.Replication_Pause_Aof_Sync_Between_Sends))
+                    ExceptionInjectionHelper.WaitOnClear(ExceptionInjectionType.Replication_Hold_Aof_Sync_Between_Sends);
+
                 if (!garnetClient.IsConnected)
                     ExceptionUtils.ThrowException(new GarnetException($"AOF stream client disconnected! [{physicalSublogIdx}]:({startAddress},{previousAddress})"));
 
