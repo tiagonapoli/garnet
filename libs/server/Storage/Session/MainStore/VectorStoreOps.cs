@@ -390,7 +390,7 @@ namespace Garnet.server
 
                 // After a successful read we remove the vector while holding a shared lock
                 // That lock prevents deletion, but everything else can proceed in parallel
-                var res = vectorManager.TryRemove(indexSpan, element.ReadOnlySpan);
+                var res = vectorManager.TryRemove(key.ReadOnlySpan, indexSpan, element.ReadOnlySpan);
 
                 if (res == VectorManagerResult.OK)
                 {

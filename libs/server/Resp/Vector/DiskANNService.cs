@@ -2,8 +2,11 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
+using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 
 namespace Garnet.server
@@ -43,6 +46,24 @@ namespace Garnet.server
         internal int FinishImportCalls;
 #endif
 
+        // Native indexes created and not yet dropped, keyed by pointer; a drop of a pointer not in here is a double drop or a stale pointer.
+        private readonly ConcurrentDictionary<nint, ulong> liveIndexes = new();
+
+        private long lifetimeEventCount;
+
+        /// <summary>Logger for native index lifetime events.</summary>
+        internal ILogger Logger { get; set; }
+
+        /// <summary>Number of native indexes created and not yet dropped.</summary>
+        internal int LiveIndexCount => liveIndexes.Count;
+
+        private void LogLifetime(string operation, ulong context, nint index, string caller, string callerFile, int callerLine)
+        {
+            var count = Interlocked.Increment(ref lifetimeEventCount);
+            if (count <= 100_000 || (count & 1023) == 0)
+                Logger?.LogInformation("[index-lifetime] {Operation} context={Context} indexPtr=0x{IndexPtr:X} live={Live} thread={Thread} event={Event} caller={Caller} at {File}:{Line}", operation, context, index, liveIndexes.Count, Environment.CurrentManagedThreadId, count, caller, System.IO.Path.GetFileName(callerFile), callerLine);
+        }
+
         public nint CreateIndex(
             ulong context,
             uint dimensions,
@@ -58,7 +79,10 @@ namespace Garnet.server
             delegate* unmanaged[Cdecl]<ulong, nint, nuint, byte> filterCallback,
             delegate* unmanaged[Cdecl]<ulong, nint, nuint, void> logCallback,
             uint startPointId,
-            out bool quantizationRequested
+            out bool quantizationRequested,
+            [CallerMemberName] string caller = null,
+            [CallerFilePath] string callerFile = null,
+            [CallerLineNumber] int callerLine = 0
         )
         {
 #if DEBUG
@@ -70,6 +94,10 @@ namespace Garnet.server
 
                 if (!(ret != 0)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/DiskANNService.cs:72: ret != 0" + " | " + ("create_index failed, returning a null pointer - this shouldn't be possible"));
 
+                if (!liveIndexes.TryAdd(ret, context))
+                    Environment.FailFast($"[index-lifetime] create_index returned pointer 0x{ret:X} that is still live (context {context}, caller {caller} at {System.IO.Path.GetFileName(callerFile)}:{callerLine})");
+
+                LogLifetime("create", context, ret, caller, callerFile, callerLine);
                 return ret;
             }
         }
@@ -89,15 +117,27 @@ namespace Garnet.server
             delegate* unmanaged[Cdecl]<ulong, nint, nuint, byte> filterCallback,
             delegate* unmanaged[Cdecl]<ulong, nint, nuint, void> logCallback,
             uint startPointId,
-            out bool quantizationRequested
+            out bool quantizationRequested,
+            [CallerMemberName] string caller = null,
+            [CallerFilePath] string callerFile = null,
+            [CallerLineNumber] int callerLine = 0
         )
-        => CreateIndex(context, dimensions, reduceDims, quantType, buildExplorationFactor, numLinks, distanceMetricType, readCallback, writeCallback, deleteCallback, readModifyWriteCallback, filterCallback, logCallback, startPointId, out quantizationRequested);
+        => CreateIndex(context, dimensions, reduceDims, quantType, buildExplorationFactor, numLinks, distanceMetricType, readCallback, writeCallback, deleteCallback, readModifyWriteCallback, filterCallback, logCallback, startPointId, out quantizationRequested, caller, callerFile, callerLine);
 
-        public void DropIndex(ulong context, nint index)
+        public void DropIndex(ulong context, nint index, [CallerMemberName] string caller = null, [CallerFilePath] string callerFile = null, [CallerLineNumber] int callerLine = 0)
         {
 #if DEBUG
             System.Threading.Interlocked.Increment(ref DropIndexCalls);
 #endif
+
+            // Dropping a pointer twice corrupts the native heap, so stop here with the managed stack instead.
+            if (!liveIndexes.TryRemove(index, out var createdContext))
+                Environment.FailFast($"[index-lifetime] drop_index of pointer 0x{index:X} that is not live (double drop or stale pointer; context {context}, caller {caller} at {System.IO.Path.GetFileName(callerFile)}:{callerLine})");
+
+            if (createdContext != context)
+                Logger?.LogCritical("[index-lifetime] drop_index of pointer 0x{IndexPtr:X} with context {Context}, but it was created with context {CreatedContext} (caller {Caller} at {File}:{Line})", index, context, createdContext, caller, System.IO.Path.GetFileName(callerFile), callerLine);
+
+            LogLifetime("drop", context, index, caller, callerFile, callerLine);
 
             NativeDiskANNMethods.drop_index(context, index);
         }
@@ -186,12 +226,13 @@ namespace Garnet.server
         public bool BackfillQuantizedVectors(ulong context, nint index, int taskIndex, int taskCount)
         => NativeDiskANNMethods.backfill_quant_vectors(context, index, (nuint)taskIndex, (nuint)taskCount) == 1;
 
-        public bool Remove(ulong context, nint index, ReadOnlySpan<byte> id)
+        public bool Remove(ulong context, nint index, ReadOnlySpan<byte> id, out int nativeResult)
         {
             var id_data = Unsafe.AsPointer(ref MemoryMarshal.GetReference(id));
             var id_len = id.Length;
 
-            return NativeDiskANNMethods.remove(context, index, (nint)id_data, (nuint)id_len) == 1;
+            nativeResult = NativeDiskANNMethods.remove(context, index, (nint)id_data, (nuint)id_len);
+            return nativeResult == 1;
         }
 
         public int SearchVector(

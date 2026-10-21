@@ -816,10 +816,11 @@ namespace Garnet.server
                 if (!(status == GarnetStatus.OK)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:817: status == GarnetStatus.OK" + " | " + ("Replication should only occur when a remove is successful, so index must exist"));
                 if (!(!importPending)) global::System.Environment.FailFast("Debug.Assert failed at libs/server/Resp/Vector/VectorManager.Replication.cs:818: !importPending" + " | " + ("Replication should only occur when a remove is successful, so index should not be importing"));
 
-                var remRes = TryRemove(indexSpan, element);
+                var remRes = TryRemove(key, indexSpan, element);
 
                 if (remRes != VectorManagerResult.OK)
                 {
+                    logger?.LogCritical("Replica VREM replay failed: result={Result}, key={Key}, element={Element}", remRes, SpanByte.ToShortString(key), SpanByte.ToShortString(element));
                     throw new GarnetException("Failed to remove from vector set index during AOF sync, this should never happen but will cause data loss if it does");
                 }
             }

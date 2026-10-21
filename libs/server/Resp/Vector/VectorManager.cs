@@ -8,7 +8,9 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -188,6 +190,8 @@ namespace Garnet.server
 
         private readonly ILogger logger;
 
+        private long removeFailureLogCount;
+
         private readonly int dbId;
 
         /// <summary>
@@ -218,6 +222,7 @@ namespace Garnet.server
 
             // Include DB and id so we correlate to what's actually stored in the log
             logger = loggerFactory?.CreateLogger($"{nameof(VectorManager)}:{dbId}");
+            Service.Logger = logger;
 
             replicationBlockEvent = CountingEventSlim.Create();
 
@@ -809,13 +814,22 @@ namespace Garnet.server
         /// <summary>
         /// Try to remove a vector (and associated attributes) from a Vector Set, as identified by element key.
         /// </summary>
-        internal VectorManagerResult TryRemove(ReadOnlySpan<byte> indexValue, ReadOnlySpan<byte> element)
+        internal VectorManagerResult TryRemove(ReadOnlySpan<byte> key, ReadOnlySpan<byte> indexValue, ReadOnlySpan<byte> element)
         {
             AssertHaveStorageSession();
 
             ReadIndex(indexValue, out var context, out _, out _, out _, out _, out _, out _, out _, out var indexPtr);
 
-            var del = Service.Remove(context, indexPtr, element);
+            var existsBefore = Volatile.Read(ref removeFailureLogCount) == 0 ? Service.CheckExternalIdValid(context, indexPtr, element) : (bool?)null;
+            var del = Service.Remove(context, indexPtr, element, out var nativeResult);
+            if (!del)
+            {
+                var failures = Interlocked.Increment(ref removeFailureLogCount);
+                if (failures <= 8 || (failures & (failures - 1)) == 0)
+                    logger?.LogWarning("Vector Set remove returned non-success: nativeResult={NativeResult}, existedBefore={ExistedBefore}, existsAfter={ExistsAfter}, failureCount={FailureCount}, context={Context}, indexPtr={IndexPtr}, keyHash={KeyHash}, elementHash={ElementHash}",
+                        nativeResult, existsBefore, Service.CheckExternalIdValid(context, indexPtr, element), failures, context, indexPtr,
+                        Convert.ToHexString(SHA256.HashData(key)), Convert.ToHexString(SHA256.HashData(element)));
+            }
 
             return del ? VectorManagerResult.OK : VectorManagerResult.MissingElement;
         }
@@ -842,7 +856,9 @@ namespace Garnet.server
 
             ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_0);
 
-            ReadIndex(value, out var context, out _, out _, out _, out _, out _, out _, out var flags, out _);
+            ReadIndex(value, out var context, out _, out _, out _, out _, out _, out _, out var flags, out var deletedIndexPtr);
+
+            logger?.LogInformation("[index-lifetime] request-deletion context={Context} indexPtr=0x{IndexPtr:X} flags={Flags}", context, deletedIndexPtr, flags);
 
             // Ignore any deletion requested for an index that has the SuppressCleanup flag
             //
@@ -880,6 +896,8 @@ namespace Garnet.server
             }
 
             ReadIndex(value, out var context, out _, out _, out _, out _, out _, out _, out var flags, out var indexPtr);
+
+            logger?.LogInformation("[index-lifetime] request-drop key={Key} context={Context} indexPtr=0x{IndexPtr:X} flags={Flags}", SpanByte.ToShortString(key), context, indexPtr, flags);
 
             // Ignore any drop requested for an index that has the SuppressCleanup flag
             //
