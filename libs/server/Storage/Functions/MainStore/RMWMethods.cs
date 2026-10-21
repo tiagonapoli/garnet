@@ -1592,7 +1592,7 @@ namespace Garnet.server
 
                 RangeIndexManager.SetTransferredFlag(srcSpan);
             }
-            else if (cmd is RespCommand.VADD or RespCommand.XVCREATE or RespCommand.XVIMPORT)
+            else if (cmd is RespCommand.VADD or RespCommand.VREM or RespCommand.VSETATTR or RespCommand.XVCREATE or RespCommand.XVIMPORT)
             {
                 // Similar to RIPROMOTE, after a CU we want to clear the source records index pointer so we don't drop it on eviction
                 VectorManager.ClearIndexPointer(srcLogRecord.ValueSpan);

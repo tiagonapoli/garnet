@@ -5086,6 +5086,87 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A copy-update of a read-only index record hands the DiskANN index pointer to the new record, so the superseded
+        /// source must not keep it: page eviction calls OnEvict for the source and would request drop_index of an index
+        /// that is still live (or, after the Vector Set is deleted, a second drop of a freed index).
+        /// </summary>
+        [Test]
+        public void VectorSetCopyUpdateClearsSourceIndexPointer([Values("VADD", "VREM", "VSETATTR")] string operation)
+        {
+            var cmd = Enum.Parse<RespCommand>(operation);
+            var arg1 = operation switch { "VADD" => VectorManager.VADDAppendLogArg, "VREM" => VectorManager.VREMAppendLogArg, _ => VectorManager.VSETATTRAppendLogArg };
+
+            // A single-bucket hash index makes a tag collision cheap to find.
+            TearDown();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableAOF: true, aofMemorySize: DefaultAOFMemorySize, enableVectorSetPreview: true, indexSize: "64");
+            server.Start();
+            server.Provider.StoreWrapper.DefaultDatabase.VectorManager.AllocateTestContexts(preAllocatedContexts);
+
+            var key = $"{nameof(VectorSetCopyUpdateClearsSourceIndexPointer)}:{operation}";
+            var keyBytes = Encoding.ASCII.GetBytes(key);
+            var store = server.Provider.StoreWrapper.store;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+            ClassicAssert.AreEqual(1, (int)db.Execute("VADD", [key, "VALUES", "3", "1", "2", "3", new byte[] { 1, 0, 0, 0 }]));
+            VectorManager.ReadIndex(ReadRawVectorStub(key), out _, out _, out _, out _, out _, out _, out _, out _, out var liveIndexPtr);
+            ClassicAssert.AreNotEqual((nint)0, liveIndexPtr, "the live index record must hold a DiskANN index pointer");
+
+            // The colliding key heads the tag chain, so the copy-update cannot elide the source record.
+            ClassicAssert.IsTrue(db.StringSet(FindKeyWithSameHashTagAndBucket(keyBytes), "x"));
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var status = SimulateVectorSetStubRmw(key, cmd, arg1, out _);
+            ClassicAssert.IsTrue(status.Record.CopyUpdated, $"a read-only {operation} append-log RMW must take the CopyUpdater path (got {status})");
+
+            VectorManager.ReadIndex(ReadRawVectorStub(key), out _, out _, out _, out _, out _, out _, out _, out _, out var tailIndexPtr);
+            ClassicAssert.AreEqual(liveIndexPtr, tailIndexPtr, "the copy-updated record must own the live index pointer");
+
+            // Eviction calls OnEvict for every record that is not null, invalid, or a tombstone.
+            var holders = new List<long>();
+            using (var iter = store.Log.Scan(store.Log.HeadAddress, store.Log.TailAddress, includeClosedRecords: true))
+            {
+                while (iter.GetNext())
+                {
+                    if (iter.Info.IsNull || iter.Info.Invalid || iter.Info.Tombstone || iter.RecordType != VectorManager.RecordType || !iter.Key.SequenceEqual(keyBytes))
+                        continue;
+
+                    VectorManager.ReadIndex(iter.ValueSpan, out _, out _, out _, out _, out _, out _, out _, out _, out var indexPtr);
+                    if (indexPtr != 0)
+                        holders.Add(iter.CurrentAddress);
+                }
+            }
+
+            ClassicAssert.AreEqual(1, holders.Count, $"{operation} copy-update left {holders.Count} evictable records holding index pointer 0x{liveIndexPtr:X}: {string.Join(", ", holders)}");
+        }
+
+        /// <summary>
+        /// Finds a key whose hash shares the hash bucket and tag of <paramref name="keyBytes"/>, so both keys share a tag chain.
+        /// </summary>
+        private string FindKeyWithSameHashTagAndBucket(byte[] keyBytes)
+        {
+            var bucketMask = server.Provider.StoreWrapper.store.IndexSize - 1;
+            var hash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)(ReadOnlySpan<byte>)keyBytes);
+
+            // Random keys, because the key hash mixes a trailing counter poorly into the tag bits.
+            var random = new Random(0);
+            var candidate = new byte[16];
+            for (var i = 0; i < 100_000_000; i++)
+            {
+                for (var j = 0; j < candidate.Length; j++)
+                    candidate[j] = (byte)random.Next('a', 'z' + 1);
+
+                var candidateHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)(ReadOnlySpan<byte>)candidate);
+
+                // Matching the top 16 hash bits covers the hash tag (which is at most that wide) without depending on Tsavorite internals.
+                if ((candidateHash & bucketMask) == (hash & bucketMask) && ((ulong)candidateHash >> 48) == ((ulong)hash >> 48))
+                    return Encoding.ASCII.GetString(candidate);
+            }
+
+            Assert.Fail("no colliding key found");
+            return null;
+        }
+
+        /// <summary>
         /// Overwrites one element with a mix of shorter and longer values; each write must resize the record and
         /// read back verbatim with no stale bytes. Covers both the mutable (InPlaceWriter) and read-only paths.
         /// </summary>
