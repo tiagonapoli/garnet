@@ -279,6 +279,56 @@ namespace Garnet.test.cluster
                     ClassicAssert.AreNotEqual(nodeIds[0], node.NodeId, "node 0 node forgotten");
         }
 
+        [Test, Order(5)]
+        public void ClusterForgetPreservesMigratingTargetTest()
+        {
+            var nodeCount = 4;
+            context.CreateInstances(nodeCount);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(nodeCount, 0, logger: context.logger);
+            for (var i = 0; i < nodeCount; i++)
+                context.clusterTestUtils.WaitUntilNodeIsKnownByAllNodes(i, context.logger);
+
+            // CLUSTER NODES lists workers in config order, so line i describes worker index i + 1.
+            var lines = ((string)context.clusterTestUtils.GetServer(0).Execute("CLUSTER", "NODES")).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            ClassicAssert.AreEqual(nodeCount, lines.Length);
+            var forgottenId = lines[1].Split(' ')[0];
+            var lastTargetFields = lines[3].Split(' ');
+            var lastTargetId = lastTargetFields[0];
+            var middleTargetFields = lines[2].Split(' ');
+            var middleTargetId = middleTargetFields[0];
+            var middleTargetPort = int.Parse(middleTargetFields[1].Split('@')[0].Split(':')[1]);
+
+            var ownedSlots = context.clusterTestUtils.GetOwnedSlotsFromNode(0, context.logger);
+            var middleKey = FindKeyInSlot(ownedSlots[0]);
+            var middleSlot = ownedSlots[0];
+            var lastSlot = ownedSlots[1];
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.SetSlot(0, middleSlot, "MIGRATING", middleTargetId, context.logger));
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.SetSlot(0, lastSlot, "MIGRATING", lastTargetId, context.logger));
+
+            // Forgetting an unrelated node with a lower worker index shifts the targets' worker indices.
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterForget(0, forgottenId, 60, context.logger));
+
+            _ = context.clusterTestUtils.GetKey(0, middleKey, out _, out var askEndpoint, out var responseState, logger: context.logger);
+            ClassicAssert.AreEqual(ResponseState.ASK, responseState);
+            ClassicAssert.AreEqual(middleTargetPort, askEndpoint.Port, "ASK redirect must point to the migration target");
+
+            var nodes = (string)context.clusterTestUtils.GetServer(0).Execute("CLUSTER", "NODES");
+            ClassicAssert.IsTrue(nodes.Contains($"[{middleSlot}->-{middleTargetId}]"), nodes);
+            ClassicAssert.IsTrue(nodes.Contains($"[{lastSlot}->-{lastTargetId}]"), nodes);
+
+            static byte[] FindKeyInSlot(int slot)
+            {
+                for (var i = 0; ; i++)
+                {
+                    var key = System.Text.Encoding.ASCII.GetBytes($"key{i}");
+                    if (ClusterTestUtils.HashSlot(key) == slot)
+                        return key;
+                }
+            }
+        }
+
         [Test, Order(4)]
         public void ClusterResetTest()
         {
