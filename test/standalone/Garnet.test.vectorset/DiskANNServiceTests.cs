@@ -235,7 +235,7 @@ namespace Garnet.test
                 ClassicAssert.AreEqual(0, validRes);
             }
 
-            service.DropIndex(Context, rawIndex);
+            NativeDiskANNMethods.drop_index(Context, rawIndex);
             var importIndex = NativeDiskANNMethods.create_index(ImportContext, 75, 0, VectorQuantType.XNoQuant_U8, VectorDistanceMetricType.L2, 10, 10, VectorManager.DefaultStartPointId, readFuncPtr, writeFuncPtr, deleteFuncPtr, rmwFuncPtr, filterFuncPtr, logFuncPtr, out _);
             ClassicAssert.AreNotEqual(nint.Zero, importIndex);
             try
@@ -250,7 +250,7 @@ namespace Garnet.test
             }
             finally
             {
-                service.DropIndex(ImportContext, importIndex);
+                NativeDiskANNMethods.drop_index(ImportContext, importIndex);
             }
 
             GC.KeepAlive(deleteDel);
