@@ -79,6 +79,9 @@ namespace Garnet.server
                 if (reason is DisposeReason.Deleted or DisposeReason.Expired && logRecord.DataHeader.RecordType == VectorManager.RecordType)
                 {
                     vectorManager?.RequestDeletion(logRecord.ValueSpan);
+
+                    // A non-elided delete only seals this record, so eviction would otherwise drop the index again.
+                    VectorManager.ClearIndexPointer(logRecord.ValueSpan);
                 }
             }
         }
