@@ -453,6 +453,8 @@ namespace Garnet.test.cluster
             return capture;
         }
 
+        public StoreWrapper GetStoreWrapper(int nodeIndex) => nodes[nodeIndex].Provider.StoreWrapper;
+
         /// <summary>
         /// Create single cluster instance with corresponding options
         /// </summary>
