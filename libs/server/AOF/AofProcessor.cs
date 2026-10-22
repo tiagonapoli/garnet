@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -316,6 +317,8 @@ namespace Garnet.server
                             // Take checkpoint after the fuzzy region
                             if (asReplica && header.storeVersion > storeWrapper.store.CurrentVersion)
                             {
+                                var replayBlockedStartTimestamp = Stopwatch.GetTimestamp();
+                                using var trigger = CheckpointReason.Set("replica-replay");
                                 if (!usingShardedLog)
                                 {
                                     // Must block here, cannot move off the thread
@@ -331,6 +334,9 @@ namespace Garnet.server
                                         (int)LeaderBarrierType.CHECKPOINT,
                                         () => storeWrapper.TakeCheckpointAsync(background: false, logger: logger));
                                 }
+
+                                // Replay is stalled for the whole replica checkpoint, so report how long
+                                logger?.LogWarning("Replica replay of sublog {sublogIdx} was blocked for {blockedMs} ms by the checkpoint for store version {storeVersion}", virtualSublogIdx, (long)Stopwatch.GetElapsedTime(replayBlockedStartTimestamp).TotalMilliseconds, header.storeVersion);
                             }
 
                             // Process buffered records

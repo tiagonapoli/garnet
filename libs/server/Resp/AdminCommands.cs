@@ -974,7 +974,9 @@ namespace Garnet.server
                     return true;
             }
 
-            var checkpointTask = storeWrapper.TakeCheckpointAsync(false, dbId: dbId, logger: logger);
+            Task<CheckpointStatus> checkpointTask;
+            using (CheckpointReason.Set("SAVE"))
+                checkpointTask = storeWrapper.TakeCheckpointAsync(false, dbId: dbId, logger: logger);
 
             // No choice but to block, we're on the network thread
             var status = AsyncUtils.BlockingWait(checkpointTask);
@@ -1102,7 +1104,9 @@ namespace Garnet.server
                 }
             }
 
-            var checkpointTask = storeWrapper.TakeCheckpointAsync(true, dbId: dbId, logger: logger);
+            Task<CheckpointStatus> checkpointTask;
+            using (CheckpointReason.Set("BGSAVE"))
+                checkpointTask = storeWrapper.TakeCheckpointAsync(true, dbId: dbId, logger: logger);
 
             // No choice but to block, we're on the network thread
             var status = AsyncUtils.BlockingWait(checkpointTask);

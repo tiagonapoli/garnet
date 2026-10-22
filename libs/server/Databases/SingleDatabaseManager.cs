@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -200,6 +201,7 @@ namespace Garnet.server
                     return;
 
                 // Necessary to take a checkpoint because the latest checkpoint is before entryTime
+                using var trigger = CheckpointReason.Set("on-demand");
                 var result = await TakeCheckpointAsync(defaultDatabase, logger: Logger).ConfigureAwait(false);
                 RecordCheckpointOutcome(defaultDatabase, result);
             }
@@ -228,9 +230,13 @@ namespace Garnet.server
                     return;
                 }
 
-                logger?.LogInformation("Enforcing AOF size limit currentAofSize: {aofSize} >  AofSizeLimit: {aofSizeLimit}",
-                    aofSize, aofSizeLimit);
+                var now = Stopwatch.GetTimestamp();
+                var sinceLastMs = lastAofSizeLimitCheckpointTimestamp == 0 ? -1 : (long)Stopwatch.GetElapsedTime(lastAofSizeLimitCheckpointTimestamp, now).TotalMilliseconds;
+                lastAofSizeLimitCheckpointTimestamp = now;
+                logger?.LogInformation("Enforcing AOF size limit currentAofSize: {aofSize} >  AofSizeLimit: {aofSizeLimit}; AOF filled {sinceLastMs} ms after the previous AOF-size-limit checkpoint started (-1 = first)",
+                    aofSize, aofSizeLimit, sinceLastMs);
 
+                using var trigger = CheckpointReason.Set("aof-size-limit");
                 var result = await TakeCheckpointAsync(defaultDatabase, logger: logger, token: token).ConfigureAwait(false);
                 RecordCheckpointOutcome(defaultDatabase, result);
             }

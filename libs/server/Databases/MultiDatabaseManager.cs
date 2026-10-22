@@ -320,6 +320,7 @@ namespace Garnet.server
 
                 try
                 {
+                    using var trigger = CheckpointReason.Set("aof-size-limit");
                     var result = await TakeCheckpointAsync(databasesMapSnapshot[pausedDbId], logger: logger, token: token).ConfigureAwait(false);
                     UpdateLastSaveData(pausedDbId, result);
                 }

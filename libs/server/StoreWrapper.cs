@@ -740,7 +740,9 @@ namespace Garnet.server
                         (clusterProvider?.IsReplica() ?? false))
                         continue;
 
-                    var status = await TakeCheckpointAsync(false, dbId: -1, token: token, logger: logger).ConfigureAwait(false);
+                    CheckpointStatus status;
+                    using (CheckpointReason.Set("scheduled"))
+                        status = await TakeCheckpointAsync(false, dbId: -1, token: token, logger: logger).ConfigureAwait(false);
                     if (status != CheckpointStatus.Success)
                     {
                         if (status == CheckpointStatus.AlreadyInProgress)

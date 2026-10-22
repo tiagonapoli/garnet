@@ -2,6 +2,8 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -18,6 +20,9 @@ namespace Garnet.server
     {
         /// <inheritdoc/>
         public abstract GarnetDatabase DefaultDatabase { get; }
+
+        /// <summary>Stopwatch timestamp of the latest AOF-size-limit checkpoint, to report how fast the AOF fills.</summary>
+        protected long lastAofSizeLimitCheckpointTimestamp;
 
         /// <inheritdoc/>
         public abstract int DatabaseCount { get; }
@@ -595,6 +600,10 @@ namespace Garnet.server
             ILogger logger = null)
         {
             logger?.LogInformation("Initiating checkpoint; full = {full}, type = {checkpointType}, dbId = {dbId}", full, checkpointType, db.Id);
+            var checkpointStartTimestamp = Stopwatch.GetTimestamp();
+            var trigger = CheckpointReason.Current ?? (StoreWrapper.serverOptions.EnableCluster && StoreWrapper.clusterProvider.IsReplica() ? "replica" : "unspecified");
+            var aofBytesAtStart = db.AppendOnlyFile?.Log.TailAddress.AggregateDiff(db.AppendOnlyFile.Log.BeginAddress) ?? 0;
+            var inMemoryLogBytesAtStart = db.Store.Log.TailAddress - db.Store.Log.HeadAddress;
 
             var checkpointCoveredAofAddress = AofAddress.Create(StoreWrapper.serverOptions.AofPhysicalSublogCount, 0);
             if (db.AppendOnlyFile != null)
@@ -653,7 +662,40 @@ namespace Garnet.server
                 logger ?? Logger);
 
             logger?.LogInformation("Completed checkpoint for DB ID: {id}", db.Id);
+
+            var (snapshotBytes, indexBytes) = GetCheckpointBytesOnDisk(StoreWrapper.serverOptions.CheckpointBaseDirectory, checkpointResult.token);
+            logger?.LogWarning("[checkpoint-stats] trigger={trigger} type={checkpointType} full={full} durationMs={durationMs} snapshotBytes={snapshotBytes} indexBytes={indexBytes} aofBytesAtStart={aofBytes} inMemoryLogBytesAtStart={inMemoryLogBytes} token={token} dbId={dbId}",
+                trigger, checkpointType, full, (long)Stopwatch.GetElapsedTime(checkpointStartTimestamp).TotalMilliseconds, snapshotBytes, indexBytes, aofBytesAtStart, inMemoryLogBytesAtStart, checkpointResult.token, db.Id);
             return true;
+        }
+
+        /// <summary>Bytes written for checkpoint <paramref name="token"/> under <paramref name="checkpointDir"/>; -1 if unavailable (for example, cloud storage).</summary>
+        static (long logBytes, long indexBytes) GetCheckpointBytesOnDisk(string checkpointDir, Guid token)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(checkpointDir) || !Directory.Exists(checkpointDir))
+                    return (-1, -1);
+
+                long logBytes = 0, indexBytes = 0;
+                foreach (var dir in Directory.EnumerateDirectories(checkpointDir, token.ToString(), SearchOption.AllDirectories))
+                {
+                    long bytes = 0;
+                    foreach (var file in Directory.EnumerateFiles(dir))
+                        bytes += new FileInfo(file).Length;
+
+                    if (dir.Contains("index-checkpoints", StringComparison.Ordinal))
+                        indexBytes += bytes;
+                    else
+                        logBytes += bytes;
+                }
+
+                return (logBytes, indexBytes);
+            }
+            catch (Exception)
+            {
+                return (-1, -1);
+            }
         }
 
         internal static void RunPostCheckpointCleanup(Action cleanup, int dbId, ILogger logger)
