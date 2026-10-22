@@ -55,6 +55,9 @@ namespace Garnet.cluster
             // stops advancing.
             long lastThrottleShipped;
 
+            // Credentials the stream last authenticated with; the replica re-validates their expiry on every APPENDLOG.
+            ClusterAuthContainer streamAuth;
+
             /// <summary>
             /// Return start address for this AofSyncTask
             /// </summary>
@@ -126,6 +129,7 @@ namespace Garnet.cluster
                     Array.Fill(pulseTailSnapshot, -1L);
                 }
                 backpressure = appendOnlyFile?.backpressure;
+                streamAuth = clusterProvider.ClusterAuth;
                 if (backpressure != null)
                 {
                     // Seed the shipped-watermark bookkeeping unconditionally when a gate exists, so the
@@ -139,8 +143,8 @@ namespace Garnet.cluster
                             this.clusterProvider.replicationManager.GetAofSyncNetworkBufferSettings,
                             this.clusterProvider.replicationManager.GetNetworkPool,
                             tlsOptions: this.clusterProvider.serverOptions.TlsOptions?.TlsClientOptions,
-                            authUsername: this.clusterProvider.ClusterUsername,
-                            authPassword: this.clusterProvider.ClusterPassword,
+                            authUsername: streamAuth.ClusterUsername,
+                            authPassword: streamAuth.ClusterPassword,
                             clientName: $"AofSyncTask-{physicalSublogIdx}:({currentConfig.LocalNodeEndpoint})",
                             logger: logger);
                 this.logger = logger;
@@ -193,6 +197,8 @@ namespace Garnet.cluster
                     ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.Aof_Sync_Task_Consume);
 
                     // logger?.LogInformation("Sending {payloadLength} bytes to {remoteNodeId} at address {currentAddress}-{nextAddress}", payloadLength, remoteNodeId, currentAddress, nextAddress);
+
+                    RefreshStreamAuthentication();
 
                     // This is called under epoch protection, so we have to wait for appending to complete
                     garnetClient.ExecuteClusterAppendLog(
@@ -267,6 +273,21 @@ namespace Garnet.cluster
                 SendAdvanceTimePulse();
             }
 
+            void RefreshStreamAuthentication()
+            {
+                var currentAuth = clusterProvider.ClusterAuth;
+                if (ReferenceEquals(currentAuth, streamAuth))
+                    return;
+
+                // Pipelined ahead of the next stream command so the replica switches tokens before the old one expires; AUTH is accepted even on an expired session.
+                streamAuth = currentAuth;
+                if (currentAuth.ClusterUsername != null)
+                    garnetClient.Execute("AUTH", currentAuth.ClusterUsername, currentAuth.ClusterPassword ?? "");
+                else if (currentAuth.ClusterPassword != null)
+                    garnetClient.Execute("AUTH", currentAuth.ClusterPassword);
+                logger?.LogInformation("[{sublogIdx}] Re-authenticated AOF stream to {remoteNodeId} after cluster credential rotation", physicalSublogIdx, remoteNodeId);
+            }
+
             void SendAdvanceTimePulse()
             {
                 if (!timePulseEnabled || iter == null)
@@ -308,6 +329,7 @@ namespace Garnet.cluster
                     return;
                 }
 
+                RefreshStreamAuthentication();
                 garnetClient.ExecuteClusterAdvanceTime(physicalSublogIdx, sequenceNumber);
                 garnetClient.CompletePending(false);
 
