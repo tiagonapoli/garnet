@@ -4,7 +4,7 @@ Tsavorite is a fork of the FASTER C# library (https://github.com/microsoft/FASTE
 
 ### Formal verification
 
-The [formal verification roadmap](FORMAL-VERIFICATION.md) proposes staged TLA+ models and Lean proofs for the key-value engine, checkpointing, and recovery. It is a plan, not a claim that the implementation is verified.
+The [formal verification roadmap](FORMAL-VERIFICATION.md) proposes staged TLA+ models and Lean proofs for the key-value engine, checkpointing, and recovery. The [executable foundations](formal/README.md) include abstract proofs, bounded models, and negative controls; they do not establish verification of the complete implementation.
 
 ### Privacy
 

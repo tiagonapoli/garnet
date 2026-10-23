@@ -1,0 +1,2 @@
+# Preserve the PlusCal translator's LF output and generated trailing spaces.
+tla/*.tla text eol=lf whitespace=-blank-at-eol

@@ -1,0 +1,9 @@
+lean/.lake/
+lean/lake-manifest.json
+tla/states/
+tla/*_TTrace_*
+tla/*.out
+tla/*.old
+tla/Core.cfg
+tla/Epoch.cfg
+tla/Checkpoint.cfg

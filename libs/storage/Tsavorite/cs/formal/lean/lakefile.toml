@@ -1,0 +1,7 @@
+name = "tsavorite_formal"
+version = "0.1.0"
+defaultTargets = ["Tsavorite"]
+
+[[lean_lib]]
+name = "Tsavorite"
+leanOptions = { autoImplicit = false, warningAsError = true }

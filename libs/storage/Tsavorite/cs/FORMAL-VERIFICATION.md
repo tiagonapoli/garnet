@@ -1,6 +1,7 @@
 # Tsavorite formal verification roadmap
 
-**Status: proposed work; no models or proofs are implemented by this document.**
+**Status: staged roadmap. Initial [executable foundations](formal/README.md) are
+implemented; full source-level verification remains open.**
 
 This roadmap covers the C# Tsavorite key-value engine: concurrent operations,
 epoch-protected memory, checkpointing, and recovery. It was mapped against Garnet
@@ -198,11 +199,13 @@ Only gate the configurations actually maintained; label larger exploratory runs
 separately. Changes to mapped C# paths require reviewing the model correspondence,
 even when the proof files themselves still compile.
 
-## First pull request acceptance
+## Roadmap and executable foundations
 
-The roadmap-only PR contains this document and its README entry, with valid source
-links and a clean documentation-only diff. It introduces no runtime behavior,
-dependencies, CI jobs, models, or proofs. Builds, tests, TLC, and Lean runs are not
-evidence for this PR because none of those implementations are added here.
-Subsequent PRs implement milestones with their own checked evidence and explicit
-remaining gaps.
+The initial roadmap-only commit introduced no executable verification. The
+follow-up adds abstract Lean proofs, PlusCal/TLA+ models, positive/negative
+configurations, and a pinned-tool runner under `formal/`. Its
+[claim boundaries](formal/README.md#claims-and-source-correspondence) distinguish
+checked abstract properties from unfinished source-level and composition proofs.
+Do not infer completion of the milestones above from these foundational results.
+Formal changes require running the proof/model checks and recording their actual
+outcomes; no runtime C# behavior is changed.
