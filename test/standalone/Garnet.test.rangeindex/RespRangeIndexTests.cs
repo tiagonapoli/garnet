@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -2448,10 +2449,8 @@ namespace Garnet.test
         /// <item>Assert the liveIndexes entry SURVIVED (count unchanged).</item>
         /// </list>
         ///
-        /// <para>Discriminating contrast: a stub with <c>IsTransferred=false</c> and
-        /// <c>TreeHandle=0</c> (a pure pending entry being evicted before activation) DOES
-        /// get its liveIndexes entry removed by the same call — proving the
-        /// <c>IsTransferred</c> check is what makes the no-op precise.</para>
+        /// <para>A stub with <c>IsTransferred=false</c> and <c>TreeHandle=0</c> only removes a pending
+        /// (not yet activated) entry, so an activated entry also survives it.</para>
         /// </summary>
         [Test]
         public void RIDisposeTreeUnderLockNoOpsOnTransferredSourceTest()
@@ -2505,12 +2504,9 @@ namespace Garnet.test
             // Live tree should still be functional.
             ClassicAssert.AreEqual("value-v1", (string)db.Execute("RI.GET", "transtest", "field-x"));
 
-            // Discriminating contrast: a stub WITHOUT IsTransferred (pure pending entry, e.g.
-            // evicted before activation) WOULD remove the entry. This proves the discriminating
-            // power of the IsTransferred check.
+            // A stub WITHOUT IsTransferred and with TreeHandle=0 looks like a pending entry being evicted, but the entry
+            // for "pendkey" is activated, so it must survive too.
             var pendingStub = new byte[RangeIndexManager.IndexSizeBytes];
-            // IsTransferred=0, TreeHandle=0 — looks like a pending entry being evicted.
-            // Use a DIFFERENT key for this part to avoid disturbing the live entry above.
             db.Execute("RI.CREATE", "pendkey", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
             ClassicAssert.AreEqual(2, rim.LiveIndexCount, "second tree created");
             // Now simulate eviction of a pending-entry stub for "pendkey".
@@ -2523,9 +2519,75 @@ namespace Garnet.test
                     rim.DisposeTreeUnderLock(pinnedKey, pendingStub, deleteFiles: false);
                 }
             }
-            ClassicAssert.AreEqual(1, rim.LiveIndexCount,
-                "DisposeTreeUnderLock without IsTransferred should still remove the entry " +
-                "(pending-eviction case): proves the discriminating power of the IsTransferred check");
+            ClassicAssert.AreEqual(2, rim.LiveIndexCount, "evicting a TreeHandle=0 stub must not remove an activated entry");
+        }
+
+        /// <summary>
+        /// RestoreTree activates the restored tree before its RIRESTORE RMW publishes the handle. If that RMW copies a
+        /// read-only stub to the tail, a later eviction of the stale TreeHandle=0 source must not remove the activated
+        /// entry; otherwise the tree leaks and later flushes copy its live working file as a stale snapshot.
+        /// </summary>
+        [Test]
+        public async Task RIEvictionOfRestoreCopyUpdateSourceKeepsRestoredTreeAsync()
+        {
+            TestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const ExceptionInjectionType RestorePause = ExceptionInjectionType.RangeIndex_Restore_Pause_Before_Stub_Update;
+
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            var store = server.Provider.StoreWrapper.store;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            db.Execute("RI.CREATE", "myindex", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "myindex", "alpha", "value-alpha");
+            for (var i = 0; i < 2000; i++)
+                db.StringSet($"filler{i:D4}", $"data{i:D4}");
+            ClassicAssert.AreEqual(0, rim.LiveIndexCount, "tree should have been freed by eviction");
+
+            ExceptionInjectionHelper.EnableException(RestorePause);
+            try
+            {
+                // The read promotes the cold stub to the tail, activates the restored tree, then parks before RIRESTORE.
+                var getTask = Task.Run(() =>
+                {
+                    using var getRedis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+                    return (string)getRedis.GetDatabase(0).Execute("RI.GET", "myindex", "alpha");
+                });
+                await ExceptionInjectionHelper.WaitOnClearAsync(RestorePause).WaitAsync(TimeSpan.FromSeconds(30));
+                ClassicAssert.AreEqual(1, rim.LiveIndexCount, "restored tree should be activated");
+
+                // Make the promoted stub read-only so RIRESTORE copy-updates it to the tail.
+                var sourceEnd = store.Log.TailAddress;
+                store.Log.ShiftReadOnlyAddress(sourceEnd, wait: true);
+
+                ExceptionInjectionHelper.EnableException(RestorePause);
+                ClassicAssert.AreEqual("value-alpha", await getTask.WaitAsync(TimeSpan.FromSeconds(30)));
+                ExceptionInjectionHelper.DisableException(RestorePause);
+
+                // Evict only the stale source; the restored stub lives above sourceEnd.
+                store.Log.ShiftHeadAddress(sourceEnd, wait: true);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(RestorePause);
+            }
+
+            ClassicAssert.AreEqual(1, rim.LiveIndexCount, "evicting the stale source must not remove the restored tree");
+
+            db.Execute("RI.SET", "myindex", "bravo", "value-bravo");
+            for (var i = 0; i < 2000; i++)
+                db.StringSet($"filler2-{i:D4}", $"data{i:D4}");
+            ClassicAssert.AreEqual(0, rim.LiveIndexCount, "restored tree should have been freed by eviction");
+
+            ClassicAssert.AreEqual("value-alpha", (string)db.Execute("RI.GET", "myindex", "alpha"));
+            ClassicAssert.AreEqual("value-bravo", (string)db.Execute("RI.GET", "myindex", "bravo"));
         }
 
         [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "liveIndexes")]

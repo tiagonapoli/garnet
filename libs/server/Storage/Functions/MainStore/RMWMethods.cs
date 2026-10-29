@@ -1533,6 +1533,7 @@ namespace Garnet.server
                             return false;
                         srcValue.CopyTo(dstLogRecord.ValueSpan);
                         RangeIndexManager.RecreateIndex((nint)input.arg1, dstLogRecord.ValueSpan);
+                        RangeIndexManager.ClearFlushedFlag(dstLogRecord.ValueSpan);
 
                         var dataHeader = dstLogRecord.DataHeader;
                         dataHeader.RecordType = RangeIndexManager.RangeIndexRecordType;
@@ -1591,6 +1592,12 @@ namespace Garnet.server
                 }
 
                 RangeIndexManager.SetTransferredFlag(srcSpan);
+            }
+            else if (cmd == RespCommand.RIRESTORE)
+            {
+                // The restored tree is owned by dst; a later OnEvict / OnFlush of the stale (TreeHandle == 0) source must not
+                // remove its liveIndexes entry or snapshot its working file.
+                RangeIndexManager.SetTransferredFlag(srcLogRecord.ValueSpan);
             }
             else if (cmd is RespCommand.VADD or RespCommand.XVCREATE or RespCommand.XVIMPORT)
             {

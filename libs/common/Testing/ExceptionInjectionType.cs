@@ -165,5 +165,10 @@ namespace Garnet.common
         /// that waits for AOF memory to be flushed.
         /// </summary>
         Aof_Pause_Upsert_With_Store_Epoch_Suspended,
+        /// <summary>
+        /// RangeIndex restore: pause after the restored tree is registered and before the RIRESTORE RMW publishes its
+        /// handle to the stub.
+        /// </summary>
+        RangeIndex_Restore_Pause_Before_Stub_Update,
     }
 }

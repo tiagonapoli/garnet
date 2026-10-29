@@ -373,6 +373,7 @@ namespace Garnet.server
             // the RMW returns NOTFOUND and the caller does not loop.
             try
             {
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.RangeIndex_Restore_Pause_Before_Stub_Update);
                 session.RestoreRangeIndexStub(key, nativePtr);
                 return true;
             }
