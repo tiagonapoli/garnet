@@ -19,6 +19,10 @@ namespace Tsavorite.core
     /// </summary>
     public abstract class AllocatorBase
     {
+#if DEBUG
+        internal Action AllocationRetryForTest { get; set; }
+#endif
+
         /// <summary>Create the circular buffers for <see cref="LogRecord"/> flushing to device. Only implemented by ObjectAllocator.</summary>
         internal virtual CircularDiskWriteBuffer CreateCircularFlushBuffers(IDevice objectLogDevice, ILogger logger) => default;
         /// <summary>Create the circular flush buffers for object deserialization from device. Only implemented by ObjectAllocator.</summary>
@@ -1603,6 +1607,9 @@ namespace Tsavorite.core
 
         void WaitToRetryNow(ref int spins, ref CompletionEvent localFlushEvent)
         {
+#if DEBUG
+            AllocationRetryForTest?.Invoke();
+#endif
             // Bounded backoff: yield kFlushSpinCount times, then suspend the epoch and wait on flushEvent.
             // This eliminates CPU burn from all 64 inserter threads spinning while a flush is in flight
             // (typically ~900us for libaio). We use a short timeout to handle the case where flushEvent was

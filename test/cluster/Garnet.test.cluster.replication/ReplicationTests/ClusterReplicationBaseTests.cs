@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -1005,6 +1006,77 @@ namespace Garnet.test.cluster
             context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
             ClassicAssert.AreEqual("after", context.clusterTestUtils.GetKey(primaryIndex, key, out _, out _, out _, logger: context.logger));
             ClassicAssert.AreEqual("after", context.clusterTestUtils.GetKey(replicaIndex, key, out _, out _, out _, logger: context.logger), "The replica dropped an upsert logged after the checkpoint END marker");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        [Category("REPLICATION")]
+        [CancelAfter(60_000)]
+        public void ClusterReplicationAllocationRetryAcrossCheckpointIsReplicated(bool inlineRetry, CancellationToken cancellationToken)
+        {
+#if !DEBUG
+            Assert.Ignore("Depends on Debug-only allocator hooks");
+#endif
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, memorySize: "128k", pageSize: "16k", useTLS: useTLS, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var database = GetStoreWrapper(context.nodes[0]).DefaultDatabase;
+            var allocator = database.Store.GetType().GetField("hlogBase", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(database.Store);
+            var hook = typeof(AllocatorBase).GetProperty("AllocationRetryForTest", BindingFlags.Instance | BindingFlags.NonPublic);
+            using var parked = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var writerConnection = ConnectionMultiplexer.Connect(context.clusterTestUtils.GetRedisConfig(context.endpoints));
+            var value = new string('x', 8192);
+            string stalledKey = null;
+            Task writer = null;
+            var captured = 0;
+            hook.SetValue(allocator, (Action)(() =>
+            {
+                if (database.Epoch.ThisInstanceProtected() != inlineRetry || Interlocked.CompareExchange(ref captured, 1, 0) != 0)
+                    return;
+
+                var suspended = database.Epoch.TrySuspend();
+                try
+                {
+                    parked.Set();
+                    release.Wait(cancellationToken);
+                }
+                finally
+                {
+                    if (suspended)
+                        database.Epoch.Resume();
+                }
+            }));
+
+            try
+            {
+                writer = Task.Run(() =>
+                {
+                    var db = writerConnection.GetDatabase();
+                    for (var i = 0; i < 8192 && !parked.IsSet; i++)
+                    {
+                        stalledKey = $"allocation-retry:{i}";
+                        ClassicAssert.IsTrue(db.StringSet(stalledKey, value));
+                    }
+                }, cancellationToken);
+                while (!parked.IsSet && !writer.IsCompleted)
+                    ClusterTestUtils.BackOff(cancellationToken: cancellationToken, msg: "Waiting for a main-log allocation retry");
+                ClassicAssert.IsTrue(parked.IsSet, "The writer must enter the selected allocation retry path");
+
+                context.clusterTestUtils.Checkpoint(0, context.logger);
+            }
+            finally
+            {
+                hook.SetValue(allocator, null);
+                release.Set();
+                writer?.GetAwaiter().GetResult();
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+            var key = Encoding.ASCII.GetBytes(stalledKey);
+            ClassicAssert.AreEqual(value, context.clusterTestUtils.GetKey(0, key, out _, out _, out _, logger: context.logger));
+            ClassicAssert.AreEqual(value, context.clusterTestUtils.GetKey(1, key, out _, out _, out _, logger: context.logger), "Allocation retries must refresh the store version before appending to the AOF");
         }
 
         [Test, Order(14)]
