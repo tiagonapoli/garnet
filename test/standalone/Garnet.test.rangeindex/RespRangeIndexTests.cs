@@ -442,6 +442,36 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Verifies large RI.SCAN replies stay well-formed when a record crosses the output buffer boundary.
+        /// </summary>
+        [Test]
+        public void RIScanRecordCrossingOutputBufferBoundaryTest()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const int recordCount = 2048;
+            for (var valueLength = 1; valueLength <= 48; valueLength++)
+            {
+                var index = $"idx{valueLength}";
+                var value = new string('v', valueLength);
+                db.Execute("RI.CREATE", index, "DISK", "CACHESIZE", "1048576", "MINRECORD", "8");
+                for (var i = 0; i < recordCount; i++)
+                    db.Execute("RI.SET", index, $"key{i:D5}", value);
+
+                var scanned = (RedisResult[])db.Execute("RI.SCAN", index, "key00000", "COUNT", recordCount.ToString());
+                ClassicAssert.AreEqual(recordCount, scanned.Length, $"value length {valueLength}");
+                for (var i = 0; i < recordCount; i++)
+                {
+                    var entry = (RedisResult[])scanned[i];
+                    ClassicAssert.AreEqual(ResultType.BulkString, entry[1].Resp2Type, $"value length {valueLength}, record {i}");
+                    ClassicAssert.AreEqual($"key{i:D5}", (string)entry[0]);
+                    ClassicAssert.AreEqual(value, (string)entry[1]);
+                }
+            }
+        }
+
+        /// <summary>
         /// Verifies RI.SCAN FIELDS KEY returns only key strings (no nested arrays).
         /// </summary>
         [Test]
@@ -1094,6 +1124,39 @@ namespace Garnet.test
             }
 
             ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount, "Restored BfTree should be registered as live");
+        }
+
+        /// <summary>
+        /// Verifies a scan succeeds over disk-backed leaves whose mini pages hold only records cached by point reads.
+        /// </summary>
+        [Test]
+        public void RIScanAfterReadPromotionToCleanMiniPageTest()
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const int recordCount = 4096;
+            var value = new string('v', 64);
+            db.Execute("RI.CREATE", "myindex", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            for (var i = 0; i < recordCount; i++)
+                db.Execute("RI.SET", "myindex", $"key{i:D5}", $"{value}{i:D5}");
+
+            for (var round = 0; round < 8; round++)
+            {
+                // Point reads of base-page records promote them into mini pages as clean cache records.
+                for (var i = 0; i < recordCount; i++)
+                    ClassicAssert.AreEqual($"{value}{i:D5}", (string)db.Execute("RI.GET", "myindex", $"key{i:D5}"));
+
+                // Scanning a leaf with such a mini page merges it, which is skipped because no record is dirty.
+                var scanned = (RedisResult[])db.Execute("RI.SCAN", "myindex", "key00000", "COUNT", recordCount.ToString());
+                ClassicAssert.AreEqual(recordCount, scanned.Length);
+                for (var i = 0; i < recordCount; i++)
+                {
+                    var entry = (RedisResult[])scanned[i];
+                    ClassicAssert.AreEqual($"key{i:D5}", (string)entry[0]);
+                    ClassicAssert.AreEqual($"{value}{i:D5}", (string)entry[1]);
+                }
+            }
         }
 
         /// <summary>

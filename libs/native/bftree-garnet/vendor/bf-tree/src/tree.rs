@@ -1542,6 +1542,8 @@ impl BfTree {
                 x_leaf.change_to_base_loc();
                 self.storage.finish_dealloc_mini_page(h);
 
+                // A clean mini page skips the merge without reading the base page.
+                x_leaf.load_base_page(base_offset.as_offset());
                 let base_page_ref = x_leaf.load_base_page_from_buffer();
                 let full_page_loc =
                     upgrade_to_full_page(&self.storage, base_page_ref, base_offset)?;

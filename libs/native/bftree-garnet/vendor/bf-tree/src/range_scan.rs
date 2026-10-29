@@ -424,16 +424,18 @@ fn promote_or_merge_mini_page<'a>(
 
             match merge_result {
                 MergeResult::NoSplit => {
+                    // A clean mini page skips the merge without reading the base page, so load it explicitly.
+                    let base_offset = mini_page.next_level;
                     // if no split, we face two choices:
                     // (1) keep using the merged base page
                     // (2) upgrade this page to full page, so that future scans don't need to load base page.
                     //      this is done with probability to avoid polluting the cache.
                     if tree.should_promote_scan_page() {
                         // upgrade to full page
-                        let base_offset = mini_page.next_level;
                         leaf.change_to_base_loc();
                         tree.storage.finish_dealloc_mini_page(h);
 
+                        leaf.load_base_page(base_offset.as_offset());
                         let base_page_ref = leaf.load_base_page_from_buffer();
                         let pos = base_page_ref.lower_bound(key);
                         if base_page_ref.meta.meta_count_without_fence() > 0 {
@@ -448,6 +450,7 @@ fn promote_or_merge_mini_page<'a>(
                     } else {
                         leaf.change_to_base_loc();
                         tree.storage.finish_dealloc_mini_page(h);
+                        leaf.load_base_page(base_offset.as_offset());
                         let base_ref = leaf.load_base_page_from_buffer();
                         let pos = base_ref.lower_bound(key);
                         Ok(ScanPosition::Base(pos as u32))

@@ -754,8 +754,12 @@ namespace Garnet.server
             {
                 recCount++;
 
+                var recordStart = curr;
                 if (TryWriteRecordResp(rf, k, v, ref curr, bufEnd))
                     return true;
+
+                // A failed write may have emitted part of the record; drop it before retrying.
+                curr = recordStart;
 
                 // Doesn't fit — grow the buffer and retry this record
                 var writtenBytes = (int)(curr - bufStart);
