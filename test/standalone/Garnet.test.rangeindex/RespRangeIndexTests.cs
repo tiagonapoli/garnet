@@ -4,6 +4,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.server;
@@ -2525,6 +2526,81 @@ namespace Garnet.test
             ClassicAssert.AreEqual(1, rim.LiveIndexCount,
                 "DisposeTreeUnderLock without IsTransferred should still remove the entry " +
                 "(pending-eviction case): proves the discriminating power of the IsTransferred check");
+        }
+
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "liveIndexes")]
+        static extern ref System.Collections.Concurrent.ConcurrentDictionary<Guid, RangeIndexManager.TreeEntry> GetLiveIndexes(RangeIndexManager manager);
+
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "storeEpoch")]
+        static extern ref Tsavorite.core.LightEpoch GetStoreEpoch(RangeIndexManager manager);
+
+        /// <summary>
+        /// The checkpoint snapshot loop iterates liveIndexes without the per-key lock or epoch protection, so it can hold
+        /// an entry that eviction removes and defer-disposes. Snapshotting that stale entry must skip the disposed tree
+        /// instead of failing the checkpoint with "Native handle is null", and an in-flight snapshot must delay disposal.
+        /// </summary>
+        [Test]
+        [CancelAfter(60_000)]
+        public void RICheckpointSnapshotOfEvictedTreeIsSkippedTest(System.Threading.CancellationToken cancellationToken)
+        {
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+
+            db.Execute("RI.CREATE", "evictsnap", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "evictsnap", "field-x", "value-v1");
+            db.Execute("RI.CREATE", "evictheld", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            ClassicAssert.AreEqual(2, rim.LiveIndexCount);
+
+            var liveIndexes = GetLiveIndexes(rim);
+            var entries = liveIndexes.Values.ToArray();
+            var staleEntry = entries.Single(e => e.HashPrefix == RangeIndexManager.HashKeyToPrefix("evictsnap"u8));
+            var heldEntry = entries.Single(e => e.HashPrefix == RangeIndexManager.HashKeyToPrefix("evictheld"u8));
+            var snapshotPath = Path.Combine(TestUtils.MethodTestDir, "stale-entry.bftree");
+
+            Evict("evictsnap", staleEntry.Tree.NativePtr);
+            while (staleEntry.Tree.NativePtr != nint.Zero)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Thread.Sleep(10);
+            }
+
+            ClassicAssert.IsFalse(staleEntry.TrySnapshotUnderClaim(snapshotPath), "a snapshot of a disposed tree must be skipped");
+            ClassicAssert.IsFalse(File.Exists(snapshotPath));
+
+            // While a snapshot holds the claim, the deferred dispose must not free the native tree.
+            ClassicAssert.IsTrue(heldEntry.TryClaimSnapshot());
+            var heldPtr = heldEntry.Tree.NativePtr;
+            var evict = Task.Run(() => Evict("evictheld", heldPtr), cancellationToken);
+            Thread.Sleep(200);
+            ClassicAssert.AreEqual(heldPtr, heldEntry.Tree.NativePtr, "the tree must not be disposed while a snapshot holds the claim");
+            heldEntry.ReleaseSnapshot();
+            evict.Wait(cancellationToken);
+            while (heldEntry.Tree.NativePtr != nint.Zero)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Thread.Sleep(10);
+            }
+
+            ClassicAssert.AreEqual(0, rim.LiveIndexCount);
+
+            unsafe void Evict(string key, nint treeHandle)
+            {
+                var stub = new byte[RangeIndexManager.IndexSizeBytes];
+                BitConverter.TryWriteBytes(stub.AsSpan(0, sizeof(long)), (long)treeHandle);
+                var keyBytes = System.Text.Encoding.ASCII.GetBytes(key);
+                var epoch = GetStoreEpoch(rim);
+                epoch.Resume();
+                try
+                {
+                    fixed (byte* keyPtr = keyBytes)
+                        rim.DisposeTreeUnderLock(new ReadOnlySpan<byte>(keyPtr, keyBytes.Length), stub, deleteFiles: false);
+                }
+                finally
+                {
+                    epoch.Suspend();
+                }
+            }
         }
 
         /// <summary>

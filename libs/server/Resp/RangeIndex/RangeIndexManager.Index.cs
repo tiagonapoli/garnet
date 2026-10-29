@@ -257,6 +257,7 @@ namespace Garnet.server
             // Without it, a cold eviction concurrent with checkpoint can silently drop a
             // pending entry mid-snapshot iteration, narrowing checkpoint coverage for the key.
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(key));
+            TreeEntry disposedEntry = null;
             BfTreeService disposedTree = null;
             string hashPrefix = null;
             rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
@@ -272,7 +273,10 @@ namespace Garnet.server
                 // Remove entry from liveIndexes synchronously so concurrent restorers see no
                 // tree for this key. Stash the BfTree wrapper (if any) for deferred disposal.
                 if (liveIndexes.TryRemove(KeyId(key), out var entry))
+                {
+                    disposedEntry = entry;
                     disposedTree = entry?.Tree;
+                }
 
                 if (deleteFiles)
                     hashPrefix = HashKeyToPrefix(key);
@@ -294,15 +298,16 @@ namespace Garnet.server
 
             if (storeEpoch != null)
             {
+                var capturedEntry = disposedEntry;
                 var capturedTree = disposedTree;
                 var capturedPrefix = hashPrefix;
-                storeEpoch.BumpCurrentEpoch(() => DisposeAndDeleteFilesDeferred(capturedTree, capturedPrefix));
+                storeEpoch.BumpCurrentEpoch(() => DisposeAndDeleteFilesDeferred(capturedEntry, capturedTree, capturedPrefix));
             }
             else
             {
                 // No epoch available (unit-test scenario without a Tsavorite store). Synchronous
                 // dispose is OK here because no concurrent readers exist in such tests.
-                DisposeAndDeleteFilesDeferred(disposedTree, hashPrefix);
+                DisposeAndDeleteFilesDeferred(disposedEntry, disposedTree, hashPrefix);
             }
         }
 
@@ -311,12 +316,15 @@ namespace Garnet.server
         /// <c>storeEpoch.BumpCurrentEpoch</c> action so it runs only after all readers that
         /// could have observed the tree's TreeHandle have moved past.
         /// </summary>
+        /// <param name="entry">The removed entry, retired before <paramref name="tree"/> is disposed; or null.</param>
         /// <param name="tree">The BfTree wrapper to dispose, or null.</param>
         /// <param name="hashPrefix">Hash prefix for file deletion, or null to skip file deletion.</param>
-        private void DisposeAndDeleteFilesDeferred(BfTreeService tree, string hashPrefix)
+        private void DisposeAndDeleteFilesDeferred(TreeEntry entry, BfTreeService tree, string hashPrefix)
         {
             // Order matters on Windows: dispose first so the native side closes any open
             // file handles, then File.Delete (otherwise the unlink races with the close).
+            // The checkpoint snapshot loop is not epoch-protected and may still hold this entry.
+            entry?.Retire();
             if (tree != null)
             {
                 try { tree.Dispose(); }
