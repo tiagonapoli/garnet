@@ -189,5 +189,10 @@ namespace Garnet.common
         /// decremented the send count and before it releases the waiter.
         /// </summary>
         Sender_Pause_Before_Slot_Release,
+        /// <summary>
+        /// AOF upsert append: suspend the store epoch and pause before allocating the record, standing in for an append
+        /// that waits for AOF memory to be flushed.
+        /// </summary>
+        Aof_Pause_Upsert_With_Store_Epoch_Suspended,
     }
 }

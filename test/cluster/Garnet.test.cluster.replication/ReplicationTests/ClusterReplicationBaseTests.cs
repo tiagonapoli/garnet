@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ using NUnit.Framework;
 using NUnit.Framework.Internal;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;
+using Tsavorite.core;
 
 namespace Garnet.test.cluster
 {
@@ -58,6 +60,9 @@ namespace Garnet.test.cluster
         }
 
         protected ClusterTestContext context;
+
+        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "storeWrapper")]
+        static extern ref StoreWrapper GetStoreWrapper(GarnetServer server);
 
         public TextWriter LogTextWriter { get; set; }
 
@@ -947,6 +952,59 @@ namespace Garnet.test.cluster
 
             context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
             context.ValidateKVCollectionAgainstReplica(ref context.kvPairs, replicaIndex);
+        }
+
+        [Test]
+        [Category("REPLICATION")]
+        [CancelAfter(60_000)]
+        public void ClusterReplicationAppendStalledAcrossCheckpointIsReplicated(CancellationToken cancellationToken)
+        {
+#if !DEBUG
+            Assert.Ignore($"Depends on {nameof(ExceptionInjectionHelper)}, which is disabled in non-Debug builds");
+#endif
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, useTLS: useTLS, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var key = Encoding.ASCII.GetBytes("stalled-append");
+            ClassicAssert.AreEqual(ResponseState.OK, context.clusterTestUtils.SetKey(primaryIndex, key, Encoding.ASCII.GetBytes("before"), out _, out _, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var driver = GetStoreWrapper(context.nodes[primaryIndex]).DefaultDatabase.StateMachineDriver;
+            // The parked upsert holds its session, so it needs a connection of its own
+            using var writerConnection = ConnectionMultiplexer.Connect(context.clusterTestUtils.GetRedisConfig(context.endpoints));
+            Task<bool> stalledSet = null;
+            Task checkpoint = null;
+            try
+            {
+                // Park an upsert after it captured its store version, with the store epoch suspended as when waiting for AOF space
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended);
+                stalledSet = writerConnection.GetDatabase().StringSetAsync(key, "after");
+                while (ExceptionInjectionHelper.IsEnabled(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended))
+                    ClusterTestUtils.BackOff(cancellationToken: cancellationToken, msg: "Waiting for the upsert to park");
+
+                // An unpinned checkpoint completes, logging its END marker before the parked record; a pinned one waits in IN_PROGRESS
+                checkpoint = Task.Run(() => context.clusterTestUtils.Checkpoint(primaryIndex, context.logger));
+                while (!checkpoint.IsCompleted && driver.SystemState.Phase == Phase.REST)
+                    ClusterTestUtils.BackOff(cancellationToken: cancellationToken, msg: "Waiting for the checkpoint to start");
+                _ = checkpoint.Wait(TimeSpan.FromSeconds(5), cancellationToken);
+
+                // Re-enabling releases the parked upsert; keep it enabled until the upsert has left the injection point
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended);
+                ClassicAssert.IsTrue(stalledSet.GetAwaiter().GetResult());
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended);
+            }
+
+            checkpoint.GetAwaiter().GetResult();
+
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            ClassicAssert.AreEqual("after", context.clusterTestUtils.GetKey(primaryIndex, key, out _, out _, out _, logger: context.logger));
+            ClassicAssert.AreEqual("after", context.clusterTestUtils.GetKey(replicaIndex, key, out _, out _, out _, logger: context.logger), "The replica dropped an upsert logged after the checkpoint END marker");
         }
 
         [Test, Order(14)]
