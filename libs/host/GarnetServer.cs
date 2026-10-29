@@ -437,6 +437,8 @@ namespace Garnet
             );
             var store = CreateStore(dbId, clusterFactory, customCommandManager, storeEpoch, rangeIndexManager, vectorManager, out var stateMachineDriver, out var sizeTracker, out var kvSettings);
             var aof = CreateAOF(dbId);
+            if (aof != null)
+                aof.StateMachineDriver = stateMachineDriver;
 
             return new GarnetDatabase(dbId, store, kvSettings, storeEpoch, stateMachineDriver, sizeTracker, aof, serverOptions.AdjustedIndexMaxCacheLines == 0, vectorManager, rangeIndexManager);
         }

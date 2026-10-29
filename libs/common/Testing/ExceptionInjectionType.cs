@@ -160,5 +160,10 @@ namespace Garnet.common
         /// Pause after receiving the full diskless snapshot, before recovery resets the AOF addresses.
         /// </summary>
         Replication_Pause_Before_Diskless_Snapshot_Recovery,
+        /// <summary>
+        /// AOF upsert append: suspend the store epoch and pause before allocating the record, standing in for an append
+        /// that waits for AOF memory to be flushed.
+        /// </summary>
+        Aof_Pause_Upsert_With_Store_Epoch_Suspended,
     }
 }
