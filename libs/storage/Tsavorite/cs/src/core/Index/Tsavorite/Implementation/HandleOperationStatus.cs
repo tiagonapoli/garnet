@@ -78,6 +78,9 @@ namespace Tsavorite.core
                     try
                     {
                         epoch.Suspend();
+#if DEBUG
+                        hlogBase.AllocationRetryForTest?.Invoke();
+#endif
                         operationState.flushEvent.Wait();
                     }
                     finally
@@ -90,6 +93,9 @@ namespace Tsavorite.core
                     // allocation that disposal has made unsatisfiable would spin this loop. Checked after the
                     // finally so the epoch is resumed exactly once before the throw unwinds.
                     hlogBase.ThrowIfDisposed();
+
+                    // The state machine may have advanced while the epoch was suspended, so retry under the current version.
+                    InternalRefresh<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions);
                     return true;
                 default:
                     // RECORD_ON_DISK falls here: do NOT reset operationState.logicalAddress, the caller (HandleOperationStatus)
