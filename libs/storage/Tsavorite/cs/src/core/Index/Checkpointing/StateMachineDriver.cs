@@ -175,6 +175,13 @@ namespace Tsavorite.core
         public void EndTransaction(long txnVersion)
             => DecrementActiveTransactions(txnVersion);
 
+        /// <summary>
+        /// Keep <paramref name="version"/> active, delaying the checkpoint's version shift, until <see cref="EndTransaction"/> is called.
+        /// The caller must be epoch-protected in a state whose version is <paramref name="version"/>.
+        /// </summary>
+        public void PinVersion(long version)
+            => IncrementActiveTransactions(version);
+
         internal void AddToWaitingList(Task waiter, StateMachineTaskType type)
         {
             // Callers start the operation before registering it. The driver awaits it after transition-in.

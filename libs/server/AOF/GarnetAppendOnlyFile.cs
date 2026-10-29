@@ -46,6 +46,11 @@ namespace Garnet.server
 
         public readonly GarnetServerOptions serverOptions;
 
+        /// <summary>
+        /// State machine driver of the store that writes to this AOF; appends pin their record version in it while suspended.
+        /// </summary>
+        public StateMachineDriver StateMachineDriver { get; set; }
+
         public long HeaderSize => Log.HeaderSize;
 
         public readonly AofAddress InvalidAofAddress;

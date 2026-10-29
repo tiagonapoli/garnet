@@ -634,7 +634,45 @@ namespace Garnet.server
         /// Enqueue an upsert-style record (key + value + input). If the combined data is "large" (see
         /// <see cref="TsavoriteLog.MinPartialAllocSize"/>) it is written as chunk records; otherwise it uses the single-record fast path.
         /// </summary>
-        internal void Enqueue<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
+        internal unsafe void Enqueue<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
+            where TInput : IStoreInput
+            where TEpochAccessor : IEpochAccessor
+        {
+            var driver = appendOnlyFile.StateMachineDriver;
+            var pinned = false;
+            try
+            {
+                var pinningAccessor = new VersionPinningEpochAccessor<TEpochAccessor>(epochAccessor, driver, version, &pinned);
+                PauseWithEpochSuspendedForTest(pinningAccessor);
+                EnqueueCore(opType, version, sessionId, key, value, ref input, pinningAccessor, out logicalAddress);
+            }
+            finally
+            {
+                if (pinned)
+                    driver.EndTransaction(version);
+            }
+        }
+
+        [Conditional("DEBUG")]
+        static void PauseWithEpochSuspendedForTest<TEpochAccessor>(TEpochAccessor epochAccessor)
+            where TEpochAccessor : IEpochAccessor
+        {
+            if (!ExceptionInjectionHelper.IsEnabled(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended))
+                return;
+
+            var suspended = epochAccessor.TrySuspend();
+            try
+            {
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Aof_Pause_Upsert_With_Store_Epoch_Suspended);
+            }
+            finally
+            {
+                if (suspended)
+                    epochAccessor.Resume();
+            }
+        }
+
+        void EnqueueCore<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
             where TInput : IStoreInput
             where TEpochAccessor : IEpochAccessor
         {
@@ -757,7 +795,24 @@ namespace Garnet.server
             }
         }
 
-        internal void Enqueue<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
+        internal unsafe void Enqueue<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
+            where TInput : IStoreInput
+            where TEpochAccessor : IEpochAccessor
+        {
+            var driver = appendOnlyFile.StateMachineDriver;
+            var pinned = false;
+            try
+            {
+                EnqueueCore(opType, version, sessionId, key, ref input, new VersionPinningEpochAccessor<TEpochAccessor>(epochAccessor, driver, version, &pinned), out logicalAddress);
+            }
+            finally
+            {
+                if (pinned)
+                    driver.EndTransaction(version);
+            }
+        }
+
+        void EnqueueCore<TInput, TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ref TInput input, TEpochAccessor epochAccessor, out long logicalAddress)
             where TInput : IStoreInput
             where TEpochAccessor : IEpochAccessor
         {
@@ -816,7 +871,23 @@ namespace Garnet.server
             }
         }
 
-        internal void Enqueue<TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, TEpochAccessor epochAccessor, out long logicalAddress)
+        internal unsafe void Enqueue<TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, TEpochAccessor epochAccessor, out long logicalAddress)
+            where TEpochAccessor : IEpochAccessor
+        {
+            var driver = appendOnlyFile.StateMachineDriver;
+            var pinned = false;
+            try
+            {
+                EnqueueCore(opType, version, sessionId, key, value, new VersionPinningEpochAccessor<TEpochAccessor>(epochAccessor, driver, version, &pinned), out logicalAddress);
+            }
+            finally
+            {
+                if (pinned)
+                    driver.EndTransaction(version);
+            }
+        }
+
+        void EnqueueCore<TEpochAccessor>(AofEntryType opType, long version, int sessionId, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, TEpochAccessor epochAccessor, out long logicalAddress)
             where TEpochAccessor : IEpochAccessor
         {
             BackpressureWaitKey(key);
@@ -882,6 +953,24 @@ namespace Garnet.server
         /// pinned key; hoisted for a non-pinned one).
         /// </summary>
         internal unsafe void EnqueueObjectChunked<TKey, TInput>(AofEntryType opType, long version, int sessionId, TKey key, IHeapObject value,
+                ref TInput input, IObjectSerializer<IHeapObject> objectSerializer, IEpochAccessor epochAccessor, out long logicalAddress)
+            where TKey : IKey, allows ref struct
+            where TInput : IStoreInput
+        {
+            var driver = appendOnlyFile.StateMachineDriver;
+            var pinned = false;
+            try
+            {
+                EnqueueObjectChunkedCore(opType, version, sessionId, key, value, ref input, objectSerializer, new VersionPinningEpochAccessor<IEpochAccessor>(epochAccessor, driver, version, &pinned), out logicalAddress);
+            }
+            finally
+            {
+                if (pinned)
+                    driver.EndTransaction(version);
+            }
+        }
+
+        unsafe void EnqueueObjectChunkedCore<TKey, TInput>(AofEntryType opType, long version, int sessionId, TKey key, IHeapObject value,
                 ref TInput input, IObjectSerializer<IHeapObject> objectSerializer, IEpochAccessor epochAccessor, out long logicalAddress)
             where TKey : IKey, allows ref struct
             where TInput : IStoreInput
