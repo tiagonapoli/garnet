@@ -288,6 +288,10 @@ namespace Garnet.server
             // its native call before the bfTree is freed.
             if (disposedTree == null && hashPrefix == null)
                 return;
+
+            if (!deleteFiles && disposedTree != null)
+                logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree}", HashKeyToPrefix(key), disposedTree.NativePtr);
+
             if (storeEpoch != null)
             {
                 var capturedTree = disposedTree;

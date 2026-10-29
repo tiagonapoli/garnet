@@ -354,6 +354,7 @@ namespace Garnet.server
                         return false;
                     }
                     nativePtr = winner.Tree.NativePtr;
+                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File}", hashPrefix, nativePtr, workingPath);
                 }
             }
             catch (Exception ex)

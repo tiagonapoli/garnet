@@ -1,4 +1,8 @@
 <Project>
+  <PropertyGroup>
+    <EnableGarnetAsserts>true</EnableGarnetAsserts>
+    <DefineConstants>$(DefineConstants);DEBUG</DefineConstants>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(EnableGarnetAsserts)' == 'true'">
     <DefineConstants>$(DefineConstants);GARNET_ASSERT</DefineConstants>
   </PropertyGroup>
