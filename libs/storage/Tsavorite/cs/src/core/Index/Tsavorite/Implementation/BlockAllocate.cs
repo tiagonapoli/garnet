@@ -87,6 +87,7 @@ namespace Tsavorite.core
             }
 
             // Spin to make sure newLogicalAddress is > recSrc.LatestLogicalAddress (the .PreviousAddress and CAS comparison value).
+            var stateBeforeAllocation = stateMachineDriver.SystemState;
             while (true)
             {
                 if (!TryBlockAllocate(hlogBase, sizeInfo.AllocatedInlineRecordSize, out newLogicalAddress, ref operationState, out status))
@@ -95,7 +96,8 @@ namespace Tsavorite.core
                 newPhysicalAddress = hlogBase.GetPhysicalAddress(newLogicalAddress);
 
                 // If allocation had to flush and did it inline, then the epoch was refreshed and we need to check for address safety.
-                if (VerifyInMemoryAddresses(ref stackCtx))
+                // The refresh also lets the state machine advance past this operation's version, so it must restart under the new state.
+                if (SystemState.Equal(stateBeforeAllocation, stateMachineDriver.SystemState) && VerifyInMemoryAddresses(ref stackCtx))
                 {
                     if (newLogicalAddress > stackCtx.recSrc.LatestLogicalAddress)
                         return true;
@@ -117,7 +119,7 @@ namespace Tsavorite.core
                     continue;
                 }
 
-                // The in-memory source dropped below HeadAddress during BlockAllocate. Save the record for retry if we can and return RETRY_LATER.
+                // The system state changed or the in-memory source dropped below HeadAddress during BlockAllocate. Save the record for retry if we can and return RETRY_LATER.
                 if (options.recycle)
                 {
                     var logRecord = new LogRecord(newPhysicalAddress);
