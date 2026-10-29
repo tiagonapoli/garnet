@@ -267,7 +267,7 @@ namespace Garnet.server
         /// Source side: snapshot a BfTree for migration under an exclusive lock.
         /// Acquires the exclusive lock, re-reads the stub from the store to get a fresh
         /// <c>TreeHandle</c>. If the tree is live, takes a CPR snapshot straight to a
-        /// temporary migration file (via <see cref="TreeEntry.SnapshotUnderClaim"/>). If
+        /// temporary migration file (via <see cref="TreeEntry.TrySnapshotUnderClaim"/>). If
         /// evicted, copies the working
         /// <c>data.bftree</c> file (same source as checkpoint pending entries).
         /// </summary>
@@ -316,7 +316,11 @@ namespace Garnet.server
                     // per-tree claim (serializes against concurrent checkpoint / flush snapshots on
                     // the same tree). The claim is independent of the exclusive rangeIndex lock and
                     // is held only for one non-blocking snapshot.
-                    treeEntry.SnapshotUnderClaim(migrationPath);
+                    if (!treeEntry.TrySnapshotUnderClaim(migrationPath))
+                    {
+                        logger?.LogWarning("SnapshotForMigration: tree was disposed concurrently");
+                        return false;
+                    }
                 }
                 else
                 {

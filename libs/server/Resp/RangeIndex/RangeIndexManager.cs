@@ -177,19 +177,39 @@ namespace Garnet.server
             /// argument and writes a fresh self-contained file, so we snapshot straight to
             /// <paramref name="destinationPath"/>.
             /// </summary>
-            public void SnapshotUnderClaim(string destinationPath)
+            /// <returns><c>false</c> without snapshotting if the entry was retired by <see cref="Retire"/>.</returns>
+            public bool TrySnapshotUnderClaim(string destinationPath)
             {
                 while (!TryClaimSnapshot())
                     Thread.Yield();
                 try
                 {
+                    if (Volatile.Read(ref retired) != 0)
+                        return false;
+
                     BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                    return true;
                 }
                 finally
                 {
                     ReleaseSnapshot();
                 }
             }
+
+            /// <summary>
+            /// Mark the entry retired under the snapshot claim; must precede disposing <see cref="Tree"/>. Callers holding a
+            /// stale reference (e.g. a checkpoint iterating <see cref="liveIndexes"/> without the per-key lock) then skip
+            /// it, and a snapshot already in flight completes before the native tree is freed.
+            /// </summary>
+            public void Retire()
+            {
+                while (!TryClaimSnapshot())
+                    Thread.Yield();
+                Volatile.Write(ref retired, 1);
+                ReleaseSnapshot();
+            }
+
+            int retired;
 
             public TreeEntry(BfTreeService tree, long keyHash, string hashPrefix)
             {
@@ -473,6 +493,7 @@ namespace Garnet.server
             var keyId = KeyId(keyBytes);
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
+                entry.Retire();
                 try { entry.Tree?.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree on unregister"); }
                 return true;
@@ -488,6 +509,7 @@ namespace Garnet.server
 
             foreach (var kvp in liveIndexes)
             {
+                kvp.Value.Retire();
                 try { kvp.Value.Tree?.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree {Hash}", kvp.Value.HashPrefix); }
             }
@@ -705,7 +727,11 @@ namespace Garnet.server
                     SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                     return;
                 }
-                entry.SnapshotUnderClaim(flushPath);
+                if (!entry.TrySnapshotUnderClaim(flushPath))
+                {
+                    SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
+                    return;
+                }
                 SetFlushedFlag(valueSpan);
             }
             else
@@ -747,9 +773,8 @@ namespace Garnet.server
             {
                 // Re-check: a tree may have become live under a different stub for this key
                 // (RestoreTree completed before we acquired the shared lock).
-                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null)
+                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath))
                 {
-                    entry.SnapshotUnderClaim(flushPath);
                     SetFlushedFlag(valueSpan);
                     return;
                 }
@@ -800,7 +825,7 @@ namespace Garnet.server
         /// <para>For each entry with <see cref="TreeEntry.SnapshotPending"/> set:
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
-        /// straight to the checkpoint destination (<see cref="TreeEntry.SnapshotUnderClaim"/>).</item>
+        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim"/>); entries retired by a concurrent deferred dispose are skipped.</item>
         /// <item>Pending entries (Tree == null) → <c>File.Copy(data.bftree)</c> (no live tree
         /// to snapshot from; data.bftree was pre-staged by PreStage).</item>
         /// </list></para>
@@ -841,7 +866,8 @@ namespace Garnet.server
                             // Snapshot straight to the token-tagged checkpoint destination under
                             // the per-tree claim (serializes against concurrent OnFlush / migration
                             // on the same tree).
-                            entry.SnapshotUnderClaim(checkpointPath);
+                            if (!entry.TrySnapshotUnderClaim(checkpointPath))
+                                logger?.LogWarning("SnapshotAllTreesForCheckpoint: skipped {Hash}; tree was disposed after removal from liveIndexes", entry.HashPrefix);
                         }
                         else
                         {
