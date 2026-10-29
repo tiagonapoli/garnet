@@ -1053,6 +1053,50 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Verifies a scan after lazy restore succeeds when leaves were promoted to full-page cache before the eviction snapshot.
+        /// </summary>
+        [Test]
+        public void RIScanAfterEvictAndLazyRestoreOfScannedTreeTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            const int recordCount = 512;
+            var value = new string('v', 64);
+            db.Execute("RI.CREATE", "myindex", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            for (var i = 0; i < recordCount; i++)
+                db.Execute("RI.SET", "myindex", $"key{i:D5}", $"{value}{i:D5}");
+
+            // Scanning promotes base leaves to full-page cache, whose records are typed as clean cache records.
+            var scanned = (RedisResult[])db.Execute("RI.SCAN", "myindex", "key00000", "COUNT", recordCount.ToString(), "FIELDS", "KEY");
+            ClassicAssert.AreEqual(recordCount, scanned.Length);
+
+            for (var i = 0; i < 2000; i++)
+                db.StringSet($"filler{i:D4}", $"data{i:D4}");
+
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "BfTree should have been freed by eviction");
+
+            // The restored leaves must be valid base pages; scanning promotes them to full-page cache again.
+            scanned = (RedisResult[])db.Execute("RI.SCAN", "myindex", "key00000", "COUNT", recordCount.ToString());
+            ClassicAssert.AreEqual(recordCount, scanned.Length);
+            for (var i = 0; i < recordCount; i++)
+            {
+                var entry = (RedisResult[])scanned[i];
+                ClassicAssert.AreEqual($"key{i:D5}", (string)entry[0]);
+                ClassicAssert.AreEqual($"{value}{i:D5}", (string)entry[1]);
+            }
+
+            ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount, "Restored BfTree should be registered as live");
+        }
+
+        /// <summary>
         /// Verifies checkpoint + recovery: create tree, insert data, BGSAVE, dispose,
         /// recover. All data should be present after recovery and new writes should work.
         /// </summary>

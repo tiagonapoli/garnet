@@ -16,3 +16,7 @@ bf-tree = "0.5.4"
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# Local fix: snapshot full-page cache leaves with base-page record types.
+[patch.crates-io]
+bf-tree = { path = "vendor/bf-tree" }
