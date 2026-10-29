@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -265,8 +266,11 @@ namespace Garnet.server
             {
                 if (stub.TreeHandle == nint.Zero && !deleteFiles)
                 {
-                    // Pending entry cleanup on eviction: remove from liveIndexes (no native tree to dispose).
-                    _ = liveIndexes.TryRemove(KeyId(key), out _);
+                    // Pending entry cleanup on eviction (no native tree to dispose). An activated entry belongs to a newer
+                    // record (e.g. RestoreTree registered it before its RIRESTORE RMW moved the stub), so leave it alone.
+                    var pendingKeyId = KeyId(key);
+                    if (liveIndexes.TryGetValue(pendingKeyId, out var pendingEntry) && pendingEntry.Tree == null)
+                        _ = liveIndexes.TryRemove(new KeyValuePair<Guid, TreeEntry>(pendingKeyId, pendingEntry));
                     return;
                 }
 
