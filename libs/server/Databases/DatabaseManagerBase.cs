@@ -469,8 +469,10 @@ namespace Garnet.server
         {
             try
             {
-                // If periodic compaction is enabled and this is called from checkpointing, skip compaction
-                if (isFromCheckpoint && StoreWrapper.serverOptions.CompactionFrequencySecs > 0) return;
+                // Checkpoints compact unless the periodic compaction task does; that task runs only on primaries,
+                // so replicas must compact here or their log BeginAddress never advances.
+                var isReplica = StoreWrapper.serverOptions.EnableCluster && StoreWrapper.clusterProvider.IsReplica();
+                if (isFromCheckpoint && StoreWrapper.serverOptions.CompactionFrequencySecs > 0 && !isReplica) return;
 
                 await DoCompactionAsync(db, StoreWrapper.runtimeConfig.GetInt(ServerConfigType.COMPACTION_MAX_SEGMENTS), 1,
                     StoreWrapper.runtimeConfig.GetEnum<LogCompactionType>(ServerConfigType.COMPACTION_TYPE),

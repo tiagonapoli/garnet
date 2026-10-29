@@ -1079,6 +1079,42 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(value, context.clusterTestUtils.GetKey(1, key, out _, out _, out _, logger: context.logger), "Allocation retries must refresh the store version before appending to the AOF");
         }
 
+        [Test]
+        [Category("REPLICATION")]
+        [CancelAfter(60_000)]
+        public void ClusterReplicaCompactsLogWithPeriodicCompactionEnabled(CancellationToken cancellationToken)
+        {
+            // The periodic task is primary-only and its first cycle runs before any data exists, so only checkpoints can compact the replica.
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, memorySize: "128k", pageSize: "16k", segmentSize: "32k", compactionFrequencySecs: 3600, compactionType: LogCompactionType.Lookup, useTLS: useTLS, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+            for (var i = 0; i < 2; i++)
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.GetServer(i).Execute("CONFIG", "SET", "compaction-max-segments", "1"));
+
+            var db = context.clusterTestUtils.GetDatabase();
+            var value = new string('x', 1024);
+            for (var i = 0; i < 1024; i++)
+                ClassicAssert.IsTrue(db.StringSet($"compaction:{i}", value));
+
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+            var initialReplicaBeginAddress = ReplicaBeginAddress();
+            context.clusterTestUtils.Checkpoint(0, context.logger);
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+
+            while (ReplicaBeginAddress() == initialReplicaBeginAddress && !cancellationToken.IsCancellationRequested)
+                ClusterTestUtils.BackOff(cancellationToken: cancellationToken, msg: "Waiting for the replica checkpoint to compact its log");
+            ClassicAssert.Greater(ReplicaBeginAddress(), initialReplicaBeginAddress, "Replica checkpoints must compact the log when the periodic compaction task runs only on the primary");
+            for (var i = 0; i < 1024; i++)
+                ClassicAssert.AreEqual(value, context.clusterTestUtils.GetKey(1, Encoding.ASCII.GetBytes($"compaction:{i}"), out _, out _, out _, logger: context.logger));
+
+            long ReplicaBeginAddress()
+            {
+                var info = (string)context.clusterTestUtils.GetServer(1).Execute("INFO", "store");
+                var line = info.Split('\n').Single(l => l.StartsWith("Log.BeginAddress:", StringComparison.Ordinal));
+                return long.Parse(line["Log.BeginAddress:".Length..].Trim());
+            }
+        }
+
         [Test, Order(14)]
         [Category("REPLICATION")]
         public void ClusterMainMemoryReplicationAttachReplicas()
