@@ -189,5 +189,10 @@ namespace Garnet.common
         /// decremented the send count and before it releases the waiter.
         /// </summary>
         Sender_Pause_Before_Slot_Release,
+        /// <summary>
+        /// RangeIndex restore: pause after the restored tree is registered and before the RIRESTORE RMW publishes its
+        /// handle to the stub.
+        /// </summary>
+        RangeIndex_Restore_Pause_Before_Stub_Update,
     }
 }
