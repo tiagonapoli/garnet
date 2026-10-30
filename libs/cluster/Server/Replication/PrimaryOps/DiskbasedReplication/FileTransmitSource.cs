@@ -36,25 +36,38 @@ namespace Garnet.cluster
             var stats = new SnapshotTransferStats();
             var window = new SnapshotChunkWindow(timeout, resp => $"Primary error at TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]", cancellationToken);
 
-            while (DataSource.HasNextChunk)
+            // The next chunk is read while the current one is sent, so disk reads overlap the network transfer.
+            var nextRead = DataSource.HasNextChunk ? DataSource.ReadNextChunkAsync(cancellationToken) : null;
+            try
             {
-                var readStart = Stopwatch.GetTimestamp();
-                var result = await DataSource.ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
-                var sendStart = Stopwatch.GetTimestamp();
-                stats.AddRead(sendStart - readStart);
-
-                Task<string> response;
-                try
+                while (nextRead != null)
                 {
-                    response = gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, result.Buffer.GetSlice(result.BytesRead));
-                }
-                finally
-                {
-                    result.Buffer.Return();
-                }
+                    var readStart = Stopwatch.GetTimestamp();
+                    var result = await nextRead.ConfigureAwait(false);
+                    nextRead = null;
+                    var sendStart = Stopwatch.GetTimestamp();
+                    stats.AddRead(sendStart - readStart);
 
-                await window.AddAsync(response).ConfigureAwait(false);
-                stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
+                    Task<string> response;
+                    try
+                    {
+                        if (DataSource.HasNextChunk)
+                            nextRead = DataSource.ReadNextChunkAsync(cancellationToken);
+
+                        response = gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, result.Buffer.GetSlice(result.BytesRead));
+                    }
+                    finally
+                    {
+                        result.Buffer.Return();
+                    }
+
+                    await window.AddAsync(response).ConfigureAwait(false);
+                    stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
+                }
+            }
+            finally
+            {
+                await SnapshotReadAhead.AbandonAsync(nextRead).ConfigureAwait(false);
             }
 
             await window.DrainAsync().ConfigureAwait(false);
