@@ -174,5 +174,9 @@ namespace Garnet.common
         /// Replica full sync: fail when a RangeIndex checkpoint file starts arriving, interrupting the transfer.
         /// </summary>
         Replication_Fail_Replica_RangeIndex_File_Receive,
+        /// <summary>
+        /// Replica full sync: park before recovering the received checkpoint until the condition is re-enabled.
+        /// </summary>
+        Replication_Wait_Replica_Before_Checkpoint_Recovery,
     }
 }

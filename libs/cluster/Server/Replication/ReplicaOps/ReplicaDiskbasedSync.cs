@@ -296,6 +296,8 @@ namespace Garnet.cluster
                     remoteCheckpoint.metadata.storeIndexToken,
                     remoteCheckpoint.metadata.storeHlogToken);
 
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery);
+
 #pragma warning disable VSTHRD002 // The replica-recovery RESP path is synchronous and must complete before sending a response.
                 storeWrapper.RecoverCheckpointAsync(
                     replicaRecover: true,

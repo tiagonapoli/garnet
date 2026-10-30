@@ -412,5 +412,58 @@ namespace Garnet.test.cluster
             ValidateRangeIndex(replicaIndex, "idx1", 10);
             ValidateRangeIndex(replicaIndex, "idx2", 10);
         }
+
+        /// <summary>
+        /// Replica recovery after a full sync can outlast the per-message sync timeout, so the primary must keep
+        /// waiting for it instead of failing the attach and forcing an endless cycle of full resyncs.
+        /// </summary>
+        [Test, Order(8)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexFullSyncRecoveryLongerThanSyncTimeout()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var nodesCount = 2;
+            var replicaSyncTimeoutSeconds = 1;
+
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true, replicaSyncTimeout: replicaSyncTimeoutSeconds);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            string resp;
+            try
+            {
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery);
+                var replicate = Task.Run(() => context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+
+                // The replica clears the condition when it parks before recovery; hold it there well past the sync timeout.
+                await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery).WaitAsync(TimeSpan.FromSeconds(timeout));
+                await Task.Delay(TimeSpan.FromSeconds(3 * replicaSyncTimeoutSeconds));
+
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery);
+                resp = await replicate.WaitAsync(TimeSpan.FromSeconds(timeout));
+            }
+            finally
+            {
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery);
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_Wait_Replica_Before_Checkpoint_Recovery);
+            }
+
+            ClassicAssert.AreEqual("OK", resp, "the attach must survive a replica recovery that outlasts the sync timeout");
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
     }
 }

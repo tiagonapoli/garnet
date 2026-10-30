@@ -176,13 +176,14 @@ namespace Garnet.cluster
 
                 // Signal replica to recover from local/remote checkpoint
                 // Make replica replayAOF if needed and replay from provided beginAddress to RecoveredReplication Address
+                // Recovery time scales with checkpoint size, so it is bounded by the attach timeout rather than the per-message sync timeout.
                 var resp = await gcs.ExecuteClusterBeginReplicaRecover(
                     !skipLocalMainStoreCheckpoint,
                     replayAOFMap,
                     clusterProvider.replicationManager.PrimaryReplId,
                     localEntry.ToByteArray(),
                     beginAddress.Span,
-                    checkpointAofBeginAddress.Span).WaitAsync(storeWrapper.serverOptions.ReplicaSyncTimeout, cts.Token).ConfigureAwait(false);
+                    checkpointAofBeginAddress.Span).WaitAsync(storeWrapper.runtimeConfig.GetTimeSpan(ServerConfigType.REPL_ATTACH_TIMEOUT), cts.Token).ConfigureAwait(false);
                 var syncFromAofAddress = AofAddress.FromString(resp);
 
                 // Assert that AOF address the replica will be requesting can be served, except in case of:
