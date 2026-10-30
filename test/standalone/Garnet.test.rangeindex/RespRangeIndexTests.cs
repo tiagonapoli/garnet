@@ -2127,6 +2127,53 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A stub that is mutable in a checkpoint and flushed after it is re-flushed, with no live tree, at the same
+        /// address when recovery moves the read-only boundary over it; the flush file from before the crash must be replaced.
+        /// </summary>
+        [Test]
+        public void RIRecoverReplacesExistingFlushFileTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10);
+            server.Start();
+
+            var riLogRoot = server.Provider.StoreWrapper.rangeIndexManager.RiLogRoot;
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+
+                // Place the stub past the first page so it is mutable at SAVE but below the read-only address recovery computes.
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"pre{i:D4}", $"data{i:D4}");
+
+                db.Execute("RI.CREATE", "reflush", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "reflush", "field", "value");
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"post{i:D4}", $"data{i:D4}");
+
+                ClassicAssert.IsFalse(Directory.EnumerateFiles(riLogRoot, "*.flush.bftree").Any(), "Stub must be mutable at checkpoint time");
+                db.Execute("SAVE");
+
+                for (var i = 0; i < 2000 && !Directory.EnumerateFiles(riLogRoot, "*.flush.bftree").Any(); i++)
+                    db.StringSet($"fill{i:D4}", $"data{i:D4}");
+
+                ClassicAssert.IsTrue(Directory.EnumerateFiles(riLogRoot, "*.flush.bftree").Any(), "Stub should have been flushed after the checkpoint");
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                ClassicAssert.AreEqual("value", (string)db.Execute("RI.GET", "reflush", "field"));
+            }
+        }
+
+        /// <summary>
         /// Verifies pure AOF-only recovery (no checkpoint). RI.CREATE is replayed to
         /// recreate the BfTree, then RI.SET/RI.DEL operations rebuild the data.
         /// </summary>
