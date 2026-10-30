@@ -79,7 +79,8 @@ namespace Garnet.test.cluster
             {"ClusterReplicationMultiRestartRecover", LogLevel.Error},
             {"ClusterFailoverAttachReplicas", LogLevel.Error},
             {"ClusterReplicationSimpleTransactionTest", LogLevel.Trace},
-            {"ClusterReplicationStoredProc", LogLevel.Error}
+            {"ClusterReplicationStoredProc", LogLevel.Error},
+            {"ClusterPromoteAfterFailedStartupSyncAsync", LogLevel.Error}
         };
 
         [SetUp]
@@ -1907,6 +1908,70 @@ namespace Garnet.test.cluster
                 Array.Sort(resp2);
                 for (var i = 0; i < resp.Length; i++)
                     ClassicAssert.AreEqual(resp[i], resp2[i]);
+            }
+        }
+
+        [Test, Order(28)]
+        [Category("CLUSTER")]
+        [Category("REPLICATION")]
+        public async Task ClusterPromoteAfterFailedStartupSyncAsync([Values] bool replicaOfNoOne)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, useTLS: useTLS, asyncReplay: asyncReplay, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var keyLength = 32;
+            context.kvPairs = [];
+            context.PopulatePrimary(ref context.kvPairs, keyLength, keyCount, primaryIndex);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            // Keys written after the checkpoint exist only in the AOF
+            context.PopulatePrimary(ref context.kvPairs, keyLength, keyCount, primaryIndex);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            context.ValidateKVCollectionAgainstReplica(ref context.kvPairs, replicaIndex);
+            var replicaOffset = context.clusterTestUtils.GetReplicationOffset(replicaIndex, context.logger);
+
+            context.nodes[primaryIndex].Dispose(false);
+            context.nodes[primaryIndex] = null;
+            context.nodes[replicaIndex].Dispose(false);
+
+            // Restart only the replica, so its startup sync with the stopped primary fails
+            context.nodes[replicaIndex] = context.CreateInstance(context.clusterTestUtils.GetEndPoint(replicaIndex), disableObjects: true, tryRecover: true, enableAOF: true, timeout: timeout, useTLS: useTLS, asyncReplay: asyncReplay, cleanClusterConfig: false, sublogCount: sublogCount);
+            context.nodes[replicaIndex].Start();
+            await context.clusterTestUtils.ReconnectAsync([replicaIndex]).ConfigureAwait(false);
+            context.clusterTestUtils.AssertRole(replicaIndex, "slave", context.logger);
+
+            if (replicaOfNoOne)
+            {
+                ClassicAssert.AreEqual("OK", context.clusterTestUtils.ReplicaOf(replicaIndex, logger: context.logger));
+            }
+            else
+            {
+                _ = context.clusterTestUtils.ClusterFailover(replicaIndex, "TAKEOVER", logger: context.logger);
+                context.clusterTestUtils.WaitForNoFailover(replicaIndex, context.logger);
+            }
+            context.clusterTestUtils.WaitForPrimaryRole(replicaIndex, context.logger);
+
+            var promotedOffset = context.clusterTestUtils.GetReplicationOffset(replicaIndex, context.logger);
+            ClassicAssert.IsFalse(replicaOffset.AnyGreater(promotedOffset), $"AOF address regressed after promotion: {replicaOffset} > {promotedOffset}");
+
+            var server = context.clusterTestUtils.GetServer(replicaIndex);
+            ClassicAssert.AreEqual(context.kvPairs.Count, (long)server.Execute(0, "DBSIZE", []));
+
+            if (!replicaOfNoOne)
+            {
+                foreach (var (key, value) in context.kvPairs)
+                {
+                    var retVal = context.clusterTestUtils.GetKey(replicaIndex, Encoding.ASCII.GetBytes(key), out _, out _, out var responseState, logger: context.logger);
+                    ClassicAssert.AreEqual(ResponseState.OK, responseState);
+                    ClassicAssert.AreEqual(value, int.Parse(retVal));
+                }
             }
         }
 

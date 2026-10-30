@@ -114,6 +114,9 @@ namespace Garnet.cluster
                         clientName: nameof(TryReplicateDiskbasedSyncAsync));
                     await gcs.ConnectAsync((int)clusterProvider.serverOptions.ReplicaSyncTimeout.TotalMilliseconds, linkedCts.Token).ConfigureAwait(false);
 
+                    // The primary sync now owns the store contents
+                    localRecoveryDeferred = false;
+
                     // Reset background replay iterator if this node was a replica
                     clusterProvider.replicationManager.ResetReplicaReplayDriverStore();
 
@@ -189,7 +192,10 @@ namespace Garnet.cluster
                     logger?.LogError(ex, "An error occurred at ReplicationManager.RetrieveStoreCheckpoint");
 
                     if (options.AllowReplicaResetOnFailure)
+                    {
+                        await RecoverDeferredLocalDataAsync().ConfigureAwait(false);
                         clusterProvider.clusterManager.TryResetReplica();
+                    }
 
                     return ex.Message;
                 }
