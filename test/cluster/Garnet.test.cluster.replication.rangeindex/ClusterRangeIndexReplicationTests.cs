@@ -409,7 +409,8 @@ namespace Garnet.test.cluster
             foreach (var (keyHash, files) in primaryFiles)
             {
                 // Zero-padded hex addresses sort lexicographically, so the last name is the latest flush.
-                Assert.That(replicaFiles.TryGetValue(keyHash, out var received) ? received : [], Is.EqualTo(new[] { files[^1] }), $"only the latest flush file of {keyHash} must be shipped");
+                string[] expected = [files[^1]];
+                Assert.That(replicaFiles.TryGetValue(keyHash, out var received) ? received : [], Is.EqualTo(expected), $"only the latest flush file of {keyHash} must be shipped");
             }
 
             foreach (var index in new[] { "idx1", "idx2" })
