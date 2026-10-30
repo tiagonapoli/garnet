@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Threading.Tasks;
+using Garnet.common;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
@@ -360,5 +361,56 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual("OK", (string)result);
         }
 
+        /// <summary>
+        /// A full sync interrupted while RangeIndex files are in flight must not leave the replica with a checkpoint
+        /// that a later attach reuses, since the primary then skips resending the RangeIndex files it never received.
+        /// </summary>
+        [Test, Order(7)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexResyncAfterInterruptedRangeIndexTransfer()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var nodesCount = 2;
+
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+            PopulateRangeIndex(primaryIndex, "idx2", 10);
+
+            var tailAfterRiInsert = long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger));
+            await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, tailAfterRiInsert);
+            ClassicAssert.IsNotEmpty(Directory.GetFiles(GetRiLogRoot(primaryIndex), "*.flush.bftree"), "the checkpoint must carry RangeIndex files for this scenario to be under test");
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            try
+            {
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Fail_Replica_RangeIndex_File_Receive);
+                var resp = context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger);
+                Assert.That(resp, Does.Contain(nameof(ExceptionInjectionType.Replication_Fail_Replica_RangeIndex_File_Receive)), "the first sync must fail during the RangeIndex file transfer");
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_Fail_Replica_RangeIndex_File_Receive);
+            }
+
+            var retry = context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger);
+            ClassicAssert.AreEqual("OK", retry, "the retry must resend the checkpoint instead of reusing the partially received one");
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            ValidateRangeIndex(replicaIndex, "idx1", 10);
+            ValidateRangeIndex(replicaIndex, "idx2", 10);
+        }
     }
 }

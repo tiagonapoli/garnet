@@ -119,6 +119,7 @@ namespace Garnet.cluster
                             ExceptionUtils.ThrowException(new GarnetException("RangeIndex not enabled but received RI checkpoint data"));
                         if (activeSink != null)
                             ExceptionUtils.ThrowException(new GarnetException("ActiveSink already initialized!"));
+                        ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.Replication_Fail_Replica_RangeIndex_File_Receive);
                         activeSink = RangeIndexFileDataSink.FromMetadata(type, token, data, clusterProvider.rangeIndexManager, logger);
                         return;
                     case CheckpointFileType.STORE_INDEX:
