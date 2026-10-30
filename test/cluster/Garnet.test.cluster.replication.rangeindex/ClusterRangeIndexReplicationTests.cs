@@ -515,7 +515,8 @@ namespace Garnet.test.cluster
             foreach (var (keyHash, files) in primaryFiles)
             {
                 // Zero-padded hex addresses sort lexicographically, so the last name is the latest flush.
-                Assert.That(replicaFiles.TryGetValue(keyHash, out var received) ? received : [], Is.EqualTo(new[] { files[^1] }), $"only the latest flush file of {keyHash} must be shipped");
+                string[] expected = [files[^1]];
+                Assert.That(replicaFiles.TryGetValue(keyHash, out var received) ? received : [], Is.EqualTo(expected), $"only the latest flush file of {keyHash} must be shipped");
             }
 
             foreach (var index in new[] { "idx1", "idx2" })
@@ -523,6 +524,58 @@ namespace Garnet.test.cluster
                 ValidateRangeIndex(replicaIndex, index, 10);
                 ClassicAssert.AreEqual("value0010", (string)context.clusterTestUtils.Execute((IPEndPoint)context.endpoints[replicaIndex], "RI.GET", [index, "field0010"], logger: context.logger));
             }
+        }
+
+        /// <summary>
+        /// A full sync streams RangeIndex files spanning many more chunks than the in-flight window, and the replica
+        /// must receive them byte for byte.
+        /// </summary>
+        [Test, Order(10)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexFullSyncTransfersMultiChunkFiles()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var nodesCount = 2;
+            var fieldCount = 4000;
+            var value = string.Concat(Enumerable.Range(0, 15).Select(i => Guid.NewGuid().ToString("N")));
+
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.CREATE", ["idx1", "DISK", "CACHESIZE", "1048576", "MAXKEYLEN", "64"], logger: context.logger));
+            for (var i = 0; i < fieldCount; i++)
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", $"field{i:D4}", $"{value}{i:D4}"], logger: context.logger));
+
+            await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger)));
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            var primaryFlushFiles = Directory.GetFiles(GetRiLogRoot(primaryIndex), "*.flush.bftree");
+            Assert.That(primaryFlushFiles.Select(f => new FileInfo(f).Length).Max(), Is.GreaterThan(16L << 17), "a flush file must span many chunks for this scenario to be under test");
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            foreach (var primaryFile in primaryFlushFiles)
+            {
+                var replicaFile = Path.Combine(GetRiLogRoot(replicaIndex), Path.GetFileName(primaryFile));
+                Assert.That(File.ReadAllBytes(replicaFile), Is.EqualTo(File.ReadAllBytes(primaryFile)), $"{Path.GetFileName(primaryFile)} must be transferred intact");
+            }
+
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            for (var i = 0; i < fieldCount; i += 97)
+                ClassicAssert.AreEqual($"{value}{i:D4}", (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", $"field{i:D4}"], logger: context.logger));
         }
     }
 }

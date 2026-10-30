@@ -34,6 +34,7 @@ namespace Garnet.cluster
         {
             var fileTokenBytes = DataSource.Token.ToByteArray();
             var stats = new SnapshotTransferStats();
+            var window = new SnapshotChunkWindow(timeout, resp => $"Primary error at TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]", cancellationToken);
 
             while (DataSource.HasNextChunk)
             {
@@ -41,24 +42,22 @@ namespace Garnet.cluster
                 var result = await DataSource.ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
                 var sendStart = Stopwatch.GetTimestamp();
                 stats.AddRead(sendStart - readStart);
+
+                Task<string> response;
                 try
                 {
-                    var resp = await gcs.ExecuteClusterSnapshotData(
-                        fileTokenBytes,
-                        (int)DataSource.Type,
-                        startAddress: result.ChunkStartAddress,
-                        result.Buffer.GetSlice(result.BytesRead)).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
-                    stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
-
-                    if (!resp.Equals("OK"))
-                        ExceptionUtils.ThrowException(new GarnetException(
-                            $"Primary error at TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]"));
+                    response = gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, result.Buffer.GetSlice(result.BytesRead));
                 }
                 finally
                 {
                     result.Buffer.Return();
                 }
+
+                await window.AddAsync(response).ConfigureAwait(false);
+                stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
             }
+
+            await window.DrainAsync().ConfigureAwait(false);
 
             // Send empty package to indicate end of transmission
             var endResp = await gcs.ExecuteClusterSnapshotData(
