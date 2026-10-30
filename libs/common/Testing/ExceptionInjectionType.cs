@@ -170,5 +170,9 @@ namespace Garnet.common
         /// handle to the stub.
         /// </summary>
         RangeIndex_Restore_Pause_Before_Stub_Update,
+        /// <summary>
+        /// Replica full sync: fail when a RangeIndex checkpoint file starts arriving, interrupting the transfer.
+        /// </summary>
+        Replication_Fail_Replica_RangeIndex_File_Receive,
     }
 }

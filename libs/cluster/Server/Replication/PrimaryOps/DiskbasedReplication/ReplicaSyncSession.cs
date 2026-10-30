@@ -138,9 +138,9 @@ namespace Garnet.cluster
                     logger?.LogInformation("Sending main store checkpoint {version} {storeHlogToken} {storeIndexToken} to replica", localEntry.metadata.storeVersion, localEntry.metadata.storeHlogToken, localEntry.metadata.storeIndexToken);
 
                     using var checkpointTransmissionDriver = new SnapshotTransmissionDriver(gcs, storeWrapper.serverOptions.ReplicaSyncTimeout, logger);
-                    checkpointTransmissionDriver.AddReader(new TsavoriteSnapshotReader(clusterProvider, localEntry, hlog_size, index_size, storeWrapper.serverOptions.ReplicaSyncTimeout, logger));
 
-                    // Add RangeIndex files if RI is enabled
+                    // RangeIndex files go before the Tsavorite checkpoint, whose metadata commits the checkpoint at the replica;
+                    // otherwise an interrupted transfer leaves a committed checkpoint that later attaches reuse without these files.
                     if (storeWrapper.serverOptions.EnableRangeIndexPreview)
                     {
                         checkpointTransmissionDriver.AddReader(new RangeIndexSnapshotReader(
@@ -151,6 +151,7 @@ namespace Garnet.cluster
                             logger));
                     }
 
+                    checkpointTransmissionDriver.AddReader(new TsavoriteSnapshotReader(clusterProvider, localEntry, hlog_size, index_size, storeWrapper.serverOptions.ReplicaSyncTimeout, logger));
                     await checkpointTransmissionDriver.SendCheckpointAsync(cts.Token).ConfigureAwait(false);
                 }
                 #endregion
