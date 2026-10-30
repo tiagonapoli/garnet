@@ -189,5 +189,9 @@ namespace Garnet.common
         /// decremented the send count and before it releases the waiter.
         /// </summary>
         Sender_Pause_Before_Slot_Release,
+        /// <summary>
+        /// Replica full sync: park before recovering the received checkpoint until the condition is re-enabled.
+        /// </summary>
+        Replication_Wait_Replica_Before_Checkpoint_Recovery,
     }
 }
