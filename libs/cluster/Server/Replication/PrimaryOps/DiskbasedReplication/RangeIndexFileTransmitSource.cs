@@ -52,12 +52,23 @@ namespace Garnet.cluster
                 ExceptionUtils.ThrowException(new GarnetException(
                     $"Replica error at RangeIndex header {DataSource.Type} {headerResp} keyHash={riDataSource.KeyHash}"));
 
-            // Stream file content in chunks
             var window = new SnapshotChunkWindow(timeout, resp => $"Replica error at RangeIndex TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]", cancellationToken);
-            while (DataSource.HasNextChunk)
+
+            // Stream file content in chunks, reading the next chunk while the current one is sent
+            var nextRead = DataSource.HasNextChunk ? DataSource.ReadNextChunkAsync(cancellationToken) : null;
+            try
             {
-                var result = await DataSource.ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
-                await window.AddAsync(gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, new Span<byte>(result.Data, 0, result.BytesRead))).ConfigureAwait(false);
+                while (nextRead != null)
+                {
+                    var result = await nextRead.ConfigureAwait(false);
+                    nextRead = DataSource.HasNextChunk ? DataSource.ReadNextChunkAsync(cancellationToken) : null;
+
+                    await window.AddAsync(gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, new Span<byte>(result.Data, 0, result.BytesRead))).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                await SnapshotReadAhead.AbandonAsync(nextRead).ConfigureAwait(false);
             }
 
             await window.DrainAsync().ConfigureAwait(false);
