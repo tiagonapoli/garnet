@@ -20,7 +20,8 @@ namespace Garnet.cluster
         /// <summary>
         /// Default batch size for non-segmented checkpoint files.
         /// </summary>
-        internal const int DefaultBatchSize = 1 << 17;
+        // Fewer, larger chunks amortize the per-chunk round trip; 512 KB leaves room for only one chunk in the 1 MB replica sync send buffer.
+        internal const int DefaultBatchSize = 1 << 18;
 
         private readonly int maxBatchSize;
         private readonly TimeSpan timeout;

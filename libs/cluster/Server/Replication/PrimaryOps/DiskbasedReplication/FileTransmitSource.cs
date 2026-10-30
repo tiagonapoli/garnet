@@ -34,20 +34,34 @@ namespace Garnet.cluster
             var fileTokenBytes = DataSource.Token.ToByteArray();
             var window = new SnapshotChunkWindow(timeout, resp => $"Primary error at TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]", cancellationToken);
 
-            while (DataSource.HasNextChunk)
+            // The next chunk is read while the current one is sent, so disk reads overlap the network transfer.
+            var nextRead = DataSource.HasNextChunk ? DataSource.ReadNextChunkAsync(cancellationToken) : null;
+            try
             {
-                var result = await DataSource.ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
-                Task<string> response;
-                try
+                while (nextRead != null)
                 {
-                    response = gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, result.Buffer.GetSlice(result.BytesRead));
-                }
-                finally
-                {
-                    result.Buffer.Return();
-                }
+                    var result = await nextRead.ConfigureAwait(false);
+                    nextRead = null;
 
-                await window.AddAsync(response).ConfigureAwait(false);
+                    Task<string> response;
+                    try
+                    {
+                        if (DataSource.HasNextChunk)
+                            nextRead = DataSource.ReadNextChunkAsync(cancellationToken);
+
+                        response = gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, result.Buffer.GetSlice(result.BytesRead));
+                    }
+                    finally
+                    {
+                        result.Buffer.Return();
+                    }
+
+                    await window.AddAsync(response).ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                await SnapshotReadAhead.AbandonAsync(nextRead).ConfigureAwait(false);
             }
 
             await window.DrainAsync().ConfigureAwait(false);

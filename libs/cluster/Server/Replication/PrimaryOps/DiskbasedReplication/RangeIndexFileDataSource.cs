@@ -19,9 +19,9 @@ namespace Garnet.cluster
     internal sealed class RangeIndexFileDataSource : ISnapshotDataSource
     {
         /// <summary>
-        /// Default chunk size for streaming .bftree files (128 KB).
+        /// Default chunk size for streaming .bftree files.
         /// </summary>
-        internal const int DefaultChunkSize = 1 << 17;
+        internal const int DefaultChunkSize = FileDataSource.DefaultBatchSize;
 
         /// <summary>
         /// Length in bytes of the ASCII-encoded key hash in the metadata payload.
@@ -44,9 +44,11 @@ namespace Garnet.cluster
         private FileStream stream;
 
         /// <summary>
-        /// Shared read buffer, set externally by the snapshot reader to avoid per-file allocations.
+        /// Shared read buffers, set externally by the snapshot reader to avoid per-file allocations. Reads alternate
+        /// between them so a chunk stays intact while the next one is read ahead.
         /// </summary>
-        private byte[] buffer;
+        private byte[][] buffers;
+        private int nextBuffer;
 
         /// <inheritdoc/>
         public CheckpointFileType Type { get; }
@@ -122,12 +124,11 @@ namespace Garnet.cluster
         }
 
         /// <summary>
-        /// Sets the shared read buffer for chunk reads. The buffer must be at least
-        /// <see cref="chunkSize"/> bytes. Called by <see cref="RangeIndexSnapshotReader"/>
-        /// before transmission begins, allowing a single allocation to be reused across
-        /// all data sources.
+        /// Sets the shared read buffers for chunk reads. Each buffer must be at least <see cref="chunkSize"/> bytes.
+        /// Called by <see cref="RangeIndexSnapshotReader"/> before transmission begins, allowing the allocations to
+        /// be reused across all data sources. A chunk's data stays valid until the read after the next one.
         /// </summary>
-        internal void SetBuffer(byte[] sharedBuffer) => buffer = sharedBuffer;
+        internal void SetBuffers(byte[][] sharedBuffers) => buffers = sharedBuffers;
 
         /// <inheritdoc/>
         public async Task<DataSourceReadResult> ReadNextChunkAsync(CancellationToken cancellationToken = default)
@@ -137,6 +138,8 @@ namespace Garnet.cluster
             var remaining = EndOffset - CurrentOffset;
             var bytesToRead = (int)Math.Min(remaining, chunkSize);
 
+            var buffer = buffers[nextBuffer];
+            nextBuffer = (nextBuffer + 1) % buffers.Length;
             var bytesRead = await stream.ReadAsync(buffer, 0, bytesToRead, cancellationToken).ConfigureAwait(false);
 
             if (bytesRead == 0)

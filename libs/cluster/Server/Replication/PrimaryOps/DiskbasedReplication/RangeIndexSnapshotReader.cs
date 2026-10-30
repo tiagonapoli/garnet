@@ -20,7 +20,7 @@ namespace Garnet.cluster
     internal sealed class RangeIndexSnapshotReader : ISnapshotReader
     {
         private readonly List<RangeIndexFileDataSource> dataSources = [];
-        private readonly byte[] sharedBuffer = new byte[RangeIndexFileDataSource.DefaultChunkSize];
+        private readonly byte[][] sharedBuffers = [new byte[RangeIndexFileDataSource.DefaultChunkSize], new byte[RangeIndexFileDataSource.DefaultChunkSize]];
         private readonly ILogger logger;
 
         /// <summary>
@@ -56,7 +56,7 @@ namespace Garnet.cluster
         {
             foreach (var dataSource in dataSources)
             {
-                dataSource.SetBuffer(sharedBuffer);
+                dataSource.SetBuffers(sharedBuffers);
                 yield return new RangeIndexFileTransmitSource(dataSource, logger);
             }
         }
