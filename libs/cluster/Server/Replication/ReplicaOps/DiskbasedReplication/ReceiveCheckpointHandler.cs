@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,7 @@ namespace Garnet.cluster
 
         // Active sink (one at a time, matching the sequential protocol)
         ISnapshotDataSink activeSink;
+        SnapshotTransferStats activeStats;
 
         public ReceiveCheckpointHandler(ClusterProvider clusterProvider, ILogger logger = null)
         {
@@ -121,6 +123,7 @@ namespace Garnet.cluster
                             ExceptionUtils.ThrowException(new GarnetException("ActiveSink already initialized!"));
                         ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.Replication_Fail_Replica_RangeIndex_File_Receive);
                         activeSink = RangeIndexFileDataSink.FromMetadata(type, token, data, clusterProvider.rangeIndexManager, logger);
+                        activeStats = new SnapshotTransferStats();
                         return;
                     case CheckpointFileType.STORE_INDEX:
                     case CheckpointFileType.STORE_SNAPSHOT:
@@ -144,7 +147,15 @@ namespace Garnet.cluster
             // File segment handling: empty data signals end-of-stream
             if (data.Length == 0)
             {
+                var completeStart = Stopwatch.GetTimestamp();
                 activeSink?.Complete();
+                if (activeStats != null)
+                {
+                    activeStats.AddReceive(completeStart, Stopwatch.GetTimestamp(), 0);
+                    activeStats.Log(logger, "replica", type, $"{token}@{startAddress}");
+                    activeStats = null;
+                }
+
                 activeSink = null;
                 return;
             }
@@ -164,6 +175,7 @@ namespace Garnet.cluster
                         var device = clusterProvider.replicationManager.CreateCheckpointDevice(token, type);
                         bufferPool ??= new SectorAlignedBufferPool(1, (int)device.SectorSize);
                         activeSink = new FileDataSink(type, token, device, bufferPool, writeSemaphore, clusterProvider.serverOptions.ReplicaSyncTimeout, cts.Token, logger);
+                        activeStats = new SnapshotTransferStats();
                         break;
                     default:
                         ExceptionUtils.ThrowException(new GarnetException($"{nameof(ProcessSnapshotData)} invalid startAddress for checkpoint type: {type}!"));
@@ -171,7 +183,9 @@ namespace Garnet.cluster
                 }
             }
 
+            var writeStart = Stopwatch.GetTimestamp();
             activeSink.WriteChunk(startAddress, data);
+            activeStats?.AddReceive(writeStart, Stopwatch.GetTimestamp(), data.Length);
 
 #if DEBUG
             ExceptionInjectionHelper.WaitOnClear(ExceptionInjectionType.Replication_Timeout_On_Receive_Checkpoint);

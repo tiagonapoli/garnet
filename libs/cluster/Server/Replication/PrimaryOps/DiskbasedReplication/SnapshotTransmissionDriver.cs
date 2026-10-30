@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.client;
@@ -48,6 +49,13 @@ namespace Garnet.cluster
         /// </summary>
         public async Task SendCheckpointAsync(CancellationToken cancellationToken = default)
         {
+            var started = Stopwatch.GetTimestamp();
+            var files = 0;
+            long bytes = 0;
+            var gen2 = GC.CollectionCount(2);
+            var pause = GC.GetTotalPauseDuration();
+            var allocated = GC.GetTotalAllocatedBytes(false);
+
             foreach (var checkpointReader in checkpointReaders)
             {
                 foreach (var transmitSource in checkpointReader.GetTransmitSources())
@@ -58,6 +66,8 @@ namespace Garnet.cluster
                             transmitSource.DataSource.Token, transmitSource.DataSource.Type, transmitSource.DataSource.StartOffset, transmitSource.DataSource.EndOffset);
 
                         await transmitSource.TransmitAsync(gcs, timeout, cancellationToken).ConfigureAwait(false);
+                        files++;
+                        bytes += transmitSource.DataSource.EndOffset - transmitSource.DataSource.StartOffset;
 
                         logger?.LogInformation("<Complete sending checkpoint data {token} {type} {startAddress} {endAddress}",
                             transmitSource.DataSource.Token, transmitSource.DataSource.Type, transmitSource.DataSource.StartOffset, transmitSource.DataSource.EndOffset);
@@ -68,6 +78,10 @@ namespace Garnet.cluster
                     }
                 }
             }
+
+            var elapsed = Stopwatch.GetElapsedTime(started);
+            logger?.LogInformation("[SnapshotTransferSummary] files={files} bytes={bytes} elapsedSec={elapsedSec:F1} MBps={mbps:F1} gc2={gc2} gcPauseMs={pauseMs:F0} allocMB={allocMB:F1}",
+                files, bytes, elapsed.TotalSeconds, bytes / 1e6 / Math.Max(elapsed.TotalSeconds, 1e-9), GC.CollectionCount(2) - gen2, (GC.GetTotalPauseDuration() - pause).TotalMilliseconds, (GC.GetTotalAllocatedBytes(false) - allocated) / 1e6);
         }
     }
 }

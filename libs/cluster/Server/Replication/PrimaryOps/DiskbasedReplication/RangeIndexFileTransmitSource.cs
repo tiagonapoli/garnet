@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.client;
@@ -52,16 +53,22 @@ namespace Garnet.cluster
                 ExceptionUtils.ThrowException(new GarnetException(
                     $"Replica error at RangeIndex header {DataSource.Type} {headerResp} keyHash={riDataSource.KeyHash}"));
 
+            var stats = new SnapshotTransferStats();
+
             // Stream file content in chunks
             while (DataSource.HasNextChunk)
             {
+                var readStart = Stopwatch.GetTimestamp();
                 var result = await DataSource.ReadNextChunkAsync(cancellationToken).ConfigureAwait(false);
+                var sendStart = Stopwatch.GetTimestamp();
+                stats.AddRead(sendStart - readStart);
 
                 var resp = await gcs.ExecuteClusterSnapshotData(
                     fileTokenBytes,
                     (int)DataSource.Type,
                     startAddress: result.ChunkStartAddress,
                     new Span<byte>(result.Data, 0, result.BytesRead)).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
 
                 if (!resp.Equals("OK"))
                     ExceptionUtils.ThrowException(new GarnetException(
@@ -76,6 +83,8 @@ namespace Garnet.cluster
             if (!endResp.Equals("OK"))
                 ExceptionUtils.ThrowException(new GarnetException(
                     $"Replica error at RangeIndex TransmitAsync Completion {DataSource.Type} {endResp}"));
+
+            stats.Log(logger, "primary", DataSource.Type, $"{riDataSource.KeyHash}@{riDataSource.Address}");
         }
 
         public void Dispose()
