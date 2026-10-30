@@ -309,6 +309,41 @@ namespace Tsavorite.test
             ClassicAssert.AreEqual(numEntries, counter.count);
         }
 
+        [Test]
+        [Category("TsavoriteLog")]
+        public void InitializeBelowTailResetsSafeTail()
+        {
+            device = Devices.CreateLogDevice(Path.Join(MethodTestDir, "Tsavoritelog.log"), deleteOnClose: true);
+            log = new TsavoriteLog(new TsavoriteLogSettings { LogDevice = device, MemorySizeBits = 20, PageSizeBits = 14, LogCommitManager = manager, TryRecoverLatest = false });
+
+            var entry = new byte[1000];
+            for (var i = 0; i < 100; i++)
+                _ = log.Enqueue(entry);
+            while (log.RefreshSafeTailAddress() < log.TailAddress)
+                _ = Thread.Yield();
+
+            // Restart the log at its first address, as a replica does when it resyncs from scratch
+            var beginAddress = log.BeginAddress;
+            log.Initialize(beginAddress, beginAddress);
+            ClassicAssert.AreEqual(log.TailAddress, log.SafeTailAddress);
+
+            for (var i = 0; i < 3; i++)
+                _ = log.Enqueue(entry);
+            while (log.RefreshSafeTailAddress() < log.TailAddress)
+                _ = Thread.Yield();
+
+            using var iter = log.Scan(beginAddress, long.MaxValue, scanUncommitted: true);
+            var count = 0;
+            while (iter.GetNext(out byte[] result, out _, out _))
+            {
+                ClassicAssert.AreEqual(entry.Length, result.Length);
+                count++;
+            }
+
+            ClassicAssert.AreEqual(3, count);
+            ClassicAssert.AreEqual(log.TailAddress, iter.NextAddress);
+        }
+
         internal class TestConsumer : ILogEntryConsumer
         {
             private readonly Counter counter;

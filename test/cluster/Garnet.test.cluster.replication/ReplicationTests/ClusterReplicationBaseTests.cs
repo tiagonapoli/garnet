@@ -546,6 +546,34 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(storeCurrentAofAddress, storeRecoveredAofAddress);
         }
 
+        [Test]
+        [Category("REPLICATION")]
+        public void ClusterSRResyncWithoutCheckpointAfterPrimaryRestart()
+        {
+            // Without checkpoints, the replica resyncs by reinitializing its AOF at the start, below its previous tail
+            context.CreateInstances(2, tryRecover: true, enableAOF: true, lowMemory: true, memorySize: "1m", pageSize: "16k", AofMemorySize: "128k", AofPageSize: "32k", useTLS: useTLS, asyncReplay: true, clusterReplicationReestablishmentTimeout: 1, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            Dictionary<string, int> kvPairs = [];
+            context.PopulatePrimary(ref kvPairs, keyLength: 32, kvpairCount: 2000, primaryIndex: 0);
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+            context.ValidateKVCollectionAgainstReplica(ref kvPairs, 1);
+
+            context.nodes[0].Dispose(false);
+            context.nodes[0] = context.CreateInstance(context.clusterTestUtils.GetEndPoint(0), tryRecover: true, enableAOF: true, lowMemory: true, MemorySize: "1m", PageSize: "16k", AofMemorySize: "128k", AofPageSize: "32k", timeout: timeout, useTLS: useTLS, cleanClusterConfig: false, asyncReplay: true, sublogCount: sublogCount);
+            context.nodes[0].Start();
+            context.CreateConnection(useTLS: useTLS);
+
+            Dictionary<string, int> newKvPairs = [];
+            context.PopulatePrimary(ref newKvPairs, keyLength: 32, kvpairCount: 100, primaryIndex: 0);
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+            context.ValidateKVCollectionAgainstReplica(ref newKvPairs, 1);
+            foreach (var (key, value) in newKvPairs)
+                kvPairs[key] = value;
+            context.ValidateKVCollectionAgainstReplica(ref kvPairs, 1);
+        }
+
         [Test, Order(9)]
         [Category("REPLICATION")]
         public void ClusterSRRedirectWrites()

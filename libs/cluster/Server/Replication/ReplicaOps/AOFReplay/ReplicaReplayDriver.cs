@@ -315,9 +315,17 @@ namespace Garnet.cluster
                         maxChunkSize: 1 << 20,
                         cts.Token).ConfigureAwait(false);
                 }
+                catch (OperationCanceledException) when (cts.Token.IsCancellationRequested)
+                {
+                }
                 catch (Exception ex)
                 {
                     logger?.LogWarning(ex, "An exception occurred at ReplicationManager.ReplicaReplayTask - terminating");
+
+                    // Without a replay task the replica stops applying the stream it keeps accepting, so close the
+                    // replication connection to let the primary drop it and the replica resync.
+                    await cts.CancelAsync().ConfigureAwait(false);
+                    respSessionNetworkSender?.Dispose();
                 }
                 finally
                 {
