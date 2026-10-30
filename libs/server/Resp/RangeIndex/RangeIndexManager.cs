@@ -1011,9 +1011,9 @@ namespace Garnet.server
         /// the snapshot region at checkpoint time.</item>
         /// </list>
         ///
-        /// <para>Multiple flush files per key hash are possible and all within the range are
-        /// included — <see cref="PreStageAndRegisterPending"/> uses the exact source address
-        /// to locate the specific flush file.</para>
+        /// <para>Only the highest-address flush file per key hash within the range is included. Older flush files belong to
+        /// superseded stub records, which are never dereferenced: <see cref="PreStageAndRegisterPending"/> is only invoked
+        /// with the address of the live record (RIPROMOTE copy-update and compaction copy of live records).</para>
         /// </summary>
         /// <param name="checkpointToken">The checkpoint token (storeHlogToken) to locate
         /// per-checkpoint snapshots.</param>
@@ -1026,15 +1026,20 @@ namespace Garnet.server
         public IEnumerable<RangeIndexFileEntry> EnumerateFilesForReplication(
             Guid checkpointToken, long hlogStartAddress, long hlogEndAddress)
         {
-            // 1. Per-flush files: <hash>.<addr:x16>.flush.bftree where addr ∈ [start, end)
+            // 1. Per-flush files: <hash>.<addr:x16>.flush.bftree where addr ∈ [start, end), latest per hash only
+            var latestFlushFiles = new Dictionary<string, (string Path, long Address)>();
             foreach (var (path, name, addr) in EnumerateFlushFiles())
             {
                 if (addr >= hlogStartAddress && addr < hlogEndAddress)
                 {
                     var keyHash = name[..HashPrefixLength];
-                    yield return new RangeIndexFileEntry(path, keyHash, addr, isFlushFile: true);
+                    if (!latestFlushFiles.TryGetValue(keyHash, out var latest) || addr > latest.Address)
+                        latestFlushFiles[keyHash] = (path, addr);
                 }
             }
+
+            foreach (var (keyHash, latest) in latestFlushFiles)
+                yield return new RangeIndexFileEntry(latest.Path, keyHash, latest.Address, isFlushFile: true);
 
             // 2. Per-checkpoint snapshot files: cpr-checkpoints/<token>/rangeindex/<hash>.bftree
             if (!string.IsNullOrEmpty(cprDir))

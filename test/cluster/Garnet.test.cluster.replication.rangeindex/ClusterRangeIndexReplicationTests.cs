@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -464,6 +465,64 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual("OK", resp, "the attach must survive a replica recovery that outlasts the sync timeout");
             context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
             ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
+
+        /// <summary>
+        /// A key flushed, promoted by a write and flushed again leaves a superseded flush file on the primary. A full
+        /// sync must ship only the latest flush file per key, since superseded stubs are never dereferenced.
+        /// </summary>
+        [Test, Order(9)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexFullSyncSendsOnlyLatestFlushFilePerKey()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var nodesCount = 2;
+
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+            PopulateRangeIndex(primaryIndex, "idx2", 10);
+            await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger)));
+
+            // Writing to the flushed keys copies their stubs to the tail; flushing again writes a second flush file per key.
+            foreach (var index in new[] { "idx1", "idx2" })
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", [index, "field0010", "value0010"], logger: context.logger));
+            await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger)));
+
+            static Dictionary<string, string[]> FlushFilesByKey(string root) => Directory.GetFiles(root, "*.flush.bftree").Select(Path.GetFileName).GroupBy(name => name.Split('.')[0]).ToDictionary(g => g.Key, g => g.Order().ToArray());
+
+            var primaryFiles = FlushFilesByKey(GetRiLogRoot(primaryIndex));
+            Assert.That(primaryFiles.Values, Has.Some.Matches<string[]>(files => files.Length > 1), "the primary must hold superseded flush files for this scenario to be under test");
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var replicaFiles = FlushFilesByKey(GetRiLogRoot(replicaIndex));
+            foreach (var (keyHash, files) in primaryFiles)
+            {
+                // Zero-padded hex addresses sort lexicographically, so the last name is the latest flush.
+                Assert.That(replicaFiles.TryGetValue(keyHash, out var received) ? received : [], Is.EqualTo(new[] { files[^1] }), $"only the latest flush file of {keyHash} must be shipped");
+            }
+
+            foreach (var index in new[] { "idx1", "idx2" })
+            {
+                ValidateRangeIndex(replicaIndex, index, 10);
+                ClassicAssert.AreEqual("value0010", (string)context.clusterTestUtils.Execute((IPEndPoint)context.endpoints[replicaIndex], "RI.GET", [index, "field0010"], logger: context.logger));
+            }
         }
     }
 }
