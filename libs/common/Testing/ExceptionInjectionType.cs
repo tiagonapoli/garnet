@@ -189,5 +189,9 @@ namespace Garnet.common
         /// decremented the send count and before it releases the waiter.
         /// </summary>
         Sender_Pause_Before_Slot_Release,
+        /// <summary>
+        /// Replica full sync: fail when a RangeIndex checkpoint file starts arriving, interrupting the transfer.
+        /// </summary>
+        Replication_Fail_Replica_RangeIndex_File_Receive,
     }
 }
