@@ -138,6 +138,9 @@ namespace Garnet.cluster
                 _ = await clusterProvider.BumpAndWaitForEpochTransitionAsync(cts.Token).ConfigureAwait(false);
                 cts.Token.ThrowIfCancellationRequested();
 
+                // Load the data this replica holds on disk before serving as primary
+                await clusterProvider.replicationManager.RecoverDeferredLocalDataAsync().ConfigureAwait(false);
+
                 // Take over slots from old primary
                 if (!clusterProvider.clusterManager.TryTakeOverForPrimary())
                 {

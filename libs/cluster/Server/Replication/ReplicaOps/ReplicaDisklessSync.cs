@@ -163,6 +163,9 @@ namespace Garnet.cluster
 
                     await gcs.ConnectAsync((int)clusterProvider.serverOptions.ReplicaSyncTimeout.TotalMilliseconds, linkedCts.Token).ConfigureAwait(false);
 
+                    // The primary sync now owns the store contents
+                    localRecoveryDeferred = false;
+
                     SyncMetadata syncMetadata = new(
                         fullSync: false,
                         originNodeRole: current.LocalNodeRole,
@@ -186,6 +189,7 @@ namespace Garnet.cluster
 
                     if (options.AllowReplicaResetOnFailure)
                     {
+                        await RecoverDeferredLocalDataAsync().ConfigureAwait(false);
                         clusterProvider.clusterManager.TryResetReplica();
                         restoredPrimary = true;
                     }
