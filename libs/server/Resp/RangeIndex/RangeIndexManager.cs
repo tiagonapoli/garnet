@@ -761,7 +761,8 @@ namespace Garnet.server
                     LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
                     return; // do NOT set IsFlushed
                 }
-                File.Copy(dataPath, flushPath, overwrite: false);
+                // Recovery can re-flush a record at an address whose flush file survives from before the crash.
+                File.Copy(dataPath, flushPath, overwrite: true);
                 SetFlushedFlag(valueSpan);
             }
             finally
