@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Tsavorite.core;
@@ -202,6 +201,11 @@ namespace Garnet.server
         /// FINISH failed terminally; the set must be deleted before importing again.
         /// </summary>
         ImportFailed = 1 << 3,
+
+        /// <summary>
+        /// Covers all legal flag options
+        /// </summary>
+        All = SuppressCleanup | ImportPending | ImportCompleted | ImportFailed,
     }
 
     /// <summary>
@@ -238,7 +242,7 @@ namespace Garnet.server
         public GarnetStatus VectorSetImport(PinnedSpanByte key, VectorImportTermType termType, PinnedSpanByte id, PinnedSpanByte value,
             out VectorManagerResult result, out ReadOnlySpan<byte> errorMsg)
         {
-            Debug.Assert(Enum.IsDefined(termType) && termType != VectorImportTermType.Invalid, "Should have validate termType before calling");
+            GarnetAsserts.Assert(Enum.IsDefined(termType) && termType != VectorImportTermType.Invalid, "Should have validate termType before calling");
 
             if (!vectorManager.IsEnabled)
             {

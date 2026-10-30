@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Garnet.common;
 using Tsavorite.core;
@@ -289,7 +288,7 @@ namespace Garnet.server
         public unsafe GarnetStatus DEL_Conditional<TStringContext>(PinnedSpanByte key, ref StringInput input, ref TStringContext context)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
-            Debug.Assert(input.header.cmd is RespCommand.DELIFGREATER);
+            GarnetAsserts.Assert(input.header.cmd is RespCommand.DELIFGREATER);
 
             Span<byte> outputSpan = stackalloc byte[8];
             var output = StringOutput.FromPinnedSpan(outputSpan);
@@ -415,14 +414,39 @@ namespace Garnet.server
             return GarnetStatus.OK;
         }
 
-        public unsafe GarnetStatus SETEX<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, PinnedSpanByte expiryMs, ref TStringContext context)
-            where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
-            => SETEX(key, value, TimeSpan.FromMilliseconds(NumUtils.ReadInt64(expiryMs.Length, expiryMs.ToPointer())), ref context);
-
-        public GarnetStatus SETEX<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, TimeSpan expiry, ref TStringContext context)
+        public unsafe GarnetStatus SETEX<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, PinnedSpanByte expiryMs, out bool error, ref TStringContext context)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
-            var input = new StringInput(RespCommand.SETEX, ref parseState, arg1: DateTimeOffset.UtcNow.Ticks + expiry.Ticks);
+            // As with PSETEX, the expiry must be a positive integer with a representable expiration time
+            if (!NumUtils.TryReadInt64(expiryMs.Length, expiryMs.ToPointer(), out var milliseconds) || milliseconds <= 0
+                || !ConvertUtils.TryRelativeMillisecondsToTicks(milliseconds, out var expirationTicks))
+            {
+                error = true;
+                return GarnetStatus.OK;
+            }
+
+            error = false;
+            return SetWithExpiration(key, value, expirationTicks, ref context);
+        }
+
+        public GarnetStatus SETEX<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, TimeSpan expiry, out bool error, ref TStringContext context)
+            where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
+        {
+            // As with SETEX, the expiry must be positive and its expiration time representable
+            if (expiry <= TimeSpan.Zero || !ConvertUtils.TryRelativeTicksToTicks(expiry.Ticks, out var expirationTicks))
+            {
+                error = true;
+                return GarnetStatus.OK;
+            }
+
+            error = false;
+            return SetWithExpiration(key, value, expirationTicks, ref context);
+        }
+
+        GarnetStatus SetWithExpiration<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, long expirationTicks, ref TStringContext context)
+            where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
+        {
+            var input = new StringInput(RespCommand.SETEX, ref parseState, arg1: expirationTicks);
             return SET(key, ref input, value, ref context);
         }
 
@@ -433,9 +457,10 @@ namespace Garnet.server
         /// <param name="key">Key whose value is to be appended</param>
         /// <param name="value">Value to be appended</param>
         /// <param name="output">Length of updated value</param>
+        /// <param name="error">True if the result would be longer than the maximum string size; the value is unchanged</param>
         /// <param name="context">Store context</param>
         /// <returns>Operation status</returns>
-        public unsafe GarnetStatus APPEND<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, ref PinnedSpanByte output, ref TStringContext context)
+        public unsafe GarnetStatus APPEND<TStringContext>(PinnedSpanByte key, PinnedSpanByte value, ref PinnedSpanByte output, out bool error, ref TStringContext context)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
             var _output = new StringOutput(new SpanByteAndMemory(output));
@@ -443,7 +468,9 @@ namespace Garnet.server
             parseState.InitializeWithArgument(value);
             var input = new StringInput(RespCommand.APPEND, ref parseState);
 
-            return APPEND(key, ref input, ref _output, ref context);
+            var status = APPEND(key, ref input, ref _output, ref context);
+            error = _output.HasError;
+            return status;
         }
 
         /// <summary>
@@ -471,7 +498,7 @@ namespace Garnet.server
                 return GarnetStatus.WRONGTYPE;
             }
 
-            Debug.Assert(output.SpanByteAndMemory.IsSpanByte);
+            GarnetAsserts.Assert(output.SpanByteAndMemory.IsSpanByte);
 
             return GarnetStatus.OK;
         }
@@ -486,7 +513,7 @@ namespace Garnet.server
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
             var status = context.Delete((FixedSpanByteKey)key);
-            Debug.Assert(!status.IsPending);
+            GarnetAsserts.Assert(!status.IsPending);
             return status.Found ? GarnetStatus.OK : GarnetStatus.NOTFOUND;
         }
 
@@ -514,7 +541,7 @@ namespace Garnet.server
                 return GarnetStatus.WRONGTYPE;
             }
 
-            Debug.Assert(sbmOut.SpanByteAndMemory.IsSpanByte);
+            GarnetAsserts.Assert(sbmOut.SpanByteAndMemory.IsSpanByte);
             output.Length = sbmOut.SpanByteAndMemory.Length;
 
             return GarnetStatus.OK;
@@ -535,17 +562,11 @@ namespace Garnet.server
             return GarnetStatus.OK;
         }
 
-        public GarnetStatus Increment<TStringContext>(PinnedSpanByte key, out long output, long increment, ref TStringContext context)
+        public GarnetStatus Increment<TStringContext>(PinnedSpanByte key, out long output, out bool error, long increment, ref TStringContext context)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
         {
-            var cmd = RespCommand.INCRBY;
-            if (increment < 0)
-            {
-                cmd = RespCommand.DECRBY;
-                increment = -increment;
-            }
-
-            var input = new StringInput(cmd, 0, increment);
+            // INCRBY applies a negative increment as is, so no negation is needed
+            var input = new StringInput(RespCommand.INCRBY, 0, increment);
 
             const int outputBufferLength = NumUtils.MaximumFormatInt64Length + 1;
             var stringOutput = StringOutput.FromPinnedSpan(stackalloc byte[outputBufferLength]);
@@ -554,14 +575,20 @@ namespace Garnet.server
             if (status.IsPending)
                 CompletePendingForSession(ref status, ref stringOutput, ref context);
 
+            output = 0;
+            error = false;
 
             if (status.IsWrongType)
-            {
-                output = 0;
                 return GarnetStatus.WRONGTYPE;
+
+            // The stored value is not an integer, or the result would overflow; nothing was written to the output
+            if (stringOutput.HasError)
+            {
+                error = true;
+                return GarnetStatus.OK;
             }
 
-            Debug.Assert(stringOutput.SpanByteAndMemory.IsSpanByte);
+            GarnetAsserts.Assert(stringOutput.SpanByteAndMemory.IsSpanByte);
 
             output = NumUtils.ReadInt64(stringOutput.SpanByteAndMemory.Span);
             return GarnetStatus.OK;

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Text;
 using Garnet.common;
 using Tsavorite.core;
@@ -441,7 +440,7 @@ namespace Garnet.server
         private unsafe bool SetIsMember<TGarnetApi>(RespCommand cmd, ref TGarnetApi storageApi)
             where TGarnetApi : IGarnetApi
         {
-            Debug.Assert(cmd == RespCommand.SISMEMBER || cmd == RespCommand.SMISMEMBER);
+            GarnetAsserts.Assert(cmd == RespCommand.SISMEMBER || cmd == RespCommand.SMISMEMBER);
 
             var isSingle = cmd == RespCommand.SISMEMBER;
             if (isSingle)
@@ -641,8 +640,8 @@ namespace Garnet.server
             var countParameter = int.MinValue;
             if (parseState.Count == 2)
             {
-                // Prepare response
-                if (!parseState.TryGetInt(1, out countParameter))
+                // Prepare response. int.MinValue marks an absent count, and as a count it has no positive counterpart.
+                if (!parseState.TryGetInt(1, out countParameter) || countParameter == int.MinValue)
                 {
                     return AbortWithErrorMessage(CmdStrings.RESP_ERR_GENERIC_VALUE_IS_NOT_INTEGER);
                 }

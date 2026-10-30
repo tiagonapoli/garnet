@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -362,13 +361,15 @@ namespace Garnet.server
         /// <param name="increment"></param>
         /// <param name="member"></param>
         /// <param name="newScore"></param>
+        /// <param name="error">True if <paramref name="increment"/> is NaN or the new score would be NaN; nothing is written.</param>
         /// <param name="objectContext"></param>
         /// <returns></returns>
         public unsafe GarnetStatus SortedSetIncrement<TObjectContext>(PinnedSpanByte key, double increment, PinnedSpanByte member,
-            out double newScore, ref TObjectContext objectContext)
+            out double newScore, out bool error, ref TObjectContext objectContext)
             where TObjectContext : ITsavoriteContext<FixedSpanByteKey, ObjectInput, ObjectOutput, long, ObjectSessionFunctions, StoreFunctions, StoreAllocator>
         {
             newScore = 0;
+            error = false;
 
             if (key.Length == 0)
                 return GarnetStatus.OK;
@@ -389,6 +390,18 @@ namespace Garnet.server
                 ref output);
 
             scratchBufferBuilder.RewindScratchBuffer(incrSlice);
+
+            // An invalid increment or a NaN score replies with an error instead of the score; a missing key stays missing (NOTFOUND)
+            if (status is GarnetStatus.OK or GarnetStatus.NOTFOUND)
+            {
+                var outputSpan = output.SpanByteAndMemory.ReadOnlySpan;
+                if (!outputSpan.IsEmpty && outputSpan[0] == '-')
+                {
+                    error = true;
+                    output.SpanByteAndMemory.Dispose();
+                    return GarnetStatus.OK;
+                }
+            }
 
             // Process output
             if (status == GarnetStatus.OK)
@@ -541,7 +554,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)
@@ -590,7 +603,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(destinationKey, LockType.Exclusive);
@@ -625,7 +638,7 @@ namespace Garnet.server
                 }
                 else
                 {
-                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, ExpireOption.None, ref unifiedContext);
+                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, out _, ExpireOption.None, ref unifiedContext);
                 }
 
                 return status;
@@ -668,13 +681,13 @@ namespace Garnet.server
 
             if (status == GarnetStatus.OK)
             {
-                Debug.Assert(*outputContainer == (byte)'$' || *outputContainer == (byte)':');
+                GarnetAsserts.Assert(*outputContainer == (byte)'$' || *outputContainer == (byte)':');
                 if (*outputContainer == (byte)':')
                 {
                     // member exists -> read the rank
                     var read = TryProcessRespSimple64IntOutput(output, out var value);
                     var rankValue = read ? (int)value : default;
-                    Debug.Assert(read);
+                    GarnetAsserts.Assert(read);
                     rank = rankValue;
                 }
             }
@@ -728,7 +741,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(dstKey, LockType.Exclusive);
@@ -753,7 +766,7 @@ namespace Garnet.server
                 if (status == GarnetStatus.NOTFOUND)
                 {
                     // Expire/Delete the destination key if the source key is not found
-                    _ = EXPIRE(dstKey, TimeSpan.Zero, out _, ExpireOption.None, ref ssUnifiedTransactionalContext);
+                    _ = EXPIRE(dstKey, TimeSpan.Zero, out _, out _, ExpireOption.None, ref ssUnifiedTransactionalContext);
                     writer.WriteInt32(0);
                     return GarnetStatus.OK;
                 }
@@ -778,7 +791,7 @@ namespace Garnet.server
                     return GarnetStatus.OK;
                 }
 
-                Debug.Assert(!rangeOutputMem.IsSpanByte, "Output should not be in SpanByte format when the status is OK");
+                GarnetAsserts.Assert(!rangeOutputMem.IsSpanByte, "Output should not be in SpanByte format when the status is OK");
 
                 var rangeOutputHandler = rangeOutputMem.Memory.Memory.Pin();
                 try
@@ -791,7 +804,7 @@ namespace Garnet.server
                     ssUnifiedTransactionalContext.Delete((FixedSpanByteKey)destinationKey);
 
                     RespReadUtils.TryReadUnsignedArrayLength(out var arrayLen, ref currOutPtr, endOutPtr);
-                    Debug.Assert(arrayLen % 2 == 0, "Should always contain element and its score");
+                    GarnetAsserts.Assert(arrayLen % 2 == 0, "Should always contain element and its score");
                     var result = arrayLen / 2;
 
                     if (result > 0)
@@ -962,10 +975,10 @@ namespace Garnet.server
 
             if (status == GarnetStatus.OK)
             {
-                Debug.Assert(*outputContainer == (byte)':');
+                GarnetAsserts.Assert(*outputContainer == (byte)':');
                 var read = TryProcessRespSimple64IntOutput(output, out var value);
                 numElements = read ? (int)value : default;
-                Debug.Assert(read);
+                GarnetAsserts.Assert(read);
             }
             return status;
         }
@@ -1091,7 +1104,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)
@@ -1134,7 +1147,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(destinationKey, LockType.Exclusive);
@@ -1170,7 +1183,7 @@ namespace Garnet.server
                 }
                 else
                 {
-                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, ExpireOption.None, ref unifiedContext);
+                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, out _, ExpireOption.None, ref unifiedContext);
                 }
 
                 return status;
@@ -1325,7 +1338,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var key in keys)
@@ -1392,7 +1405,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object | TransactionStoreTypes.Unified);
                 txnManager.SaveKeyEntryToLock(destinationKey, LockType.Exclusive);
@@ -1428,7 +1441,7 @@ namespace Garnet.server
                 }
                 else
                 {
-                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, ExpireOption.None, ref unifiedContext);
+                    _ = EXPIRE(destinationKey, TimeSpan.Zero, out _, out _, ExpireOption.None, ref unifiedContext);
                 }
 
                 return status;
@@ -1454,7 +1467,7 @@ namespace Garnet.server
 
             if (txnManager.state != TxnState.Running)
             {
-                Debug.Assert(txnManager.state == TxnState.None);
+                GarnetAsserts.Assert(txnManager.state == TxnState.None);
                 createTransaction = true;
                 txnManager.AddTransactionStoreTypes(TransactionStoreTypes.Object);
                 foreach (var item in keys)

@@ -117,7 +117,7 @@ namespace Garnet.server
         private static void EnsureDistanceBufferSize(ref SpanByteAndMemory buffer, int retrieveCount)
         {
             // Verify no overflow: checked() ensures MaxRetrieveCount * sizeof(float) fits in int32
-            Debug.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * sizeof(float)) > 0);
+            GarnetAsserts.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * sizeof(float)) > 0);
             var sizeBytes = retrieveCount * sizeof(float);
             if (sizeBytes > buffer.Length)
             {
@@ -140,7 +140,7 @@ namespace Garnet.server
         private static void EnsureIdBufferSize(ref SpanByteAndMemory buffer, int retrieveCount)
         {
             // Verify no overflow: checked() ensures MaxRetrieveCount * MinimumSpacePerId fits in int32
-            Debug.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * MinimumSpacePerId) > 0);
+            GarnetAsserts.Assert(retrieveCount <= MaxRetrieveCount && checked(MaxRetrieveCount * MinimumSpacePerId) > 0);
             var sizeBytes = retrieveCount * MinimumSpacePerId;
             if (sizeBytes > buffer.Length)
             {
@@ -240,9 +240,9 @@ namespace Garnet.server
             vectorSetLocks = new(vectorSetReplayCount);
 
             this.getTempSession = getTempSession;
-            cleanupTaskChannel = new();
-            requestCleanupTaskChannel = new();
-            requestDropTaskChannel = new();
+            cleanupTaskChannel = VectorSetCleanupWorkChannel<object>.CreateSingleReaderMultiWriter();
+            requestCleanupTaskChannel = VectorSetCleanupWorkChannel<ulong>.CreateSingleReaderMultiWriter();
+            requestDropTaskChannel = VectorSetCleanupWorkChannel<object>.CreateSingleReaderMultiWriter();
 
             cleanupTask = RunCleanupTaskAsync();
             requestCleanupTask = RunRequestCleanupTaskAsync();
@@ -255,7 +255,7 @@ namespace Garnet.server
             recoveredIndexes = new();
             recoveredMetadata = new();
 
-            quantizationOrImportChannel = Channel.CreateUnbounded<QuantizationOrImportState>(new() { SingleWriter = false, SingleReader = false, AllowSynchronousContinuations = false });
+            quantizationOrImportChannel = VectorSetCleanupWorkChannel<QuantizationOrImportState>.CreateMultiReaderMultiWriter();
 
             if (serverOptions.VectorSetQuantizationTaskCount < 0 || serverOptions.VectorSetQuantizationTaskCount > Environment.ProcessorCount)
                 throw new GarnetException($"VectorSetQuantizationTaskCount should be in range [0,{Environment.ProcessorCount}]!");
@@ -499,7 +499,7 @@ namespace Garnet.server
             if (!cleanupTaskChannel.TryPublish())
             {
                 logger?.LogCritical("VectorManager cleanup channel rejected a recovery cleanup request");
-                Debug.Assert(false, "VectorManager cleanup channel should never drop a request");
+                GarnetAsserts.Assert(false, "VectorManager cleanup channel should never drop a request");
             }
         }
 
@@ -622,6 +622,13 @@ namespace Garnet.server
         /// <inheritdoc/>
         public void Dispose()
         {
+            if (!IsEnabled)
+            {
+                replicationBlockEvent.Dispose();
+
+                return;
+            }
+
             // We must drain all these before disposing, otherwise we'll leave replicationBlockEvent unset
             foreach (var channel in replicationReplayChannels)
             {
@@ -636,6 +643,9 @@ namespace Garnet.server
             // Wait for any _drops_ in progress to finish
             requestDropTaskChannel.CompleteAndWaitForConsumerTask(requestDropTask);
 
+            // Complete all quantization or import tasks - this MIGHT queue something into requestCleanupTaskChannel, so wait for it first
+            quantizationOrImportChannel.CompleteAndWaitForConsumerTask(Task.WhenAll(quantizationAndImportTasks));
+
             // Wait for any _marking_ of cleanup state to finish. PauseCleanupAsync callers MUST
             // have called ResumeCleanup before reaching here, otherwise the cleanup task
             // is permanently blocked on cleanupGate.WaitAsync() and Dispose will hang.
@@ -648,26 +658,16 @@ namespace Garnet.server
 
             // Cleanup task has fully drained, so nothing else can take this gate.
             cleanupGate.Dispose();
-
-            // drain quantization work and stop the worker tasks
-            if (!quantizationOrImportChannel.Writer.TryComplete())
-            {
-                logger?.LogWarning("VectorManager quantization channel was already completed during disposal");
-                Debug.Fail("VectorManager quantization channel was already completed");
-            }
-
-            while (quantizationOrImportChannel.Reader.TryRead(out _)) { }
-            AsyncUtils.BlockingWait(Task.WhenAll(quantizationAndImportTasks));
         }
 
         private static void CompletePending(ref Status status, ref VectorOutput output, ref VectorBasicContext ctx)
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            GarnetAsserts.Assert(more);
             status = completedOutputs.Current.Status;
             output = completedOutputs.Current.Output;
-            Debug.Assert(!completedOutputs.Next());
+            GarnetAsserts.Assert(!completedOutputs.Next());
             completedOutputs.Dispose();
         }
 
@@ -684,11 +684,11 @@ namespace Garnet.server
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            GarnetAsserts.Assert(more);
             status = completedOutputs.Current.Status;
             output = completedOutputs.Current.Output;
             input = completedOutputs.Current.Input;
-            Debug.Assert(!completedOutputs.Next());
+            GarnetAsserts.Assert(!completedOutputs.Next());
             completedOutputs.Dispose();
         }
 
@@ -697,9 +697,9 @@ namespace Garnet.server
         {
             _ = ctx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
             var more = completedOutputs.Next();
-            Debug.Assert(more);
+            GarnetAsserts.Assert(more);
             status = completedOutputs.Current.Status;
-            Debug.Assert(!completedOutputs.Next());
+            GarnetAsserts.Assert(!completedOutputs.Next());
             completedOutputs.Dispose();
         }
 
@@ -793,7 +793,7 @@ namespace Garnet.server
             {
                 if (needsQuantization)
                 {
-                    EnqueueQuantization(new(key.ToArray(), QuantizationOrImportStep.BuildQuantizationTable, 0, null));
+                    EnqueueQuantization(new(key.ToArray(), QuantizationOrImportStep.BuildQuantizationTable, 0, 0, 0, null));
                 }
 
                 return VectorManagerResult.OK;
@@ -833,7 +833,7 @@ namespace Garnet.server
         /// <summary>
         /// Request deletion of a Vector Set given the VALUE of the index key.
         /// </summary>
-        internal void RequestDeletion(ReadOnlySpan<byte> value)
+        internal void RequestDeletion(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
         {
             if (value.Length != IndexSize)
             {
@@ -843,7 +843,7 @@ namespace Garnet.server
 
             ExceptionInjectionHelper.TriggerException(ExceptionInjectionType.VectorSet_Interrupt_Delete_0);
 
-            ReadIndex(value, out var context, out _, out _, out _, out _, out _, out _, out var flags, out _);
+            ReadIndex(value, out var context, out _, out _, out _, out _, out _, out _, out var flags, out var indexPtr);
 
             // Ignore any deletion requested for an index that has the SuppressCleanup flag
             //
@@ -853,10 +853,19 @@ namespace Garnet.server
                 return;
             }
 
+            // If an import is in progress, we need to coordinate delete so we don't drop the index out from under a finalize step
+            if (flags.HasFlag(VectorSetFlags.ImportPending) && !flags.HasFlag(VectorSetFlags.ImportCompleted))
+            {
+                // If we fail to enqueue, that implies we are shutting down - so we'll pick it up on recovery
+                _ = quantizationOrImportChannel.TryPublish(new(key.ToArray(), QuantizationOrImportStep.DeleteDuringImport, 0, context, indexPtr, null));
+
+                return;
+            }
+
             if (!requestCleanupTaskChannel.TryPublish(context))
             {
                 logger?.LogCritical("VectorManager request cleanup channel rejected a delete request");
-                Debug.Assert(false, "VectorManager request cleanup channel should never drop a request");
+                GarnetAsserts.Assert(false, "VectorManager request cleanup channel should never drop a request");
                 throw new GarnetException("Could not submit request for Vector Set cleanup, aborting delete");
             }
 
@@ -901,7 +910,7 @@ namespace Garnet.server
                 if (!requestDropTaskChannel.TryPublish())
                 {
                     logger?.LogCritical("VectorManager request drop channel rejected an index drop");
-                    Debug.Assert(false, "VectorManager request drop channel should never drop a request");
+                    GarnetAsserts.Assert(false, "VectorManager request drop channel should never drop a request");
                 }
             }
         }
@@ -1358,7 +1367,7 @@ namespace Garnet.server
         /// </summary>
         internal int ContinueSearch(ulong context, nint indexPtr, nint oldContinuation, int foundSoFar, ref SpanByteAndMemory outputIds, ref SpanByteAndMemory outputDistances, out nint continuation)
         {
-            Debug.Assert(oldContinuation != 0, "Expected non-zero continuation");
+            GarnetAsserts.Assert(oldContinuation != 0, "Expected non-zero continuation");
 
             // Only ids can grow, so double them each time
             var newIdSpace = MemoryPool<byte>.Shared.Rent(outputIds.Span.Length * 2);
@@ -1373,7 +1382,7 @@ namespace Garnet.server
             }
 
             var writeDistancesInto = outputDistances.Span[(sizeof(float) * foundSoFar)..];
-            Debug.Assert(!writeDistancesInto.IsEmpty, "Expected space for remaining distances");
+            GarnetAsserts.Assert(!writeDistancesInto.IsEmpty, "Expected space for remaining distances");
 
             int count;
             unsafe
@@ -1389,7 +1398,7 @@ namespace Garnet.server
             // Error case, terminate 
             if (count < 0)
             {
-                Debug.Assert(continuation == 0, "Expected no additional continuations on error result");
+                GarnetAsserts.Assert(continuation == 0, "Expected no additional continuations on error result");
                 return count;
             }
 
@@ -1544,7 +1553,7 @@ namespace Garnet.server
                     return false;
                 }
 
-                Debug.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
+                GarnetAsserts.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
             }
             finally
             {
@@ -1626,7 +1635,7 @@ namespace Garnet.server
                     return false;
                 }
 
-                Debug.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
+                GarnetAsserts.Assert(internalIdBytes.IsSpanByte, "Internal Id should always be of known size");
             }
             finally
             {
@@ -1683,7 +1692,7 @@ namespace Garnet.server
             var foundInternalId = ReadSizeUnknown(context | DiskANNService.InternalIdMap, element, ref internalIdBytes);
             if (foundInternalId)
             {
-                Debug.Assert(internalIdBytes.IsSpanByte, "Shouldn't have allocated for this op");
+                GarnetAsserts.Assert(internalIdBytes.IsSpanByte, "Shouldn't have allocated for this op");
                 return true;
             }
 
@@ -1716,7 +1725,7 @@ namespace Garnet.server
                     if (!ids.IsSpanByte)
                     {
                         var getRes = MemoryMarshal.TryGetArray<byte>(ids.Memory.Memory, out var arrSeg);
-                        Debug.Assert(getRes, "Should always be able to get array to pin");
+                        GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                         idsPin?.Free();
                         idsPin = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
@@ -1880,7 +1889,7 @@ namespace Garnet.server
 
             if (found < 0)
             {
-                Debug.Assert(continuation == 0, "Shouldn't have more results after failure");
+                GarnetAsserts.Assert(continuation == 0, "Shouldn't have more results after failure");
 
                 logger?.LogError("GetNeighbors failed with {res} for context {context}", found, context);
 
@@ -1893,7 +1902,7 @@ namespace Garnet.server
 
                 if (additionalResults < 0)
                 {
-                    Debug.Assert(continuation == 0, "Shouldn't have more results after failure");
+                    GarnetAsserts.Assert(continuation == 0, "Shouldn't have more results after failure");
 
                     logger?.LogError("GetNeighbors failed in ContinueSearch with {additionalResults} for context {context}", additionalResults, context);
 
@@ -1913,10 +1922,10 @@ namespace Garnet.server
             return VectorManagerResult.OK;
         }
 
-        [Conditional("DEBUG")]
+        [Conditional("DEBUG"), Conditional("GARNET_ASSERT")]
         private static void AssertHaveStorageSession()
         {
-            Debug.Assert(ActiveThreadSession != null, "Should have StorageSession by now");
+            GarnetAsserts.Assert(ActiveThreadSession != null, "Should have StorageSession by now");
         }
     }
 }

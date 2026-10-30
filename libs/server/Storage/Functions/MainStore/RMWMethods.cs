@@ -30,8 +30,18 @@ namespace Garnet.server
                     return false;
                 case RespCommand.SETEXXX:
                     return false;
-                case RespCommand.SETIFGREATER:
+                case RespCommand.APPEND:
+                    // A new value is the appended value alone
+                    return !AppendExceedsMaxSize(0, input.parseState.GetArgSliceByRef(0).Length, ref output);
                 case RespCommand.SETIFMATCH:
+                    // The new record's ETag is one past the ETag sent by the client
+                    if (input.parseState.GetLong(1) == long.MaxValue)
+                    {
+                        WriteEtagOverflowError(ref output);
+                        return false;
+                    }
+                    return true;
+                case RespCommand.SETIFGREATER:
                 case RespCommand.SETWITHETAG:
                 // add etag on first insertion, already tracked by header.CheckWithEtagFlag()
                 case RespCommand.SET:
@@ -77,7 +87,7 @@ namespace Garnet.server
         /// <inheritdoc />
         public readonly bool InitialUpdater(ref LogRecord logRecord, in RecordSizeInfo sizeInfo, ref StringInput input, ref StringOutput output, ref RMWInfo rmwInfo)
         {
-            Debug.Assert(!logRecord.DataHeader.HasETag && !logRecord.DataHeader.HasExpiration, "Should not have Expiration or ETag on InitialUpdater log records");
+            GarnetAsserts.Assert(!logRecord.DataHeader.HasETag && !logRecord.DataHeader.HasExpiration, "Should not have Expiration or ETag on InitialUpdater log records");
 
             // Because this is InitialUpdater, the destination length should be set correctly, but test and log failures to be safe.
             var cmd = input.header.cmd;
@@ -253,7 +263,7 @@ namespace Garnet.server
                     // This is InitialUpdater so set the value to -1 and the length to the # of digits in "-1"
                     if (!logRecord.TrySetContentLengths(2, in sizeInfo))
                     {
-                        Debug.Assert(logRecord.ValueSpan.Length >= 2, "Length overflow in DECR");
+                        GarnetAsserts.Assert(logRecord.ValueSpan.Length >= 2, "Length overflow in DECR");
                         return false;
                     }
                     value = logRecord.ValueSpan;
@@ -298,7 +308,7 @@ namespace Garnet.server
                 case RespCommand.VADD:
                     {
                         // NeedInitialUpdate ensures that only these args reach here
-                        Debug.Assert(input.arg1 is VectorManager.CreateIndexArg or VectorManager.MigrateElementKeyLogArg or VectorManager.MigrateIndexKeyLogArg, "InitialUpdater VADD arg1 called with invalid argument");
+                        GarnetAsserts.Assert(input.arg1 is VectorManager.CreateIndexArg or VectorManager.MigrateElementKeyLogArg or VectorManager.MigrateIndexKeyLogArg, "InitialUpdater VADD arg1 called with invalid argument");
 
                         // TODO: InitialUpdater will create a new vector index recorded initialized with garbage data
                         // These synthetic ops should probably never trigger InitialUpdate? Since we do nothing here there will be a stub with garbage data.
@@ -337,7 +347,7 @@ namespace Garnet.server
                         if (expirationTicks != 0)
                         {
                             var exprRes = logRecord.TrySetExpiration(expirationTicks);
-                            Debug.Assert(exprRes, "Should never fail to set expiration if provided");
+                            GarnetAsserts.Assert(exprRes, "Should never fail to set expiration if provided");
                         }
                     }
                     break;
@@ -360,7 +370,7 @@ namespace Garnet.server
                         try
                         {
                             functions.InitialUpdater(logRecord.Key, ref input, logRecord.ValueSpan, ref writer, ref rmwInfo);
-                            Debug.Assert(sizeInfo.FieldInfo.ValueSize == logRecord.ValueSpan.Length, $"Inconsistency in initial updater value length: expected {sizeInfo.FieldInfo.ValueSize}, actual {logRecord.ValueSpan.Length}");
+                            GarnetAsserts.Assert(sizeInfo.FieldInfo.ValueSize == logRecord.ValueSpan.Length, $"Inconsistency in initial updater value length: expected {sizeInfo.FieldInfo.ValueSize}, actual {logRecord.ValueSpan.Length}");
                         }
                         finally
                         {
@@ -400,6 +410,16 @@ namespace Garnet.server
         /// <inheritdoc />
         public readonly bool InPlaceUpdater(ref LogRecord logRecord, ref StringInput input, ref StringOutput output, ref RMWInfo rmwInfo)
         {
+            // Expired data is logically absent, so check this before any type-mismatch gate below; otherwise an
+            // expired record of a different type (object, RangeIndex, or Vector Set) would incorrectly block a
+            // command that should treat the key as non-existent.
+            if (logRecord.DataHeader.HasExpiration && input.header.CheckExpiry(logRecord.Expiration))
+            {
+                rmwInfo.Action = RMWAction.ExpireAndResume;
+                _ = logRecord.RemoveETag();
+                return false;
+            }
+
             if (logRecord.DataHeader.ValueIsObject)
             {
                 rmwInfo.Action = RMWAction.WrongType;
@@ -450,13 +470,6 @@ namespace Garnet.server
         private readonly IPUResult InPlaceUpdaterWorker(ref LogRecord logRecord, ref StringInput input, ref StringOutput output, ref RMWInfo rmwInfo)
         {
             var cmd = input.header.cmd;
-            // Expired data
-            if (logRecord.DataHeader.HasExpiration && input.header.CheckExpiry(logRecord.Expiration))
-            {
-                rmwInfo.Action = RMWAction.ExpireAndResume;
-                _ = logRecord.RemoveETag();
-                return IPUResult.Failed;
-            }
 
             // sizeInfo is declared lazily inside each switch case that needs it (the non-inline / growing branches).
             // INCR / DECR / INCRBY / DECRBY / INCRBYFLOAT and the inline forks of SET / SETKEEPTTL / SETBIT / BITFIELD
@@ -817,6 +830,9 @@ namespace Garnet.server
                     {
                         // Try to grow in place.
                         var originalLength = logRecord.ValueSpan.Length;
+                        if (AppendExceedsMaxSize(originalLength, appendLength, ref output))
+                            return IPUResult.NotUpdated;
+
                         totalLength = originalLength + appendLength;
 
                         // Try to grow in place. We are not changing the presence of ETag or Expiration
@@ -903,7 +919,7 @@ namespace Garnet.server
                     // However, we do synthesize some (pointless) writes to implement replication
                     // in a similar manner to VADD.
 
-                    Debug.Assert(input.arg1 == VectorManager.VREMAppendLogArg, "VREM in place update should only happen for replication");                      // Ignore everything else
+                    GarnetAsserts.Assert(input.arg1 == VectorManager.VREMAppendLogArg, "VREM in place update should only happen for replication");                      // Ignore everything else
                     return IPUResult.Succeeded;
                 case RespCommand.VSETATTR:
                     // Same rationale as the VADD & VREM cases above.
@@ -913,7 +929,7 @@ namespace Garnet.server
                         return IPUResult.Failed;
                     }
 
-                    Debug.Assert(input.arg1 == VectorManager.VSETATTRAppendLogArg, "VSETATTR in place update should only happen for replication");              // Ignore everything else
+                    GarnetAsserts.Assert(input.arg1 == VectorManager.VSETATTRAppendLogArg, "VSETATTR in place update should only happen for replication");              // Ignore everything else
                     return IPUResult.Succeeded;
                 default:
                     if (cmd > RespCommandExtensions.LastValidCommand)
@@ -971,7 +987,7 @@ namespace Garnet.server
                     return IPUResult.NotUpdated;
                 case RespCommand.RIPROMOTE:
                     // Record is in mutable region — no-op. Not logged to AOF (internal maintenance).
-                    Debug.Assert(!RangeIndexManager.ReadIndex(logRecord.ValueSpan).IsFlushed,
+                    GarnetAsserts.Assert(!RangeIndexManager.ReadIndex(logRecord.ValueSpan).IsFlushed,
                         "Mutable record should never have Flushed flag set");
                     return IPUResult.NotUpdated;
                 case RespCommand.RIRESTORE:
@@ -1024,6 +1040,16 @@ namespace Garnet.server
                 case RespCommand.RICREATE:
                     // Index already exists — never copy-update, reject in caller
                     return false;
+                case RespCommand.APPEND:
+                    var appendLength = input.parseState.GetArgSliceByRef(0).Length;
+
+                    // An expired value is absent: the append starts a new value, or only deletes the expired one if the new value is too long
+                    if (srcLogRecord.DataHeader.HasExpiration && input.header.CheckExpiry(srcLogRecord.Expiration))
+                    {
+                        rmwInfo.Action = AppendExceedsMaxSize(0, appendLength, ref output) ? RMWAction.ExpireAndStop : RMWAction.ExpireAndResume;
+                        return false;
+                    }
+                    return !AppendExceedsMaxSize(srcLogRecord.ValueSpan.Length, appendLength, ref output);
                 case RespCommand.RIPROMOTE:
                     // Always copy to tail to promote from read-only region
                     return true;
@@ -1101,7 +1127,7 @@ namespace Garnet.server
                     }
 
                     var newInputValue = input.parseState.GetArgSliceByRef(0).ReadOnlySpan;
-                    Debug.Assert(newInputValue.Length == dstLogRecord.ValueSpan.Length);
+                    GarnetAsserts.Assert(newInputValue.Length == dstLogRecord.ValueSpan.Length);
 
                     // Copy input to value, along with optionals from source record including Expiration.
                     if (!dstLogRecord.TrySetValueSpanAndPrepareOptionals(newInputValue, in sizeInfo) || !dstLogRecord.TryCopyOptionals(in srcLogRecord, in sizeInfo))
@@ -1124,6 +1150,10 @@ namespace Garnet.server
 
                     var inputValue = input.parseState.GetArgSliceByRef(0).ReadOnlySpan;
                     if (!dstLogRecord.TrySetValueSpanAndPrepareOptionals(inputValue, in sizeInfo))
+                        return false;
+
+                    // Carry the existing expiration into the new record.
+                    if (sizeInfo.FieldInfo.HasExpiration && !dstLogRecord.TrySetExpiration(srcLogRecord.Expiration))
                         return false;
 
                     break;
@@ -1152,7 +1182,8 @@ namespace Garnet.server
 
                 case RespCommand.INCRBYFLOAT:
                     var incrByFloat = BitConverter.Int64BitsToDouble(input.arg1);
-                    _ = TryCopyUpdateNumber(in srcLogRecord, ref dstLogRecord, in sizeInfo, ref output, input: incrByFloat);
+                    if (!TryCopyUpdateNumber(in srcLogRecord, ref dstLogRecord, in sizeInfo, ref output, input: incrByFloat))
+                        return false;
                     break;
 
                 case RespCommand.SETBIT:
@@ -1407,7 +1438,7 @@ namespace Garnet.server
                         return false;
 
                     newValue = dstLogRecord.ValueSpan;
-                    Debug.Assert(newValue.Length == oldValue.Length);
+                    GarnetAsserts.Assert(newValue.Length == oldValue.Length);
                     if (input.arg1 > 0)
                     {
                         var _output = StringOutput.FromPinnedSpan(stackalloc byte[sizeof(int)]);
@@ -1443,7 +1474,7 @@ namespace Garnet.server
 
                 case RespCommand.VADD:
                     // NeedCopyUpdate cancels when the record is no longer an index, so CopyUpdater is only reached for a genuine index record.
-                    Debug.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VADD on a non-index record");
+                    GarnetAsserts.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VADD on a non-index record");
 
                     // Always copy to avoid corruption of the index record - otherwise the allocated destination will contain garbage data
                     oldValue.CopyTo(dstLogRecord.ValueSpan);
@@ -1465,8 +1496,8 @@ namespace Garnet.server
 
                 case RespCommand.VREM:
                     // NeedCopyUpdate cancels when the record is no longer an index, so CopyUpdater is only reached for a genuine index record.
-                    Debug.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VREM on a non-index record");
-                    Debug.Assert(input.arg1 == VectorManager.VREMAppendLogArg, "Unexpected CopyUpdater call on VREM key");
+                    GarnetAsserts.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VREM on a non-index record");
+                    GarnetAsserts.Assert(input.arg1 == VectorManager.VREMAppendLogArg, "Unexpected CopyUpdater call on VREM key");
 
                     // Always copy to avoid corruption of the index record - otherwise the allocated destination will contain garbage data
                     oldValue.CopyTo(dstLogRecord.ValueSpan);
@@ -1474,8 +1505,8 @@ namespace Garnet.server
 
                 case RespCommand.VSETATTR:
                     // NeedCopyUpdate cancels when the record is no longer an index, so CopyUpdater is only reached for a genuine index record.
-                    Debug.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VSETATTR on a non-index record");
-                    Debug.Assert(input.arg1 == VectorManager.VSETATTRAppendLogArg, "Unexpected CopyUpdater call on VSETATTR key");
+                    GarnetAsserts.Assert(srcLogRecord.RecordType == VectorManager.RecordType, "CopyUpdater reached for VSETATTR on a non-index record");
+                    GarnetAsserts.Assert(input.arg1 == VectorManager.VSETATTRAppendLogArg, "Unexpected CopyUpdater call on VSETATTR key");
 
                     // Always copy to avoid corruption of the index record - otherwise the allocated destination will contain garbage data
                     oldValue.CopyTo(dstLogRecord.ValueSpan);
@@ -1485,13 +1516,11 @@ namespace Garnet.server
                     if (input.header.cmd > RespCommandExtensions.LastValidCommand)
                     {
                         var functions = functionsState.GetCustomCommandFunctions((ushort)input.header.cmd);
-                        var expirationInTicks = input.arg1;
-                        if (expirationInTicks > 0)
-                        {
-                            // We want to update to the given expiration
-                            if (!dstLogRecord.TrySetExpiration(expirationInTicks))
-                                return false;
-                        }
+
+                        // A positive expiration sets it, 0 keeps the existing one, and -1 removes it
+                        var expirationInTicks = input.arg1 == 0 && srcLogRecord.DataHeader.HasExpiration ? srcLogRecord.Expiration : input.arg1;
+                        if (expirationInTicks > 0 && !dstLogRecord.TrySetExpiration(expirationInTicks))
+                            return false;
 
                         var writer = new RespMemoryWriter(functionsState.respProtocolVersion, ref output.SpanByteAndMemory);
                         try

@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Text;
 using Garnet.common;
 using Tsavorite.core;
@@ -21,7 +20,7 @@ namespace Garnet.server
             var output = new MemoryResult<byte>(null, 0);
 
             // Run procedure
-            Debug.Assert(txnManager.state == TxnState.None);
+            GarnetAsserts.Assert(txnManager.state == TxnState.None);
 
             LatencyMetrics?.Start(LatencyMetricsType.TX_PROC_LAT);
 
@@ -63,7 +62,7 @@ namespace Garnet.server
 
         private void TryCustomProcedure(CustomProcedure proc, int startIdx = 0)
         {
-            Debug.Assert(proc != null);
+            GarnetAsserts.Assert(proc != null);
 
             var output = new MemoryResult<byte>(null, 0);
 
@@ -95,16 +94,23 @@ namespace Garnet.server
             var key = parseState.GetArgSliceByRef(0);
 
             var expirationTicks = customRawStringCommand.expirationTicks;
-            var inputArg = expirationTicks > 0 ? DateTimeOffset.UtcNow.Ticks + expirationTicks : expirationTicks;
+            var inputArg = expirationTicks;
+            if (expirationTicks > 0 && !ConvertUtils.TryRelativeTicksToTicks(expirationTicks, out inputArg))
+                return AbortWithErrorMessage(CmdStrings.GenericErrInvalidExpireTime, customRawStringCommand.NameStr.ToLowerInvariant());
+
             var input = new StringInput(cmd, ref parseState, startIdx: 1, arg1: inputArg);
 
             var output = new StringOutput();
             if (customRawStringCommand.type == CommandType.ReadModifyWrite)
             {
-                _ = storageApi.RMW_MainStore(key, ref input, ref output);
-                Debug.Assert(!output.SpanByteAndMemory.IsSpanByte);
+                var status = storageApi.RMW_MainStore(key, ref input, ref output);
+                GarnetAsserts.Assert(!output.SpanByteAndMemory.IsSpanByte);
 
-                if (output.SpanByteAndMemory.Memory != null)
+                // The command does not run on a value of another type
+                if (status == GarnetStatus.WRONGTYPE)
+                    while (!RespWriteUtils.TryWriteError(CmdStrings.RESP_ERR_WRONG_TYPE, ref dcurr, dend))
+                        SendAndReset();
+                else if (output.SpanByteAndMemory.Memory != null)
                     SendAndReset(output.SpanByteAndMemory.Memory, output.SpanByteAndMemory.Length);
                 else
                     while (!RespWriteUtils.TryWriteDirect(CmdStrings.RESP_OK, ref dcurr, dend))
@@ -113,7 +119,7 @@ namespace Garnet.server
             else
             {
                 var status = storageApi.Read_MainStore(key, ref input, ref output);
-                Debug.Assert(!output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!output.SpanByteAndMemory.IsSpanByte);
 
                 if (status == GarnetStatus.OK)
                 {
@@ -125,22 +131,20 @@ namespace Garnet.server
                 }
                 else if (status == GarnetStatus.NOTFOUND)
                 {
-                    Debug.Assert(output.SpanByteAndMemory.Memory == null);
+                    GarnetAsserts.Assert(output.SpanByteAndMemory.Memory == null);
 
                     var notFoundOutput = new SpanByteAndMemory(PinnedSpanByte.FromPinnedPointer(dcurr, (int)(dend - dcurr)));
                     var writer = new RespMemoryWriter(respProtocolVersion, ref notFoundOutput);
-                    customRawStringCommand.functions.NotFound(key, ref input, ref writer);
+                    try
+                    {
+                        customRawStringCommand.functions.NotFound(key, ref input, ref writer);
+                    }
+                    finally
+                    {
+                        writer.Dispose();
+                    }
 
-                    if (!notFoundOutput.IsSpanByte)
-                    {
-                        // Couldn't write not found response in place, so copy it over
-                        SendAndReset(notFoundOutput.Memory, writer.GetPosition());
-                    }
-                    else
-                    {
-                        // Wrote not found response in place, just advance pointer
-                        dcurr += writer.GetPosition();
-                    }
+                    ProcessOutput(notFoundOutput);
                 }
                 else if (status == GarnetStatus.WRONGTYPE)
                 {
@@ -172,7 +176,7 @@ namespace Garnet.server
             if (customObjectCommand.type == CommandType.ReadModifyWrite)
             {
                 status = storageApi.RMW_ObjectStore(key, ref input, ref output);
-                Debug.Assert(!output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!output.SpanByteAndMemory.IsSpanByte);
 
                 switch (status)
                 {
@@ -192,7 +196,7 @@ namespace Garnet.server
             else
             {
                 status = storageApi.Read_ObjectStore(key, ref input, ref output);
-                Debug.Assert(!output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!output.SpanByteAndMemory.IsSpanByte);
 
                 switch (status)
                 {
@@ -207,18 +211,16 @@ namespace Garnet.server
                         var notFoundOutput = new SpanByteAndMemory(PinnedSpanByte.FromPinnedPointer(dcurr, (int)(dend - dcurr)));
 
                         var writer = new RespMemoryWriter(respProtocolVersion, ref notFoundOutput);
-                        customObjectCommand.functions.NotFound(key, ref input, ref writer);
+                        try
+                        {
+                            customObjectCommand.functions.NotFound(key, ref input, ref writer);
+                        }
+                        finally
+                        {
+                            writer.Dispose();
+                        }
 
-                        if (!notFoundOutput.IsSpanByte)
-                        {
-                            // Couldn't write not found response in place, so copy it over
-                            SendAndReset(notFoundOutput.Memory, writer.GetPosition());
-                        }
-                        else
-                        {
-                            // Wrote not found response in place, just advance pointer
-                            dcurr += writer.GetPosition();
-                        }
+                        ProcessOutput(notFoundOutput);
                         break;
                     case GarnetStatus.WRONGTYPE:
                         while (!RespWriteUtils.TryWriteError(CmdStrings.RESP_ERR_WRONG_TYPE, ref dcurr, dend))
@@ -251,13 +253,19 @@ namespace Garnet.server
         /// <param name="key">Key param</param>
         /// <param name="args">Args to the command</param>
         /// <param name="output">Output from the command</param>
-        /// <returns>True if successful</returns>
+        /// <returns>True if the command ran; otherwise false, with the error in <paramref name="output"/></returns>
         public bool InvokeCustomRawStringCommand<TGarnetApi>(ref TGarnetApi storageApi, CustomRawStringCommand customCommand, PinnedSpanByte key, PinnedSpanByte[] args, out PinnedSpanByte output)
             where TGarnetApi : IGarnetAdvancedApi
         {
             ArgumentNullException.ThrowIfNull(customCommand);
 
-            var inputArg = customCommand.expirationTicks > 0 ? DateTimeOffset.UtcNow.Ticks + customCommand.expirationTicks : customCommand.expirationTicks;
+            var inputArg = customCommand.expirationTicks;
+            if (inputArg > 0 && !ConvertUtils.TryRelativeTicksToTicks(customCommand.expirationTicks, out inputArg))
+            {
+                output = CreateErrorOutput(Encoding.ASCII.GetBytes(string.Format(CmdStrings.GenericErrInvalidExpireTime, customCommand.NameStr.ToLowerInvariant())));
+                return false;
+            }
+
             customCommandParseState.InitializeWithArguments(args);
             var cmd = customCommandManagerSession.GetCustomRespCommand(customCommand.id);
             var stringInput = new StringInput(cmd, ref customCommandParseState, arg1: inputArg);
@@ -265,8 +273,15 @@ namespace Garnet.server
             var _output = new StringOutput();
             if (customCommand.type == CommandType.ReadModifyWrite)
             {
-                _ = storageApi.RMW_MainStore(key, ref stringInput, ref _output);
-                Debug.Assert(!_output.SpanByteAndMemory.IsSpanByte);
+                var status = storageApi.RMW_MainStore(key, ref stringInput, ref _output);
+                GarnetAsserts.Assert(!_output.SpanByteAndMemory.IsSpanByte);
+
+                // The command does not run on a value of another type
+                if (status == GarnetStatus.WRONGTYPE)
+                {
+                    output = CreateErrorOutput(CmdStrings.RESP_ERR_WRONG_TYPE);
+                    return false;
+                }
 
                 if (_output.SpanByteAndMemory.Memory != null)
                 {
@@ -281,7 +296,7 @@ namespace Garnet.server
             else
             {
                 var status = storageApi.Read_MainStore(key, ref stringInput, ref _output);
-                Debug.Assert(!_output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!_output.SpanByteAndMemory.IsSpanByte);
 
                 if (status == GarnetStatus.OK)
                 {
@@ -297,26 +312,42 @@ namespace Garnet.server
                 }
                 else if (status == GarnetStatus.NOTFOUND)
                 {
-                    Debug.Assert(_output.SpanByteAndMemory.Memory == null);
+                    GarnetAsserts.Assert(_output.SpanByteAndMemory.Memory == null);
 
                     var writer = new RespMemoryWriter(respProtocolVersion, ref _output.SpanByteAndMemory);
-                    customCommand.functions.NotFound(key, ref stringInput, ref writer);
+                    try
+                    {
+                        customCommand.functions.NotFound(key, ref stringInput, ref writer);
+                        output = scratchBufferAllocator.CreateArgSlice(writer.AsReadOnlySpan());
+                    }
+                    finally
+                    {
+                        writer.Dispose();
+                    }
 
-                    output = scratchBufferAllocator.CreateArgSlice(_output.SpanByteAndMemory.ReadOnlySpan[..writer.GetPosition()]);
-
-                    _output.SpanByteAndMemory.Memory.Dispose();
+                    _output.SpanByteAndMemory.Memory?.Dispose();
                 }
                 else
                 {
-                    Debug.Assert(status == GarnetStatus.WRONGTYPE, "Unexpected status");
+                    GarnetAsserts.Assert(status == GarnetStatus.WRONGTYPE, "Unexpected status");
 
-                    output = scratchBufferAllocator.CreateArgSlice(CmdStrings.RESP_ERR_WRONG_TYPE.Length + 1); // +1 because RESP_ERR_WRONG_TYPE doesn't contain the - prefix, but does starts with WRONGTYPE
-                    output.Span[0] = (byte)'-';
-                    CmdStrings.RESP_ERR_WRONG_TYPE.CopyTo(output.Span[1..]);
+                    output = CreateErrorOutput(CmdStrings.RESP_ERR_WRONG_TYPE);
+                    return false;
                 }
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// Creates a command's error output in the scratch buffer: '-' followed by <paramref name="message"/>
+        /// </summary>
+        PinnedSpanByte CreateErrorOutput(ReadOnlySpan<byte> message)
+        {
+            var output = scratchBufferAllocator.CreateArgSlice(message.Length + 1);
+            output.Span[0] = (byte)'-';
+            message.CopyTo(output.Span[1..]);
+            return output;
         }
 
         /// <summary>Execute a specific custom object command</summary>
@@ -326,7 +357,7 @@ namespace Garnet.server
         /// <param name="key">Key parameter</param>
         /// <param name="args">Args to the command</param>
         /// <param name="output">Output from the command</param>
-        /// <returns>True if successful</returns>
+        /// <returns>True if the command ran; otherwise false, with the error in <paramref name="output"/></returns>
         public bool InvokeCustomObjectCommand<TGarnetApi>(ref TGarnetApi storageApi, CustomObjectCommand customObjCommand, PinnedSpanByte key, PinnedSpanByte[] args, out PinnedSpanByte output)
             where TGarnetApi : IGarnetAdvancedApi
         {
@@ -345,13 +376,14 @@ namespace Garnet.server
             if (customObjCommand.type == CommandType.ReadModifyWrite)
             {
                 status = storageApi.RMW_ObjectStore(key, ref input, ref _output);
-                Debug.Assert(!_output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!_output.SpanByteAndMemory.IsSpanByte);
 
                 switch (status)
                 {
                     case GarnetStatus.WRONGTYPE:
-                        output = scratchBufferAllocator.CreateArgSlice(CmdStrings.RESP_ERR_WRONG_TYPE);
-                        break;
+                        // The command does not run on a value of another type
+                        output = CreateErrorOutput(CmdStrings.RESP_ERR_WRONG_TYPE);
+                        return false;
                     default:
                         if (_output.SpanByteAndMemory.Memory != null)
                         {
@@ -366,7 +398,7 @@ namespace Garnet.server
             else
             {
                 status = storageApi.Read_ObjectStore(key, ref input, ref _output);
-                Debug.Assert(!_output.SpanByteAndMemory.IsSpanByte);
+                GarnetAsserts.Assert(!_output.SpanByteAndMemory.IsSpanByte);
 
                 switch (status)
                 {
@@ -380,19 +412,24 @@ namespace Garnet.server
                             output = scratchBufferAllocator.CreateArgSlice(CmdStrings.RESP_OK);
                         break;
                     case GarnetStatus.NOTFOUND:
-                        Debug.Assert(_output.SpanByteAndMemory.Memory == null);
+                        GarnetAsserts.Assert(_output.SpanByteAndMemory.Memory == null);
 
                         var writer = new RespMemoryWriter(respProtocolVersion, ref _output.SpanByteAndMemory);
+                        try
+                        {
+                            customObjCommand.functions.NotFound(key.ReadOnlySpan, ref input, ref writer);
+                            output = scratchBufferAllocator.CreateArgSlice(writer.AsReadOnlySpan());
+                        }
+                        finally
+                        {
+                            writer.Dispose();
+                        }
 
-                        customObjCommand.functions.NotFound(key.ReadOnlySpan, ref input, ref writer);
-
-                        output = scratchBufferAllocator.CreateArgSlice(writer.GetPosition());
-
-                        _output.SpanByteAndMemory.Memory.Dispose();
+                        _output.SpanByteAndMemory.Memory?.Dispose();
                         break;
                     case GarnetStatus.WRONGTYPE:
-                        output = scratchBufferAllocator.CreateArgSlice(CmdStrings.RESP_ERR_WRONG_TYPE);
-                        break;
+                        output = CreateErrorOutput(CmdStrings.RESP_ERR_WRONG_TYPE);
+                        return false;
                 }
             }
 

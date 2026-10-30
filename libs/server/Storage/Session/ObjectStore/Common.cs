@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -71,7 +70,7 @@ namespace Garnet.server
         public unsafe GarnetStatus ObjectScan<TObjectContext>(GarnetObjectType objectType, PinnedSpanByte key, long cursor, string match, int count, out PinnedSpanByte[] items, ref TObjectContext objectContext)
              where TObjectContext : ITsavoriteContext<FixedSpanByteKey, ObjectInput, ObjectOutput, long, ObjectSessionFunctions, StoreFunctions, StoreAllocator>
         {
-            Debug.Assert(objectType is GarnetObjectType.Hash or GarnetObjectType.Set or GarnetObjectType.SortedSet);
+            GarnetAsserts.Assert(objectType is GarnetObjectType.Hash or GarnetObjectType.Set or GarnetObjectType.SortedSet);
 
             items = default;
 
@@ -360,13 +359,13 @@ namespace Garnet.server
                             if (isNestedArray && (i != 0))
                             {
                                 c = (char)*refPtr;
-                                Debug.Assert(IsSupportedArrayType(c));
+                                GarnetAsserts.Assert(IsSupportedArrayType(c));
 
                                 // We still need to read the field to advance the pointer.
                                 if (!RespReadUtils.TryReadUnsignedLengthHeader(out var nestedArrayLen, ref refPtr, end, c))
                                     return default;
 
-                                Debug.Assert(nestedArrayLen == innerLen);
+                                GarnetAsserts.Assert(nestedArrayLen == innerLen);
                             }
 
                             for (var j = 0; j < innerLen; ++j)
@@ -466,6 +465,87 @@ namespace Garnet.server
             }
 
             return elements;
+        }
+
+        /// <summary>
+        /// Converts an array of elements in RESP format to int[], placing in a pre-allocated Span if possible.
+        /// </summary>
+        /// <param name="output">The RESP format output object</param>
+        /// <param name="elements">Pre-allocated space to store results.  Resized to match actual results on return.</param>
+        /// <param name="error">A description of the error, if there is any</param>
+        /// <returns></returns>
+        unsafe void ProcessRespIntegerArrayOutput(ObjectOutput output, ref Span<int> elements, out string error)
+        {
+            // For reading the elements in the output
+            byte* element = null;
+
+            var outputSpan = output.SpanByteAndMemory.ReadOnlySpan;
+
+            try
+            {
+                fixed (byte* outputPtr = outputSpan)
+                {
+                    var refPtr = outputPtr;
+
+                    if (*refPtr == '-')
+                    {
+                        if (!RespReadUtils.TryReadErrorAsString(out error, ref refPtr, outputPtr + outputSpan.Length))
+                        {
+                            elements = default;
+                            return;
+                        }
+                    }
+                    else if (*refPtr == '*')
+                    {
+                        // Get the number of elements
+                        if (!RespReadUtils.TryReadUnsignedArrayLength(out var arraySize, ref refPtr, outputPtr + outputSpan.Length))
+                        {
+                            error = "Could not extract array length";
+                            elements = default;
+                            return;
+                        }
+
+                        // Create the ensure elements length == arraySize
+                        if (elements.Length < arraySize)
+                        {
+                            elements = new int[arraySize];
+                        }
+                        else if (elements.Length > arraySize)
+                        {
+                            elements = elements[..arraySize];
+                        }
+
+                        for (var i = 0; i < elements.Length; i++)
+                        {
+                            if (*refPtr != ':')
+                            {
+                                RespParsingException.ThrowUnexpectedToken(*refPtr);
+                            }
+                            refPtr++;
+
+                            element = null;
+                            if (RespReadUtils.TryReadInt32(ref refPtr, outputPtr + outputSpan.Length, out var number, out var _))
+                            {
+                                elements[i] = number;
+                            }
+
+                            if (*(ushort*)refPtr != MemoryMarshal.Read<ushort>("\r\n"u8))
+                            {
+                                RespParsingException.ThrowUnexpectedToken(*refPtr);
+                            }
+
+                            refPtr += 2;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (!output.SpanByteAndMemory.IsSpanByte)
+                    output.SpanByteAndMemory.Memory.Dispose();
+            }
+
+            error = null;
         }
 
         /// <summary>
@@ -636,7 +716,7 @@ namespace Garnet.server
                         if (!RespReadUtils.TryReadUnsignedArrayLength(out var arraySize, ref refPtr, outputPtr + outputSpan.Length))
                             return default;
 
-                        Debug.Assert(arraySize % 2 == 0, "Array elements are expected to be in pairs");
+                        GarnetAsserts.Assert(arraySize % 2 == 0, "Array elements are expected to be in pairs");
                         arraySize /= 2; // Halve the array size to hold items as pairs
                         result = new (PinnedSpanByte member, PinnedSpanByte score)[arraySize];
 
@@ -744,7 +824,7 @@ namespace Garnet.server
             where TObjectContext : ITsavoriteContext<FixedSpanByteKey, ObjectInput, ObjectOutput, long, ObjectSessionFunctions, StoreFunctions, StoreAllocator>
         {
             var status = objectContext.Delete((FixedSpanByteKey)key);
-            Debug.Assert(!status.IsPending);
+            GarnetAsserts.Assert(!status.IsPending);
             return status.Found ? GarnetStatus.OK : GarnetStatus.NOTFOUND;
         }
 

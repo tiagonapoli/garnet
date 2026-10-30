@@ -5,7 +5,6 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Frozen;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -37,17 +36,16 @@ namespace Garnet.server
         {
             var ns = ExtractContextFromNamespaces(namespaceBytes);
 
-#if DEBUG
-            // Do some extra sanity checking in DEBUG builds
+#if DEBUG || GARNET_ASSERT
             lock (this)
             {
                 var context = ns & ~(ContextStep - 1);
 
                 var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
 
-                Debug.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Shouldn't be migrating to an unused context");
-                Debug.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Shouldn't be migrating to context not marked for it");
-                Debug.Assert(!(contextMetadatas[contextIndex].GetNeedCleanup()?.Contains(contextValue) ?? false), "Shouldn't be migrating into context being deleted");
+                GarnetAsserts.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Shouldn't be migrating to an unused context");
+                GarnetAsserts.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Shouldn't be migrating to context not marked for it");
+                GarnetAsserts.Assert(!(contextMetadatas[contextIndex].GetNeedCleanup()?.Contains(contextValue) ?? false), "Shouldn't be migrating into context being deleted");
             }
 #endif
 
@@ -117,11 +115,11 @@ namespace Garnet.server
                 {
                     _ = basicCtx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                     var more = completedOutputs.Next();
-                    Debug.Assert(more);
+                    GarnetAsserts.Assert(more);
                     status = completedOutputs.Current.Status;
                     output = completedOutputs.Current.Output;
                     more = completedOutputs.Next();
-                    Debug.Assert(!more);
+                    GarnetAsserts.Assert(!more);
                     completedOutputs.Dispose();
                 }
             }
@@ -148,16 +146,32 @@ namespace Garnet.server
             ReadIndex(value, out var context, out var dimensions, out var reduceDims, out var quantType, out var buildExplorationFactor, out var numLinks, out var distanceMetric, out var flags, out var indexPtr);
             var startPointId = ReadStartPointId(value);
 
-            Debug.Assert(indexPtr == 0, "Shouldn't receive an index pointer during a migration");
+            var invalidMigrationRecord =
+                dimensions is 0 or > MaxVectorDimensions ||
+                reduceDims > MaxVectorDimensions ||
+                reduceDims > dimensions ||
+                (quantType == VectorQuantType.Invalid || !Enum.IsDefined(quantType)) ||
+                buildExplorationFactor is 0 or > MaxExplorationFactor ||
+                numLinks is < MinNumLinks or > MaxNumLinks ||
+                (distanceMetric == VectorDistanceMetricType.Invalid || !Enum.IsDefined(distanceMetric)) ||
+                (flags & ~VectorSetFlags.All) != 0;
+
+            if (invalidMigrationRecord)
+            {
+                logger?.LogWarning("Received invalid Vector Set migration record for {key}: {context}, {dimensions}, {reduceDims}, {quantyType}, {buildExplorationFactor}, {numLinks}, {distanceMetric}, {flags}", SpanByte.ToShortString(key), context, dimensions, reduceDims, quantizationAndImportTaskCount, buildExplorationFactor, numLinks, distanceMetric, flags);
+                throw new GarnetException("Invalid or corrupt Vector Set index record");
+            }
+
+            GarnetAsserts.Assert(indexPtr == 0, "Shouldn't receive an index pointer during a migration");
 
             // Extra validation in DEBUG
-#if DEBUG
+#if DEBUG || GARNET_ASSERT
             lock (this)
             {
                 var (contextIndex, contextValue) = ContextMetadata.DecomposeContext(context);
 
-                Debug.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Context should be assigned if we're migrating");
-                Debug.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Context should be marked migrating if we're moving an index key in");
+                GarnetAsserts.Assert(contextMetadatas[contextIndex].IsInUse(contextIndex != 0, contextValue), "Context should be assigned if we're migrating");
+                GarnetAsserts.Assert(contextMetadatas[contextIndex].IsMigrating(contextIndex != 0, contextValue), "Context should be marked migrating if we're moving an index key in");
             }
 #endif
 
@@ -165,8 +179,8 @@ namespace Garnet.server
             StorageSession newStorageSession;
             if (ActiveThreadSession == null)
             {
-                Debug.Assert(db != null, "Must have DB if session is not already set");
-                Debug.Assert(storeWrapper != null, "Must have StoreWrapper if session is not already set");
+                GarnetAsserts.Assert(db != null, "Must have DB if session is not already set");
+                GarnetAsserts.Assert(storeWrapper != null, "Must have StoreWrapper if session is not already set");
 
                 ActiveThreadSession = newStorageSession = new StorageSession(storeWrapper, new(), new(), null, null, db.Id, null, this, this.logger);
             }
@@ -247,7 +261,7 @@ namespace Garnet.server
                         throw new GarnetException("Failed to import migrated Vector Set index, aborting migration");
                     }
 
-                    Debug.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never allocate");
+                    GarnetAsserts.Assert(indexConfigOutput.SpanByteAndMemory.IsSpanByte, "Should never allocate");
 
                     SetFlags(key, flags, ref ActiveThreadSession.stringBasicContext, SetImportStateArg);
 
@@ -267,7 +281,7 @@ namespace Garnet.server
                     // Post recreation the index might already need quantization - if so, queue it up
                     if (requestQuantization)
                     {
-                        EnqueueQuantization(new(key.ToArray(), QuantizationOrImportStep.BuildQuantizationTable, 0, null));
+                        EnqueueQuantization(new(key.ToArray(), QuantizationOrImportStep.BuildQuantizationTable, 0, 0, 0, null));
                     }
 
                     // For REPLICAs which are following, we need to fake up a write
@@ -324,11 +338,11 @@ namespace Garnet.server
                 {
                     _ = basicCtx.CompletePendingWithOutputs(out var completedOutputs, wait: true);
                     var more = completedOutputs.Next();
-                    Debug.Assert(more);
+                    GarnetAsserts.Assert(more);
                     status = completedOutputs.Current.Status;
                     output = completedOutputs.Current.Output;
                     more = completedOutputs.Next();
-                    Debug.Assert(!more);
+                    GarnetAsserts.Assert(!more);
                     completedOutputs.Dispose();
                 }
             }
@@ -381,7 +395,7 @@ namespace Garnet.server
                     DateTime? expiration;
                     if (pttlRes == GarnetStatus.OK)
                     {
-                        Debug.Assert(pttlOutput.SpanByteAndMemory.IsSpanByte, "Should never need to allocate");
+                        GarnetAsserts.Assert(pttlOutput.SpanByteAndMemory.IsSpanByte, "Should never need to allocate");
 
                         unsafe
                         {
@@ -389,7 +403,7 @@ namespace Garnet.server
                             var end = ptr + pttlOutput.SpanByteAndMemory.SpanByte.length;
 
                             var readRes = RespReadUtils.TryReadInt64(out var expirationMillis, ref ptr, end);
-                            Debug.Assert(readRes, "Should never have written something other than a long for PTTL");
+                            GarnetAsserts.Assert(readRes, "Should never have written something other than a long for PTTL");
 
                             if (expirationMillis >= 0)
                             {
@@ -422,7 +436,7 @@ namespace Garnet.server
         /// </summary>
         public static void UpdateMigratedElementNamespaces(FrozenDictionary<ulong, ulong> oldToNewNamespaces, ref VectorInput readInput, ref VectorOutput readOutput)
         {
-            Debug.Assert(readInput.IsMigrationRead, "Unexpected input");
+            GarnetAsserts.Assert(readInput.IsMigrationRead, "Unexpected input");
 
             DeserializeMigratedElementKey(readOutput.SpanByteAndMemory.Span, out var namespaceBytes, out _, out _);
 
@@ -433,7 +447,7 @@ namespace Garnet.server
                 return;
             }
 
-            Debug.Assert(newNs <= uint.MaxValue, "Shouldn't have reserved such a large context");
+            GarnetAsserts.Assert(newNs <= uint.MaxValue, "Shouldn't have reserved such a large context");
 
             BinaryPrimitives.WriteUInt32LittleEndian(namespaceBytes, (uint)newNs);
         }
@@ -487,7 +501,7 @@ namespace Garnet.server
 
             // Namespace length, Namespace
             var nsLength = BinaryPrimitives.ReadInt32LittleEndian(readFrom);
-            Debug.Assert(nsLength == sizeof(uint), "Namespace should always be 4-bytes when deserializing");
+            GarnetAsserts.Assert(nsLength == sizeof(uint), "Namespace should always be 4-bytes when deserializing");
             readFrom = readFrom[sizeof(uint)..];
             namespaceBytes = readFrom[..nsLength];
             readFrom = readFrom[nsLength..];
@@ -519,7 +533,7 @@ namespace Garnet.server
         /// </summary>
         public static void SerializeMigratedIndexKey(Span<byte> dataBytes, ReadOnlySpan<byte> keyBytes, ReadOnlySpan<byte> valueBytes, DateTime? expiration)
         {
-            Debug.Assert(valueBytes.Length == VectorManager.IndexSize, "Should only ever serialize index");
+            GarnetAsserts.Assert(valueBytes.Length == VectorManager.IndexSize, "Should only ever serialize index");
 
             var writeTo = dataBytes;
 

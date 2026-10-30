@@ -80,6 +80,13 @@ namespace Garnet.server
                 return IPUResult.NotUpdated;
             }
 
+            // SETIFMATCH increments the ETag
+            if (cmd is RespCommand.SETIFMATCH && existingEtag == long.MaxValue)
+            {
+                WriteEtagOverflowError(ref output);
+                return IPUResult.NotUpdated;
+            }
+
             // If we're here we know we have a valid ETag for update. Get the value to update. We'll need to return false for CopyUpdate if no space for new value.
             var inputValue = input.parseState.GetArgSliceByRef(0).ReadOnlySpan;
             if (logRecord.DataHeader.ValueIsInline)
@@ -126,6 +133,13 @@ namespace Garnet.server
         [MethodImpl(MethodImplOptions.NoInlining)]
         private readonly IPUResult HandleSetWithEtagInPlaceUpdate(long existingEtag, ref LogRecord logRecord, ref StringInput input, ref StringOutput output)
         {
+            // SETWITHETAG increments the ETag
+            if (existingEtag == long.MaxValue)
+            {
+                WriteEtagOverflowError(ref output);
+                return IPUResult.NotUpdated;
+            }
+
             // Update value and increment ETag
             var inputValue = input.parseState.GetArgSliceByRef(0).ReadOnlySpan;
             if (logRecord.DataHeader.ValueIsInline)
@@ -188,11 +202,15 @@ namespace Garnet.server
 
             long existingEtag = srcLogRecord.DataHeader.HasETag ? srcLogRecord.ETag : LogRecord.NoETag;
 
+            // An expired record is absent, so a write to it starts a new ETag
+            var incrementOverflows = existingEtag == long.MaxValue
+                && !(srcLogRecord.DataHeader.HasExpiration && input.header.CheckExpiry(srcLogRecord.Expiration));
+
             return cmd switch
             {
                 RespCommand.DELIFGREATER => HandleDelIfGreaterNeedCopyUpdate(existingEtag, ref input, ref rmwInfo),
-                RespCommand.SETIFMATCH or RespCommand.SETIFGREATER => HandleSetIfMatchNeedCopyUpdate(cmd, existingEtag, in srcLogRecord, ref input, ref output),
-                RespCommand.SETWITHETAG => true,
+                RespCommand.SETIFMATCH or RespCommand.SETIFGREATER => HandleSetIfMatchNeedCopyUpdate(cmd, existingEtag, incrementOverflows, in srcLogRecord, ref input, ref output),
+                RespCommand.SETWITHETAG => HandleSetWithEtagNeedCopyUpdate(incrementOverflows, ref output),
                 _ => throw new GarnetException("Unexpected ETag command")
             };
         }
@@ -200,6 +218,19 @@ namespace Garnet.server
         #endregion
 
         #region NeedCopyUpdate helpers
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private readonly bool HandleSetWithEtagNeedCopyUpdate(bool incrementOverflows, ref StringOutput output)
+        {
+            // SETWITHETAG increments the ETag
+            if (incrementOverflows)
+            {
+                WriteEtagOverflowError(ref output);
+                return false;
+            }
+
+            return true;
+        }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private readonly bool HandleDelIfGreaterNeedCopyUpdate(long existingEtag, ref StringInput input, ref RMWInfo rmwInfo)
@@ -215,7 +246,7 @@ namespace Garnet.server
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private readonly bool HandleSetIfMatchNeedCopyUpdate<TSourceLogRecord>(RespCommand cmd, long existingEtag, in TSourceLogRecord srcLogRecord, ref StringInput input, ref StringOutput output)
+        private readonly bool HandleSetIfMatchNeedCopyUpdate<TSourceLogRecord>(RespCommand cmd, long existingEtag, bool incrementOverflows, in TSourceLogRecord srcLogRecord, ref StringInput input, ref StringOutput output)
             where TSourceLogRecord : ISourceLogRecord
         {
             long etagToCheckWith = input.parseState.GetLong(1);
@@ -225,7 +256,16 @@ namespace Garnet.server
             int expectedResult = cmd is RespCommand.SETIFMATCH ? 0 : 1;
 
             if (comparisonResult == expectedResult)
+            {
+                // SETIFMATCH increments the ETag
+                if (cmd is RespCommand.SETIFMATCH && incrementOverflows)
+                {
+                    WriteEtagOverflowError(ref output);
+                    return false;
+                }
+
                 return true;
+            }
 
             if (input.header.CheckSetGetFlag())
             {
@@ -265,7 +305,7 @@ namespace Garnet.server
                 _ = logRecord.TrySetExpiration(input.arg1);
 
             // the increment on initial etag is for satisfying the variant that any key with no etag is the same as a zero'd etag
-            Debug.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
+            GarnetAsserts.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
             var newEtag = input.parseState.GetLong(1) + (cmd == RespCommand.SETIFMATCH ? 1 : 0);
             _ = logRecord.TrySetETag(newEtag);
 
@@ -293,7 +333,7 @@ namespace Garnet.server
             if (!logRecord.TrySetValueSpanAndPrepareOptionals(newInputValue, in sizeInfo))
                 return false;
 
-            Debug.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
+            GarnetAsserts.Assert(sizeInfo.FieldInfo.HasETag, "Expected sizeInfo.FieldInfo.HasETag to be true");
             _ = logRecord.TrySetETag(LogRecord.NoETag + 1);
 
             // Set expiration if provided
@@ -387,5 +427,22 @@ namespace Garnet.server
         }
 
         #endregion
+
+        /// <summary>
+        /// Writes the error for incrementing an ETag of <see cref="long.MaxValue"/>.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private readonly void WriteEtagOverflowError(ref StringOutput output)
+        {
+            var writer = new RespMemoryWriter(functionsState.respProtocolVersion, ref output.SpanByteAndMemory);
+            try
+            {
+                writer.WriteError(CmdStrings.RESP_ERR_ETAG_OVERFLOW);
+            }
+            finally
+            {
+                writer.Dispose();
+            }
+        }
     }
 }

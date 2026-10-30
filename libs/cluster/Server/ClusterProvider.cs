@@ -3,7 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -121,9 +120,9 @@ namespace Garnet.cluster
         /// <inheritdoc />
         public void Dispose()
         {
+            failoverManager?.Dispose();
             clusterManager?.Dispose();
             replicationManager?.Dispose();
-            failoverManager?.Dispose();
             migrationManager?.Dispose();
         }
 
@@ -132,6 +131,9 @@ namespace Garnet.cluster
         /// <inheritdoc />
         public bool IsReplica()
             => clusterManager?.CurrentConfig.LocalNodeRole == NodeRole.REPLICA || replicationManager?.IsRecovering == true;
+
+        /// <inheritdoc />
+        public bool IsWritePaused => failoverManager?.IsWritePaused ?? false;
 
         /// <inheritdoc />
         public bool IsReplica(string nodeId)
@@ -198,7 +200,7 @@ namespace Garnet.cluster
         /// <inheritdoc />
         public void OnCheckpointInitiated(ref AofAddress CheckpointCoveredAofAddress)
         {
-            Debug.Assert(serverOptions.EnableCluster);
+            GarnetAsserts.Assert(serverOptions.EnableCluster);
             if (serverOptions.EnableAOF && clusterManager.CurrentConfig.LocalNodeRole == NodeRole.REPLICA)
             {
                 // When the replica takes a checkpoint on encountering the checkpoint end marker, it needs to truncate the AOF only
@@ -356,7 +358,7 @@ namespace Garnet.cluster
         {
             get
             {
-                Debug.Assert(serverOptions.EnableCluster);
+                GarnetAsserts.Assert(serverOptions.EnableCluster);
                 return (GarnetClusterCheckpointManager)storeWrapper.store.CheckpointManager;
             }
         }
@@ -364,9 +366,10 @@ namespace Garnet.cluster
         /// <summary>
         /// Wait for config transition
         /// </summary>
+        /// <param name="token">Cancellation token for the transition wait.</param>
         /// <returns></returns>
-        internal ValueTask<bool> BumpAndWaitForEpochTransitionAsync()
-            => garnetEpoch.BumpAndWaitForEpochTransitionAsync();
+        public ValueTask<bool> BumpAndWaitForEpochTransitionAsync(CancellationToken token = default)
+            => garnetEpoch.BumpAndWaitForEpochTransitionAsync(token);
 
         /// <inheritdoc />
         public string GetRunId() => replicationManager.PrimaryReplId;

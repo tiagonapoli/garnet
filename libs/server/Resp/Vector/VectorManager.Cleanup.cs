@@ -5,7 +5,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -79,7 +78,7 @@ namespace Garnet.server
                     CompletePending(ref status, ref ignored, ref storageSession.vectorBasicContext);
                 }
 
-                Debug.Assert(status.IsCompletedSuccessfully, "Nothing else should be deleting namespaced keys");
+                GarnetAsserts.Assert(status.IsCompletedSuccessfully, "Nothing else should be deleting namespaced keys");
 
                 cursorRecordResult = CursorRecordResult.Accept;
                 return true;
@@ -215,6 +214,7 @@ namespace Garnet.server
                     ref var delCtx = ref cleanupSession.storageSession.vectorBasicContext;
 
                     var needsUpdate = false;
+
                     lock (this)
                     {
                         // Read all pending requests so we can do one update
@@ -243,7 +243,7 @@ namespace Garnet.server
                     if (!cleanupTaskChannel.TryPublish())
                     {
                         logger?.LogCritical("VectorManager cleanup channel rejected a cleanup request");
-                        Debug.Assert(false, "VectorManager cleanup channel should never drop a request");
+                        GarnetAsserts.Assert(false, "VectorManager cleanup channel should never drop a request");
                     }
                 }
                 catch (Exception e)
@@ -404,6 +404,7 @@ namespace Garnet.server
                 var hasPendingReconciliation = !potentiallyDeleted.IsEmpty;
                 var hasPendingVaddsAwaitingReplay = !replicationBlockEvent.Wait(0);
                 var hasPendingPostCheckpointTask = Interlocked.CompareExchange(ref postCheckpointTasksRunning, 0, 0) != 0;
+                var hasPendingQuantizationOrImport = quantizationOrImportChannel.HasPending;
 
                 // We don't remove from the channel until setting requestCleanupTaskRunning
                 var hasPendingCleanupRequests = Volatile.Read(ref requestCleanupTaskRunning) || requestCleanupTaskChannel.HasPending;
@@ -423,7 +424,7 @@ namespace Garnet.server
                     }
                 }
 
-                var quiescent = !hasPendingDrops && !hasPendingReconciliation && !hasPendingVaddsAwaitingReplay && !hasPendingPostCheckpointTask && !hasPendingCleanupRequests && !hasPendingCleanup;
+                var quiescent = !hasPendingDrops && !hasPendingReconciliation && !hasPendingVaddsAwaitingReplay && !hasPendingPostCheckpointTask && !hasPendingCleanupRequests && !hasPendingCleanup && !hasPendingQuantizationOrImport;
                 if (quiescent)
                 {
                     return;
@@ -513,7 +514,7 @@ namespace Garnet.server
                                     if (!self.requestCleanupTaskChannel.TryPublish(context))
                                     {
                                         self.logger?.LogCritical("Could not request delete of abandoned Vector Set {key}", SpanByte.ToShortString(key));
-                                        Debug.Assert(false, "VectorManager request cleanup channel should never drop a request");
+                                        GarnetAsserts.Assert(false, "VectorManager request cleanup channel should never drop a request");
                                     }
                                 }
 
