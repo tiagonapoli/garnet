@@ -461,17 +461,14 @@ namespace Tsavorite.core
         }
 
         /// <summary>
-        /// Monotonically advance the cached <see cref="SafeTailAddress"/> to at least
-        /// <paramref name="floor"/>. Used by commit/recovery/reset paths to publish a known-safe address
-        /// (e.g., committed-until, recovered-until) without scanning in-flight slots.
+        /// Set the cached <see cref="SafeTailAddress"/> to <paramref name="address"/>, which may be below its current value.
+        /// Used by initialization and recovery paths after the allocator is restored to a known-safe address.
         /// </summary>
-        void AdvanceSafeTailFloor(long floor)
+        void ResetSafeTail(long address)
         {
-            if (Utility.MonotonicUpdate(ref cachedSafeTailAddress, floor, out var oldSafe))
-            {
-                NotifyParkedWaiters();
-                MaybeInvokePageShiftCallback(oldSafe, floor);
-            }
+            var oldSafe = Interlocked.Exchange(ref cachedSafeTailAddress, address);
+            NotifyParkedWaiters();
+            MaybeInvokePageShiftCallback(oldSafe, address);
         }
 
         /// <summary>
@@ -601,7 +598,8 @@ namespace Tsavorite.core
                 Volatile.Write(ref lastPublishedSafeTailPage, resetPage);
                 Volatile.Write(ref lastProducerObservedPage, resetPage);
 
-                AdvanceSafeTailFloor(committedUntilAddress);
+                // The log may restart below the previous tail, so the safe tail must move back with it.
+                ResetSafeTail(committedUntilAddress);
 
                 commitNum = lastCommitNum;
                 this.beginAddress = beginAddress;
@@ -3153,7 +3151,7 @@ namespace Tsavorite.core
         {
             CommittedUntilAddress = info.UntilAddress;
             CommittedBeginAddress = info.BeginAddress;
-            AdvanceSafeTailFloor(info.UntilAddress);
+            ResetSafeTail(info.UntilAddress);
         }
 
         /// <summary>
