@@ -648,6 +648,12 @@ namespace Garnet.server
         public int ReplicaDisklessSyncDelay = 5;
 
         /// <summary>
+        /// Whether a disk-based full sync Brotli-compresses RangeIndex files on the wire. Pays off on links slower than
+        /// the ~200 MB/s compression rate of incompressible data.
+        /// </summary>
+        public bool ReplicaSyncCompressRangeIndex = false;
+
+        /// <summary>
         /// Timeout in seconds for replication sync operations
         /// </summary>
         public TimeSpan ReplicaSyncTimeout = TimeSpan.FromSeconds(5);

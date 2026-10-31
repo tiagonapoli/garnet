@@ -528,11 +528,11 @@ namespace Garnet.test.cluster
 
         /// <summary>
         /// A full sync streams RangeIndex files spanning many more chunks than the in-flight window, and the replica
-        /// must receive them byte for byte.
+        /// must receive them byte for byte, with or without wire compression.
         /// </summary>
         [Test, Order(10)]
         [Category("REPLICATION")]
-        public async Task ClusterRangeIndexFullSyncTransfersMultiChunkFiles()
+        public async Task ClusterRangeIndexFullSyncTransfersMultiChunkFiles([Values] bool compress)
         {
             var primaryIndex = 0;
             var replicaIndex = 1;
@@ -540,7 +540,7 @@ namespace Garnet.test.cluster
             var fieldCount = 4000;
             var value = string.Concat(Enumerable.Range(0, 15).Select(i => Guid.NewGuid().ToString("N")));
 
-            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true, replicaSyncCompressRangeIndex: compress);
             context.CreateConnection();
 
             ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));

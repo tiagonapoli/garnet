@@ -361,7 +361,8 @@ namespace Garnet.test.cluster
             bool useClusterAnnounceHostname = false,
             int vectorSetReplayTaskCount = 0,
             int threadPoolMinIOCompletionThreads = 0,
-            bool enableRangeIndexPreview = false)
+            bool enableRangeIndexPreview = false,
+            bool replicaSyncCompressRangeIndex = false)
         {
             var ipAddress = IPAddress.Loopback;
             TestUtils.EndPoint = new IPEndPoint(ipAddress, Port);
@@ -422,7 +423,8 @@ namespace Garnet.test.cluster
                 clusterAnnounceHostname: useClusterAnnounceHostname ? "localhost" : null,
                 vectorSetReplayTaskCount: vectorSetReplayTaskCount,
                 threadPoolMinIOCompletionThreads: threadPoolMinIOCompletionThreads,
-                enableRangeIndexPreview: enableRangeIndexPreview);
+                enableRangeIndexPreview: enableRangeIndexPreview,
+                replicaSyncCompressRangeIndex: replicaSyncCompressRangeIndex);
 
             foreach (var node in nodes)
                 node.Start();

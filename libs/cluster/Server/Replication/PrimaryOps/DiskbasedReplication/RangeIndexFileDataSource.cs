@@ -91,6 +91,11 @@ namespace Garnet.cluster
         /// </summary>
         public long Address { get; }
 
+        /// <summary>
+        /// Whether content chunks are framed and Brotli-compressed on the wire.
+        /// </summary>
+        public bool Compress { get; }
+
         /// <inheritdoc/>
         public long StartOffset => 0;
 
@@ -110,15 +115,16 @@ namespace Garnet.cluster
 
             if (Type == CheckpointFileType.STORE_RANGEINDEX_FLUSH)
             {
-                var metadata = new byte[FlushMetadataLength + 1];
+                var metadata = new byte[FlushMetadataLength + (Compress ? 1 : 0)];
                 Buffer.BlockCopy(keyHashBytes, 0, metadata, 0, KeyHashLength);
                 BinaryPrimitives.WriteInt64LittleEndian(metadata.AsSpan(KeyHashLength), Address);
-                metadata[FlushMetadataLength] = FramedChunkFormat;
+                if (Compress)
+                    metadata[FlushMetadataLength] = FramedChunkFormat;
                 return metadata;
             }
 
             // Snapshot: keyHash only
-            return [.. keyHashBytes, FramedChunkFormat];
+            return Compress ? [.. keyHashBytes, FramedChunkFormat] : keyHashBytes;
         }
 
         /// <summary>
@@ -129,14 +135,16 @@ namespace Garnet.cluster
         /// <param name="filePath">Full path to the .bftree file on disk.</param>
         /// <param name="keyHash">The 32-character key hash prefix.</param>
         /// <param name="address">The hlog logical address (flush files only).</param>
+        /// <param name="compress">Whether content chunks are framed and Brotli-compressed on the wire.</param>
         /// <param name="chunkSize">Maximum bytes to read per chunk.</param>
         /// <param name="logger">Optional logger.</param>
-        public RangeIndexFileDataSource(CheckpointFileType type, Guid token, string filePath, string keyHash, long address, int chunkSize = DefaultChunkSize, ILogger logger = null)
+        public RangeIndexFileDataSource(CheckpointFileType type, Guid token, string filePath, string keyHash, long address, bool compress = false, int chunkSize = DefaultChunkSize, ILogger logger = null)
         {
             Type = type;
             Token = token;
             KeyHash = keyHash;
             Address = address;
+            Compress = compress;
             this.filePath = filePath;
             this.chunkSize = chunkSize;
             this.logger = logger;

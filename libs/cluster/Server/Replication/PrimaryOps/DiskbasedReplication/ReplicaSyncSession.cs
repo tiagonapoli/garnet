@@ -159,6 +159,7 @@ namespace Garnet.cluster
                             localEntry.metadata.storeHlogToken,
                             hlog_size.hybridLogFileStartAddress,
                             hlog_size.hybridLogFileEndAddress,
+                            storeWrapper.serverOptions.ReplicaSyncCompressRangeIndex,
                             logger));
                     }
 

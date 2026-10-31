@@ -482,6 +482,10 @@ namespace Garnet
         [Option("repl-diskless-sync-delay", Required = false, HelpText = "Delay in diskless replication sync in seconds. =0: Immediately start diskless replication sync.")]
         public int ReplicaDisklessSyncDelay { get; set; }
 
+        [OptionValidation]
+        [Option("repl-sync-compress-rangeindex", Required = false, HelpText = "Whether a disk-based full sync Brotli-compresses RangeIndex files on the wire. Pays off on links slower than the ~200 MB/s compression rate of incompressible data.")]
+        public bool? ReplicaSyncCompressRangeIndex { get; set; }
+
         [IntRangeValidation(0, int.MaxValue)]
         [Option("repl-attach-timeout", Required = false, HelpText = "Timeout in seconds for replication attach operation.")]
         public int ReplicaAttachTimeout { get; set; }
@@ -1023,6 +1027,7 @@ namespace Garnet
                 OnDemandCheckpoint = OnDemandCheckpoint.GetValueOrDefault(),
                 ReplicaDisklessSync = ReplicaDisklessSync.GetValueOrDefault(),
                 ReplicaDisklessSyncDelay = ReplicaDisklessSyncDelay,
+                ReplicaSyncCompressRangeIndex = ReplicaSyncCompressRangeIndex.GetValueOrDefault(),
                 ReplicaSyncTimeout = ReplicaSyncTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(ReplicaSyncTimeout),
                 ReplicaAttachTimeout = ReplicaAttachTimeout <= 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(ReplicaAttachTimeout),
                 ReplicaDisklessSyncFullSyncAofThreshold = ReplicaDisklessSyncFullSyncAofThreshold,

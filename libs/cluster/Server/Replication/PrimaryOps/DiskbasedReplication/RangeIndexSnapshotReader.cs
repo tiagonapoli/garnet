@@ -30,12 +30,14 @@ namespace Garnet.cluster
         /// <param name="checkpointToken">The checkpoint token (storeHlogToken).</param>
         /// <param name="hlogStartAddress">hybridLogFileStartAddress from LogFileInfo.</param>
         /// <param name="hlogEndAddress">hybridLogFileEndAddress from LogFileInfo.</param>
+        /// <param name="compress">Whether file content chunks are Brotli-compressed on the wire.</param>
         /// <param name="logger">Optional logger.</param>
         public RangeIndexSnapshotReader(
             RangeIndexManager rangeIndexManager,
             Guid checkpointToken,
             long hlogStartAddress,
             long hlogEndAddress,
+            bool compress,
             ILogger logger = null)
         {
             this.logger = logger;
@@ -46,7 +48,7 @@ namespace Garnet.cluster
                     ? CheckpointFileType.STORE_RANGEINDEX_FLUSH
                     : CheckpointFileType.STORE_RANGEINDEX_SNAPSHOT;
 
-                dataSources.Add(new RangeIndexFileDataSource(type, checkpointToken, entry.Path, entry.KeyHash, entry.Address));
+                dataSources.Add(new RangeIndexFileDataSource(type, checkpointToken, entry.Path, entry.KeyHash, entry.Address, compress));
                 logger?.LogInformation("RangeIndexSnapshotReader: queued {type} keyHash={keyHash} addr={addr}", type, entry.KeyHash, entry.Address);
             }
         }

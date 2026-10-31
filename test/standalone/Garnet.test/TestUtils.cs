@@ -811,7 +811,8 @@ namespace Garnet.test
             string clusterAnnounceHostname = null,
             int vectorSetReplayTaskCount = 0,
             int threadPoolMinIOCompletionThreads = 0,
-            bool enableRangeIndexPreview = false)
+            bool enableRangeIndexPreview = false,
+            bool replicaSyncCompressRangeIndex = false)
         {
             if (UseAzureStorage)
                 IgnoreIfNotRunningAzureTests();
@@ -880,7 +881,8 @@ namespace Garnet.test
                     clusterAnnounceHostname: clusterAnnounceHostname,
                     vectorSetReplayTaskCount: vectorSetReplayTaskCount,
                     threadPoolMinIOCompletionThreads: threadPoolMinIOCompletionThreads,
-                    enableRangeIndexPreview: enableRangeIndexPreview);
+                    enableRangeIndexPreview: enableRangeIndexPreview,
+                    replicaSyncCompressRangeIndex: replicaSyncCompressRangeIndex);
 
                 ClassicAssert.IsNotNull(opts);
 
@@ -966,7 +968,8 @@ namespace Garnet.test
             int vectorSetReplayTaskCount = 0,
             bool enableRangeIndexPreview = false,
             int vectorSetQuantizationTaskCount = 0,
-            int threadPoolMinIOCompletionThreads = 0)
+            int threadPoolMinIOCompletionThreads = 0,
+            bool replicaSyncCompressRangeIndex = false)
         {
             if (useAzureStorage)
                 IgnoreIfNotRunningAzureTests();
@@ -1095,6 +1098,7 @@ namespace Garnet.test
                 VectorSetQuantizationTaskCount = vectorSetQuantizationTaskCount,
                 ExpiredObjectCollectionFrequencySecs = expiredObjectCollectionFrequencySecs,
                 ThreadPoolMinIOCompletionThreads = threadPoolMinIOCompletionThreads,
+                ReplicaSyncCompressRangeIndex = replicaSyncCompressRangeIndex,
             };
 
             if (lowMemory)
