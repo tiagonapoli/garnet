@@ -364,6 +364,7 @@ namespace Garnet.server
             {
                 if (db.Store.Log.TailAddress > 64)
                     db.Store.Reset();
+                db.RangeIndexManager?.DiscardTreesAfterStoreReset();
                 db.AppendOnlyFile?.Log.Reset();
 
                 var lastSave = DateTimeOffset.FromUnixTimeSeconds(0);

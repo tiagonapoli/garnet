@@ -480,6 +480,39 @@ namespace Garnet.server
             return false;
         }
 
+        /// <summary>
+        /// Dispose every tracked tree after the store was reset. No record references them any longer, and recovery
+        /// rewrites their <c>data.bftree</c> files, so a surviving tree would later be reused over replaced files.
+        /// </summary>
+        internal void DiscardTreesAfterStoreReset()
+        {
+            foreach (var kvp in liveIndexes)
+            {
+                var entry = kvp.Value;
+                rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var lockToken);
+                try
+                {
+                    if (!liveIndexes.TryRemove(kvp))
+                        continue;
+
+                    if (entry.Tree != null)
+                        logger?.LogWarning("RangeIndex tree {Hash} (tree={Tree}) outlived the store reset; disposing it", entry.HashPrefix, entry.Tree.NativePtr);
+
+                    // Dispose synchronously: recovery overwrites data.bftree next, so the native tree must release it first.
+                    // Readers call into the native tree only under the shared lock held off by our exclusive lock, and
+                    // the snapshot claim (never released, as the entry is gone) waits out any in-flight snapshot.
+                    while (!entry.TryClaimSnapshot())
+                        Thread.Yield();
+                    try { entry.Tree?.Dispose(); }
+                    catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree {Hash} after store reset", entry.HashPrefix); }
+                }
+                finally
+                {
+                    rangeIndexLocks.ReleaseLock(lockToken);
+                }
+            }
+        }
+
         /// <inheritdoc/>
         public void Dispose()
         {
