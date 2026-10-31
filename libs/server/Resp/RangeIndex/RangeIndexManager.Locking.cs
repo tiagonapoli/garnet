@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -217,9 +218,13 @@ namespace Garnet.server
         /// CopyUpdater copies the stub bytes and clears the flushed flag.
         /// Multiple threads may race here — only one wins the CAS; others see the new record.
         /// </summary>
-        private static void PromoteToTail(StorageSession session, PinnedSpanByte key)
+        private void PromoteToTail(StorageSession session, PinnedSpanByte key)
         {
+            var start = Stopwatch.GetTimestamp();
             session.PromoteRangeIndexToTail(key);
+            var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            if (ms >= 100)
+                logger?.LogInformation("RangeIndexSoakPromoted hash={Hash} elapsedMs={Ms:F0}", HashKeyToPrefix(key.ReadOnlySpan), ms);
         }
 
         /// <summary>
@@ -337,6 +342,7 @@ namespace Garnet.server
                         return false;
                     }
 
+                    var restoreStart = Stopwatch.GetTimestamp();
                     var bfTree = BfTreeService.RecoverFromCprSnapshot(
                         workingPath,
                         enableSnapshots: true,
@@ -354,7 +360,7 @@ namespace Garnet.server
                         return false;
                     }
                     nativePtr = winner.Tree.NativePtr;
-                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File}", hashPrefix, nativePtr, workingPath);
+                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} openMs={OpenMs:F0}", hashPrefix, nativePtr, workingPath, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds);
                 }
             }
             catch (Exception ex)

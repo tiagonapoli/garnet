@@ -486,6 +486,7 @@ impl CPRSnapShotMgr {
         // Given that there are usually a very limited number of inner nodes, user workload should be affected minimally.
         // TODO: A complete block-free approach to scan all inner nodes.
         self.pause_snapshot.store(true, Ordering::Release);
+        let mut drain_poll = std::time::Duration::from_micros(50);
         loop {
             if self.check_if_phase_completed(INVALID_SNAPSHOT_STATE) {
                 // Upon reaching here, no user threads can obtain a snapshot id nor making changes to the tree structure.
@@ -590,8 +591,9 @@ impl CPRSnapShotMgr {
 
                 break;
             }
-            // At most wasting 1 second per state transition.
-            thread::sleep(std::time::Duration::from_secs(1));
+            // User operations are paused until the drain completes, so poll with a short bounded backoff.
+            thread::sleep(drain_poll);
+            drain_poll = (drain_poll * 2).min(std::time::Duration::from_millis(10));
 
             #[cfg(all(feature = "shuttle", test))]
             shuttle::thread::yield_now();
@@ -983,8 +985,13 @@ impl CPRSnapShotMgr {
 
         let mut leaf_node_count_upper_bound = 0; // Indicate the total number of leaf nodes in the captured snapshot.
 
+        const MIN_PHASE_POLL: std::time::Duration = std::time::Duration::from_micros(50);
+        const MAX_PHASE_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+        let mut phase_poll = MIN_PHASE_POLL;
+
         loop {
             if self.check_if_phase_completed(current_global_state) {
+                phase_poll = MIN_PHASE_POLL;
                 match current_global_phase_id {
                     PhaseId::Rest => {
                         // Upon reaching here, all user threads are in (REST, snapshot_version + 1).
@@ -1046,10 +1053,14 @@ impl CPRSnapShotMgr {
                         assert_eq!(snapshot_version + 1, self.get_global_version());
                     }
                 }
+
+                // Callers snapshot synchronously (e.g. on a log page flush), so check the next phase immediately.
+                continue;
             }
 
-            // At most wasting 1 second per state transition.
-            thread::sleep(std::time::Duration::from_secs(1));
+            // Back off while user threads catch up with the phase, bounding the wasted wait per transition.
+            thread::sleep(phase_poll);
+            phase_poll = (phase_poll * 2).min(MAX_PHASE_POLL);
 
             #[cfg(all(feature = "shuttle", test))]
             shuttle::thread::yield_now();

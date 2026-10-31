@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -331,8 +332,12 @@ namespace Garnet.server
             entry?.Retire();
             if (tree != null)
             {
+                var disposeStart = Stopwatch.GetTimestamp();
                 try { tree.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Deferred dispose failed for BfTree"); }
+                var disposeMs = Stopwatch.GetElapsedTime(disposeStart).TotalMilliseconds;
+                if (disposeMs >= 100)
+                    logger?.LogInformation("RangeIndexSoakDisposed hash={Hash} disposeMs={Ms:F0}", entry?.HashPrefix ?? hashPrefix, disposeMs);
             }
             if (hashPrefix != null && !string.IsNullOrEmpty(riLogRoot) && Directory.Exists(riLogRoot))
             {

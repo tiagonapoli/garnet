@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -604,7 +605,9 @@ namespace Garnet.server
             rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
             try
             {
+                var copyStart = Stopwatch.GetTimestamp();
                 File.Copy(snapshotPath, dataPath, overwrite: true);
+                logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
 
                 var keyId = KeyId(keyBytes);
                 _ = liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix));
@@ -662,7 +665,9 @@ namespace Garnet.server
 
             try
             {
+                var copyStart = Stopwatch.GetTimestamp();
                 File.Copy(snapshotPath, dataPath, overwrite: true);
+                logger?.LogInformation("RangeIndexSoakRecoveryStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
             }
             catch (Exception ex)
             {

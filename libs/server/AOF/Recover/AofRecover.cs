@@ -91,16 +91,24 @@ namespace Garnet.server
             var count = 0L;
             var beginAddress = appendOnlyFile.Log.BeginAddress;
             using var scan = appendOnlyFile.Log.Scan(physicalSublogIdx, beginAddress[physicalSublogIdx], untilAddress[physicalSublogIdx]);
+            var stats = new ReplayStats();
+            var scanStart = Stopwatch.GetTimestamp();
 
             // Replay each AOF record in the current database context
             // TODO perf: convert to push iterator that doesn't need a copy to the entry.
-            while (scan.GetNext(MemoryPool<byte>.Shared, out var entry, out var length, out _, out var nextAofAddress))
+            while (scan.GetNext(MemoryPool<byte>.Shared, out var entry, out var length, out var currentAddress, out var nextAofAddress))
             {
+                var applyStart = Stopwatch.GetTimestamp();
+                stats.scanTicks += applyStart - scanStart;
                 count++;
                 unsafe
                 {
                     fixed (byte* ptr = entry.Memory.Span)
+                    {
+                        var opType = ((AofHeader*)ptr)->opType;
                         ProcessAofRecordInternal(physicalSublogIdx, ptr, length, asReplica: false, out _);
+                        stats.Record(opType, length, Stopwatch.GetTimestamp() - applyStart, currentAddress, logger);
+                    }
                     entry.Dispose();
                 }
 
@@ -108,9 +116,13 @@ namespace Garnet.server
                 {
                     logger?.LogTrace("Completed AOF replay of {count} records, until AOF address {nextAofAddress} (DB ID: {id})", count, nextAofAddress, dbId);
                 }
+
+                scanStart = Stopwatch.GetTimestamp();
             }
 
+            stats.scanTicks += Stopwatch.GetTimestamp() - scanStart;
             logger?.LogInformation("Completed full AOF sublog {sublogIdx} replay of {count:N0} records (DB ID: {id})", physicalSublogIdx, count, dbId);
+            stats.Log(logger, dbId);
             return count;
         }
 
@@ -162,6 +174,44 @@ namespace Garnet.server
             }
 
             return recordsReplayed;
+        }
+
+        /// <summary>Per-op-type AOF recovery timing, separating log read time from record apply time.</summary>
+        private sealed class ReplayStats
+        {
+            private const long SlowRecordMs = 1000;
+            private readonly long[] counts = new long[256];
+            private readonly long[] bytes = new long[256];
+            private readonly long[] ticks = new long[256];
+            private readonly long[] maxTicks = new long[256];
+            internal long scanTicks;
+
+            internal void Record(AofEntryType opType, int length, long elapsedTicks, long address, ILogger logger)
+            {
+                var i = (byte)opType;
+                counts[i]++;
+                bytes[i] += length;
+                ticks[i] += elapsedTicks;
+                maxTicks[i] = Math.Max(maxTicks[i], elapsedTicks);
+                var ms = Stopwatch.GetElapsedTime(0, elapsedTicks).TotalMilliseconds;
+                if (ms >= SlowRecordMs)
+                    logger?.LogWarning("AofReplaySlowRecord op={opType} bytes={length} address={address} elapsedMs={ms:F0}", opType, length, address, ms);
+            }
+
+            internal void Log(ILogger logger, int dbId)
+            {
+                if (logger == null)
+                    return;
+
+                logger.LogInformation("AofReplayStats dbId={dbId} logReadMs={scanMs:F0}", dbId, Stopwatch.GetElapsedTime(0, scanTicks).TotalMilliseconds);
+                for (var i = 0; i < counts.Length; i++)
+                {
+                    if (counts[i] == 0)
+                        continue;
+                    logger.LogInformation("AofReplayStats dbId={dbId} op={opType} count={count} bytes={bytes} applyMs={applyMs:F0} maxMs={maxMs:F0}",
+                        dbId, (AofEntryType)i, counts[i], bytes[i], Stopwatch.GetElapsedTime(0, ticks[i]).TotalMilliseconds, Stopwatch.GetElapsedTime(0, maxTicks[i]).TotalMilliseconds);
+                }
+            }
         }
     }
 }
