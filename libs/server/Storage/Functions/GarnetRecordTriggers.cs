@@ -253,8 +253,8 @@ namespace Garnet.server
             RangeIndexManager.SetTransferredFlag(srcSpan);
 
             // Dst is a freshly copied record at the tail. Clear IsFlushed so subsequent reads
-            // don't loop through PromoteToTail again.
-            RangeIndexManager.ClearFlushedFlag(dstSpan);
+            // don't loop through PromoteToTail again, and any stale IsTransferred inherited from src.
+            RangeIndexManager.ResetCopiedStubFlags(dstSpan);
         }
 
         /// <inheritdoc/>

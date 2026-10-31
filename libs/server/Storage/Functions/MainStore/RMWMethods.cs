@@ -1543,7 +1543,7 @@ namespace Garnet.server
                         if (!dstLogRecord.TrySetContentLengths(RangeIndexManager.IndexSizeBytes, in sizeInfo))
                             return false;
                         srcValue.CopyTo(dstLogRecord.ValueSpan);
-                        RangeIndexManager.ClearFlushedFlag(dstLogRecord.ValueSpan);
+                        RangeIndexManager.ResetCopiedStubFlags(dstLogRecord.ValueSpan);
 
                         // Preserve the RecordType
                         var dataHeader = dstLogRecord.DataHeader;
