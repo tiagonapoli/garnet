@@ -1591,6 +1591,60 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Verifies that recovery defers staging <c>data.bftree</c> from the checkpoint snapshot until the tree is
+        /// first used, and that a checkpoint taken before that use keeps the tree recoverable after the older
+        /// checkpoint snapshot is purged.
+        /// </summary>
+        [Test]
+        public void RIRecoveryStagesDataFileLazilyTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "lazystage", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "lazystage", "key-alpha", "val-alpha");
+                db.Execute("RI.SET", "lazystage", "key-bravo", "val-bravo");
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+            var riLogRoot = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
+            foreach (var file in Directory.GetFiles(riLogRoot, "*.data.bftree"))
+                File.Delete(file);
+
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                ClassicAssert.IsEmpty(Directory.GetFiles(riLogRoot, "*.data.bftree"), "recovery must not stage data.bftree before the tree is used");
+
+                string[] CheckpointSnapshots() => [.. Directory.GetFiles(TestUtils.MethodTestDir, "*.bftree", SearchOption.AllDirectories).Where(f => Path.GetFileName(Path.GetDirectoryName(f)) == "rangeindex" && Path.GetDirectoryName(f) != riLogRoot)];
+                var recoveredSnapshots = CheckpointSnapshots();
+                ClassicAssert.IsNotEmpty(recoveredSnapshots, "the recovered checkpoint should hold a tree snapshot");
+
+                // Checkpoint the still-pending tree; retention purges the recovered checkpoint's snapshot (deleted here if it survived).
+                db.Execute("SAVE");
+                ClassicAssert.IsEmpty(Directory.GetFiles(riLogRoot, "*.data.bftree"), "checkpointing a pending tree must not stage data.bftree");
+                foreach (var file in recoveredSnapshots.Where(File.Exists))
+                    File.Delete(file);
+
+                ClassicAssert.AreEqual("val-alpha", (string)db.Execute("RI.GET", "lazystage", "key-alpha"));
+                ClassicAssert.AreEqual("val-bravo", (string)db.Execute("RI.GET", "lazystage", "key-bravo"));
+                ClassicAssert.AreEqual(1, Directory.GetFiles(riLogRoot, "*.data.bftree").Length, "first use should stage data.bftree");
+
+                db.Execute("RI.SET", "lazystage", "key-charlie", "val-charlie");
+                ClassicAssert.AreEqual("val-charlie", (string)db.Execute("RI.GET", "lazystage", "key-charlie"));
+            }
+        }
+
+        /// <summary>
         /// Verifies that post-checkpoint mutations are replayed from AOF after recovery.
         /// With AOF enabled, v+1 data IS replayed from AOF after checkpoint recovery.
         /// </summary>

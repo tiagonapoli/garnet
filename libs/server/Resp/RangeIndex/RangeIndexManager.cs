@@ -130,7 +130,7 @@ namespace Garnet.server
         internal sealed class TreeEntry
         {
             /// <summary>The managed BfTree wrapper owning the native tree pointer.
-            /// <c>null</c> for a "pending" entry — data.bftree on disk has correct content
+            /// <c>null</c> for a "pending" entry — data.bftree (or <see cref="StagingSource"/>) on disk has correct content
             /// but no native BfTree has been opened yet (awaiting <c>RestoreTree</c> activation).</summary>
             public BfTreeService Tree;
 
@@ -140,6 +140,9 @@ namespace Garnet.server
             /// <summary>32-character lowercase-hex prefix derived from the key (XxHash128 → Guid("N")).
             /// Used to construct file paths under both roots.</summary>
             public readonly string HashPrefix;
+
+            /// <summary>Immutable checkpoint snapshot holding a pending entry's contents until <c>data.bftree</c> is staged from it; null once staged.</summary>
+            public string StagingSource;
 
             /// <summary>
             /// 1 while this tree is being snapshotted for checkpoint, 0 otherwise.
@@ -554,7 +557,8 @@ namespace Garnet.server
                 File.Copy(snapshotPath, dataPath, overwrite: true);
 
                 var keyId = KeyId(keyBytes);
-                _ = liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix));
+                if (!liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix)) && liveIndexes.TryGetValue(keyId, out var existing))
+                    Volatile.Write(ref existing.StagingSource, null);
             }
             catch (Exception ex)
             {
@@ -569,15 +573,13 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Pre-stage <c>data.bftree</c> from <c>cpr-checkpoints/&lt;recoveredCheckpointToken&gt;/rangeindex/&lt;hash&gt;.bftree</c>
-        /// during recovery. Called from <c>OnRecoverySnapshotRead</c> for above-FUA-at-checkpoint stubs
-        /// (snapshot file may be deleted post-recovery, so this MUST run during recovery).
-        /// Registers a pending entry so any first checkpoint after recovery captures the key correctly.
+        /// Register a pending entry whose <c>data.bftree</c> is staged lazily from
+        /// <c>cpr-checkpoints/&lt;recoveredCheckpointToken&gt;/rangeindex/&lt;hash&gt;.bftree</c> on first use.
+        /// Called from <c>OnRecoverySnapshotRead</c> for above-FUA-at-checkpoint stubs.
         ///
-        /// <para>Recovery is single-threaded with no concurrent readers, and a crash mid-copy is
-        /// self-healing — the next recovery attempt re-fires <c>OnRecoverySnapshotRead</c> for
-        /// the same stub and fully overwrites any partial file before any <c>RestoreTree</c>
-        /// can observe it.</para>
+        /// <para>The recovered checkpoint is retained until a newer checkpoint commits, and that checkpoint's
+        /// pending-entry snapshot re-points <see cref="TreeEntry.StagingSource"/> at itself, so the source
+        /// outlives every entry that still references it.</para>
         /// </summary>
         /// <exception cref="InvalidOperationException">Thrown when this method is called without
         /// the recovery state required to locate checkpoint snapshots
@@ -605,21 +607,60 @@ namespace Garnet.server
                 return;
             }
 
-            var dataPath = LogDataPath(hashPrefix);
-
-            try
-            {
-                File.Copy(snapshotPath, dataPath, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "RebuildFromSnapshotIfPending: copy failed for {Hash}", hashPrefix);
-                return;
-            }
-
+            // Stage data.bftree lazily: a node that is fully resynced, or that never touches this
+            // tree, must not pay a full-tree copy for it during recovery.
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
             var keyId = KeyId(keyBytes);
-            _ = liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix));
+            var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
+            if (entry.Tree == null)
+                Volatile.Write(ref entry.StagingSource, snapshotPath);
+        }
+
+        /// <summary>
+        /// Stage <c>data.bftree</c> from a pending entry's deferred <see cref="TreeEntry.StagingSource"/>, if any.
+        /// The caller must hold the per-key exclusive lock.
+        /// </summary>
+        internal void StageDeferredData(TreeEntry entry, string dataPath)
+        {
+            while (Volatile.Read(ref entry.StagingSource) is { } source)
+            {
+                try
+                {
+                    File.Copy(source, dataPath, overwrite: true);
+                }
+                catch (FileNotFoundException) when (!ReferenceEquals(source, Volatile.Read(ref entry.StagingSource)))
+                {
+                    // A checkpoint moved the source to its own snapshot before deleting the old one.
+                    continue;
+                }
+
+                Volatile.Write(ref entry.StagingSource, null);
+            }
+        }
+
+        /// <summary>
+        /// Copy the contents of a tree with no live native instance to <paramref name="destinationPath"/>, reading
+        /// the deferred staging source of <paramref name="entry"/> when present and <paramref name="dataPath"/> otherwise.
+        /// </summary>
+        /// <returns><c>false</c> if no source file exists.</returns>
+        private static bool CopyPendingContents(TreeEntry entry, string dataPath, string destinationPath, bool overwrite)
+        {
+            while (true)
+            {
+                var source = (entry == null ? null : Volatile.Read(ref entry.StagingSource)) ?? dataPath;
+                try
+                {
+                    File.Copy(source, destinationPath, overwrite);
+                    return true;
+                }
+                catch (FileNotFoundException)
+                {
+                    // Retry only if a checkpoint moved the staging source while we were copying.
+                    var current = (entry == null ? null : Volatile.Read(ref entry.StagingSource)) ?? dataPath;
+                    if (ReferenceEquals(source, current))
+                        return false;
+                }
+            }
         }
 
         /// <summary>
@@ -755,13 +796,13 @@ namespace Garnet.server
                 }
 
                 // No live tree exists for this key (S-lock blocks RestoreTree from activating
-                // one mid-copy). data.bftree is stable — no concurrent writer.
-                if (!File.Exists(dataPath))
+                // one mid-copy). data.bftree or the deferred staging source is stable — no concurrent writer.
+                if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: false))
                 {
                     LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
                     return; // do NOT set IsFlushed
                 }
-                File.Copy(dataPath, flushPath, overwrite: false);
+
                 SetFlushedFlag(valueSpan);
             }
             finally
@@ -801,8 +842,8 @@ namespace Garnet.server
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
         /// straight to the checkpoint destination (<see cref="TreeEntry.SnapshotUnderClaim"/>).</item>
-        /// <item>Pending entries (Tree == null) → <c>File.Copy(data.bftree)</c> (no live tree
-        /// to snapshot from; data.bftree was pre-staged by PreStage).</item>
+        /// <item>Pending entries (Tree == null) → copy the deferred staging source, or <c>data.bftree</c>
+        /// once staged (no live tree to snapshot from).</item>
         /// </list></para>
         ///
         /// <para>Uses the per-tree atomic <see cref="TreeEntry.SnapshotInProgress"/> to serialize
@@ -845,14 +886,17 @@ namespace Garnet.server
                         }
                         else
                         {
-                            // Pending entry: data.bftree was pre-staged from the source flush
-                            // file by PreStageAndRegisterPending. data.bftree is the only
-                            // correct source. No live tree means no concurrent writer.
+                            // Pending entry: its contents are in the deferred staging source, or in
+                            // data.bftree once staged. No live tree means no concurrent writer.
                             var dataPath = LogDataPath(entry.HashPrefix);
-                            if (File.Exists(dataPath))
-                                File.Copy(dataPath, checkpointPath, overwrite: true);
-                            else
+                            var source = Volatile.Read(ref entry.StagingSource);
+                            if (!CopyPendingContents(entry, dataPath, checkpointPath, overwrite: true))
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: data.bftree missing for pending {Hash}", entry.HashPrefix);
+                            else if (source != null)
+                            {
+                                // Re-point staging at this checkpoint so purging the older one cannot strand the entry.
+                                _ = Interlocked.CompareExchange(ref entry.StagingSource, checkpointPath, source);
+                            }
                         }
                     }
                     finally
