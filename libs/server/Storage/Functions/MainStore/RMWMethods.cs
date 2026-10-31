@@ -1514,7 +1514,7 @@ namespace Garnet.server
                         if (!dstLogRecord.TrySetContentLengths(RangeIndexManager.IndexSizeBytes, in sizeInfo))
                             return false;
                         srcValue.CopyTo(dstLogRecord.ValueSpan);
-                        RangeIndexManager.ClearFlushedFlag(dstLogRecord.ValueSpan);
+                        RangeIndexManager.ResetCopiedStubFlags(dstLogRecord.ValueSpan);
 
                         // Preserve the RecordType
                         var dataHeader = dstLogRecord.DataHeader;
@@ -1533,7 +1533,7 @@ namespace Garnet.server
                             return false;
                         srcValue.CopyTo(dstLogRecord.ValueSpan);
                         RangeIndexManager.RecreateIndex((nint)input.arg1, dstLogRecord.ValueSpan);
-                        RangeIndexManager.ClearFlushedFlag(dstLogRecord.ValueSpan);
+                        RangeIndexManager.ResetCopiedStubFlags(dstLogRecord.ValueSpan);
 
                         var dataHeader = dstLogRecord.DataHeader;
                         dataHeader.RecordType = RangeIndexManager.RangeIndexRecordType;
