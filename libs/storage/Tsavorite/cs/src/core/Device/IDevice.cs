@@ -226,7 +226,7 @@ namespace Tsavorite.core
         long GetFileSize(int segment);
 
         /// <summary>
-        /// Reset the device (close and forget open handles)
+        /// Reset the device (close and forget open handles and the segment range)
         /// </summary>
         void Reset();
     }
