@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.IO.Compression;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -49,18 +50,14 @@ namespace Garnet.cluster
         internal enum ChunkCodec : byte
         {
             Raw = 0,
-            Brotli = 1,
+            Deflate = 1,
         }
 
         /// <summary>
-        /// Brotli quality used for content chunks; level 1 compresses at ~1 GB/s, far above the replication link rate.
+        /// Deflate level for content chunks. On .bftree data the fastest level compresses ~16x at ~1.2 GB/s and
+        /// decompresses at ~3.4 GB/s per core, where Brotli quality 1 decompresses at only ~0.9 GB/s and bounds the replica.
         /// </summary>
-        internal const int BrotliQuality = 1;
-
-        /// <summary>
-        /// Brotli window (log2 bytes); covers a whole chunk.
-        /// </summary>
-        internal const int BrotliWindow = 18;
+        internal const CompressionLevel DeflateLevel = CompressionLevel.Fastest;
 
         /// <summary>
         /// File read size. Chunk-sized reads at queue depth one are latency-bound on virtual disks (134 MB/s for
@@ -98,7 +95,7 @@ namespace Garnet.cluster
         public long Address { get; }
 
         /// <summary>
-        /// Whether content chunks are framed and Brotli-compressed on the wire.
+        /// Whether content chunks are framed and Deflate-compressed on the wire.
         /// </summary>
         public bool Compress { get; }
 
@@ -141,7 +138,7 @@ namespace Garnet.cluster
         /// <param name="filePath">Full path to the .bftree file on disk.</param>
         /// <param name="keyHash">The 32-character key hash prefix.</param>
         /// <param name="address">The hlog logical address (flush files only).</param>
-        /// <param name="compress">Whether content chunks are framed and Brotli-compressed on the wire.</param>
+        /// <param name="compress">Whether content chunks are framed and Deflate-compressed on the wire.</param>
         /// <param name="chunkSize">Maximum bytes to read per chunk.</param>
         /// <param name="logger">Optional logger.</param>
         public RangeIndexFileDataSource(CheckpointFileType type, Guid token, string filePath, string keyHash, long address, bool compress = false, int chunkSize = DefaultChunkSize, ILogger logger = null)

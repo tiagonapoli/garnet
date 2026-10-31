@@ -30,7 +30,7 @@ namespace Garnet.cluster
         /// <param name="checkpointToken">The checkpoint token (storeHlogToken).</param>
         /// <param name="hlogStartAddress">hybridLogFileStartAddress from LogFileInfo.</param>
         /// <param name="hlogEndAddress">hybridLogFileEndAddress from LogFileInfo.</param>
-        /// <param name="compress">Whether file content chunks are Brotli-compressed on the wire.</param>
+        /// <param name="compress">Whether file content chunks are Deflate-compressed on the wire.</param>
         /// <param name="logger">Optional logger.</param>
         public RangeIndexSnapshotReader(
             RangeIndexManager rangeIndexManager,

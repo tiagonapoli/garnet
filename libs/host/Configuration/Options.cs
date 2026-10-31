@@ -483,7 +483,7 @@ namespace Garnet
         public int ReplicaDisklessSyncDelay { get; set; }
 
         [OptionValidation]
-        [Option("repl-sync-compress-rangeindex", Required = false, HelpText = "Whether a disk-based full sync Brotli-compresses RangeIndex files on the wire. Pays off on links slower than the ~200 MB/s compression rate of incompressible data.")]
+        [Option("repl-sync-compress-rangeindex", Required = false, HelpText = "Whether a disk-based full sync Deflate-compresses RangeIndex files on the wire. Pays off on links slower than the compression rate of incompressible data.")]
         public bool? ReplicaSyncCompressRangeIndex { get; set; }
 
         [IntRangeValidation(0, int.MaxValue)]

@@ -21,6 +21,8 @@ namespace Garnet.cluster
         private readonly string filePath;
         private readonly ILogger logger;
         private readonly byte[] decodeBuffer;
+        private readonly byte[] overflowProbe = new byte[1];
+        private byte[] compressedBuffer = [];
         private FileStream stream;
 
         public CheckpointFileType Type { get; }
@@ -109,14 +111,40 @@ namespace Garnet.cluster
                 case RangeIndexFileDataSource.ChunkCodec.Raw:
                     stream.Write(data[1..]);
                     break;
-                case RangeIndexFileDataSource.ChunkCodec.Brotli:
-                    if (!BrotliDecoder.TryDecompress(data[1..], decodeBuffer, out var decoded))
-                        ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: failed to decompress chunk at {startAddress} for {filePath}"));
-                    stream.Write(decodeBuffer, 0, decoded);
+                case RangeIndexFileDataSource.ChunkCodec.Deflate:
+                    stream.Write(decodeBuffer, 0, Inflate(startAddress, data[1..]));
                     break;
                 default:
                     ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: unknown chunk codec {data[0]} at {startAddress} for {filePath}"));
                     break;
+            }
+        }
+
+        /// <summary>
+        /// Decompresses a Deflate chunk into <see cref="decodeBuffer"/> and returns the decoded length.
+        /// </summary>
+        private int Inflate(long startAddress, ReadOnlySpan<byte> compressed)
+        {
+            if (compressedBuffer.Length < compressed.Length)
+                compressedBuffer = new byte[compressed.Length];
+            compressed.CopyTo(compressedBuffer);
+
+            try
+            {
+                using var inflater = new DeflateStream(new MemoryStream(compressedBuffer, 0, compressed.Length, writable: false), CompressionMode.Decompress);
+                var decoded = 0;
+                int read;
+                while (decoded < decodeBuffer.Length && (read = inflater.Read(decodeBuffer, decoded, decodeBuffer.Length - decoded)) > 0)
+                    decoded += read;
+
+                if (decoded == decodeBuffer.Length && inflater.Read(overflowProbe) > 0)
+                    ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: chunk at {startAddress} decompresses beyond {decodeBuffer.Length} bytes for {filePath}"));
+
+                return decoded;
+            }
+            catch (InvalidDataException ex)
+            {
+                throw new GarnetException($"RangeIndexFileDataSink: failed to decompress chunk at {startAddress} for {filePath}", ex);
             }
         }
 
