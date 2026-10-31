@@ -522,6 +522,81 @@ namespace Tsavorite.test.recovery
                 ClassicAssert.AreEqual(key, output, $"output = {output}, key = {key}, wasPending = {wasPending}");
             }
         }
+
+        /// <summary>
+        /// A replica that truncated its log, reset its store, and then received a checkpoint whose log begins
+        /// in an earlier segment must be able to recover it.
+        /// </summary>
+        [Test]
+        [Category("TsavoriteKV"), Category("CheckpointRestore")]
+        public async Task RecoverAfterResetFromCheckpointBeginningBeforeTruncatedSegment()
+        {
+            const long pageSize = MinKvLogPageSize;
+            const long segmentSize = 1L << LogSettings.kMinMainLogSegmentSizeBits;
+            using var store = new TsavoriteKV<LongStoreFunctions, LongAllocator>(new()
+            {
+                IndexSize = 1L << 13,
+                LogDevice = log,
+                MutableFraction = 1,
+                PageSize = pageSize,
+                LogMemorySize = 1L << 13,
+                SegmentSize = segmentSize,
+                CheckpointDir = MethodTestDir
+            }, StoreFunctions.Create(LongKeyComparer.Instance, SpanByteRecordTriggers.Instance), (allocatorSettings, storeFunctions) => new(allocatorSettings, storeFunctions));
+
+            using var session = store.NewSession<TestSpanByteKey, long, long, Empty, SimpleLongSimpleFunctions>(new SimpleLongSimpleFunctions());
+            var bc = session.BasicContext;
+            var keyArray = new byte[sizeof(long)];
+
+            for (long key = 0; key < 1000; key++)
+            {
+                var keySpan = new Span<byte>(keyArray);
+                keySpan.AsRef<long>() = key;
+                _ = bc.Upsert(TestSpanByteKey.FromArray(keyArray), keySpan);
+            }
+
+            var (success, token) = await store.TakeHybridLogCheckpointAsync(CheckpointType.FoldOver).ConfigureAwait(false);
+            ClassicAssert.IsTrue(success);
+            ClassicAssert.AreEqual(0, (int)(store.Log.BeginAddress / segmentSize));
+
+            // Keep the segments the checkpoint needs, as the primary does while it ships them to the replica.
+            var backupDir = Path.Join(MethodTestDir, "segments");
+            _ = Directory.CreateDirectory(backupDir);
+            foreach (var file in Directory.GetFiles(MethodTestDir, "hlog.log.*"))
+                File.Copy(file, Path.Join(backupDir, Path.GetFileName(file)));
+
+            var truncateUntil = 2 * segmentSize;
+            ClassicAssert.Less(truncateUntil, store.Log.ReadOnlyAddress);
+            store.Log.ShiftBeginAddress(truncateUntil, snapToPageStart: true);
+
+            // Truncating through the store runs in an epoch action; truncate the device directly to make it synchronous.
+            log.TruncateUntilSegment(2);
+            ClassicAssert.AreEqual(2, log.StartSegment);
+
+            store.Reset();
+
+            // The received segments are written through another device instance, so only the files change.
+            foreach (var file in Directory.GetFiles(backupDir))
+                File.Copy(file, Path.Join(MethodTestDir, Path.GetFileName(file)), overwrite: true);
+
+            _ = await store.RecoverAsync(default, token).ConfigureAwait(false);
+
+            for (long key = 0; key < 1000; key++)
+            {
+                var keySpan = new Span<byte>(keyArray);
+                keySpan.AsRef<long>() = key;
+
+                long output = default;
+                var status = bc.Read(TestSpanByteKey.FromArray(keyArray), ref output);
+                if (status.IsPending)
+                {
+                    Assert.That(bc.CompletePendingWithOutputs(out var completedOutputs, wait: true), Is.True);
+                    (status, output) = GetSinglePendingResult(completedOutputs);
+                }
+                ClassicAssert.IsTrue(status.Found, $"status = {status}, key = {key}");
+                ClassicAssert.AreEqual(key, output, $"key = {key}");
+            }
+        }
     }
     [TestFixture]
     public class RecoveryCheck3Tests : RecoveryCheckBase
