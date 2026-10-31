@@ -9,9 +9,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server;
+using Garnet.server.BfTreeInterop;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;
+using Tsavorite.core;
 
 namespace Garnet.test
 {
@@ -2170,6 +2172,53 @@ namespace Garnet.test
             {
                 var db = redis.GetDatabase(0);
                 ClassicAssert.AreEqual("value", (string)db.Execute("RI.GET", "reflush", "field"));
+            }
+        }
+
+        /// <summary>
+        /// A tree still tracked after a store reset (as before a replica recovers in place) must be discarded: recovery
+        /// replaces its data.bftree, and a later restore would otherwise reuse the old native tree over the new file.
+        /// </summary>
+        [Test]
+        public async Task RIResetDiscardsSurvivingTreesBeforeRecoveryTest()
+        {
+            var storeWrapper = server.Provider.StoreWrapper;
+            var rangeIndexManager = storeWrapper.rangeIndexManager;
+            var key = "survivor"u8.ToArray();
+            var hashPrefix = RangeIndexManager.HashKeyToPrefix(key);
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "survivor", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "survivor", "field", "checkpointed");
+                db.Execute("SAVE");
+                db.Execute("RI.SET", "survivor", "field", "after-checkpoint");
+            }
+
+            storeWrapper.store.Log.FlushAndEvict(wait: true);
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "Eviction should dispose the tree");
+
+            // Track a tree that no record references, opened over data.bftree like RestoreTree does.
+            var flushFile = Directory.GetFiles(rangeIndexManager.RiLogRoot, $"{hashPrefix}.*.flush.bftree").Single();
+            var dataPath = rangeIndexManager.LogDataPathFor(key);
+            File.Copy(flushFile, dataPath, overwrite: true);
+            var survivingTree = BfTreeService.RecoverFromCprSnapshot(dataPath, enableSnapshots: true, StorageBackendType.Disk);
+            var pinnedKey = GC.AllocateArray<byte>(key.Length, pinned: true);
+            key.CopyTo(pinnedKey, 0);
+            var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(pinnedKey));
+            rangeIndexManager.RegisterIndex(survivingTree, keyHash, key);
+            ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount);
+
+            storeWrapper.Reset();
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "Store reset must discard trees no record references");
+
+            await storeWrapper.RecoverCheckpointAsync();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                ClassicAssert.AreEqual("checkpointed", (string)db.Execute("RI.GET", "survivor", "field"), "Recovery must restore the checkpointed tree");
             }
         }
 
