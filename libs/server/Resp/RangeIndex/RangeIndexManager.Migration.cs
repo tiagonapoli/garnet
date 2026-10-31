@@ -320,16 +320,14 @@ namespace Garnet.server
                 }
                 else
                 {
-                    // Tree was evicted — copy the working data.bftree file (same source as checkpoint pending entries)
+                    // Tree was evicted — copy its pending contents (same source as checkpoint pending entries)
                     var dataPath = LogDataPath(hashPrefix);
-
-                    if (!File.Exists(dataPath))
+                    _ = liveIndexes.TryGetValue(keyId, out var pendingEntry);
+                    if (!CopyPendingContents(pendingEntry, dataPath, migrationPath, overwrite: false))
                     {
                         logger?.LogWarning("SnapshotForMigration: data.bftree not found: {Path}", dataPath);
                         return false;
                     }
-
-                    File.Copy(dataPath, migrationPath, overwrite: false);
                 }
             }
             finally

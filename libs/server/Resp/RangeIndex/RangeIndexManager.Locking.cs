@@ -278,12 +278,12 @@ namespace Garnet.server
         /// Caller treats this as "key was deleted concurrently" → no re-restore loop.</item>
         /// </list></para>
         ///
-        /// <para>Pre-staging of <c>data.bftree</c> always happened earlier:
+        /// <para>Pre-staging of <c>data.bftree</c> always happened earlier, or is deferred to this method:
         /// <list type="bullet">
         /// <item><c>PostCopyToTail</c>-cold (compaction/CopyReadsToTail with disk source).</item>
         /// <item>RIPROMOTE <c>PostCopyUpdater</c>-cold (post-eviction or post-recovery first promote).</item>
-        /// <item><c>OnRecoverySnapshotRead</c> (above-FUA-at-checkpoint stubs DURING recovery, since
-        /// the checkpoint snapshot file may be deleted post-recovery).</item>
+        /// <item><c>OnRecoverySnapshotRead</c> (above-FUA-at-checkpoint stubs) defers the copy from the
+        /// checkpoint snapshot to the first restore via <see cref="StageDeferredData"/>.</item>
         /// </list></para>
         /// </remarks>
         private bool RestoreTree(
@@ -326,6 +326,8 @@ namespace Garnet.server
                 {
                     var hashPrefix = HashKeyToPrefix(keySpan);
                     var workingPath = LogDataPath(hashPrefix);
+                    if (existing != null)
+                        StageDeferredData(existing, workingPath);
 
                     if (!File.Exists(workingPath))
                     {
