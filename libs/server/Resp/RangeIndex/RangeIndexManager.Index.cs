@@ -189,6 +189,9 @@ namespace Garnet.server
             // Clear IsRecovered so that future eviction cycles use the flush snapshot
             // (which reflects post-recovery writes) instead of the stale checkpoint snapshot.
             stub.IsRecovered = false;
+
+            // RIRESTORE only updates the key's latest record, which therefore owns the tree.
+            stub.IsTransferred = false;
         }
 
         /// <summary>
@@ -352,16 +355,17 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Clear the Flushed flag on a stub span. Called by CopyUpdater after promoting
-        /// the stub to the mutable tail region, so subsequent operations no longer trigger promotion.
+        /// Clear the Flushed and Transferred flags on a stub copied to the tail, which is now the key's latest record.
         /// </summary>
-        /// <param name="valueSpan">The store value span containing the promoted stub.</param>
+        /// <remarks>A source can carry a stale <see cref="RangeIndexStub.IsTransferred"/> when a checkpoint captured it after a
+        /// newer-version copy that recovery discarded; a destination inheriting it would never be flushed or evicted.</remarks>
+        /// <param name="valueSpan">The store value span containing the copied stub.</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal static void ClearFlushedFlag(Span<byte> valueSpan)
+        internal static void ResetCopiedStubFlags(Span<byte> valueSpan)
         {
-            ref var stub = ref Unsafe.As<byte, RangeIndexStub>(
-                ref MemoryMarshal.GetReference(valueSpan));
+            ref var stub = ref Unsafe.As<byte, RangeIndexStub>(ref MemoryMarshal.GetReference(valueSpan));
             stub.IsFlushed = false;
+            stub.IsTransferred = false;
         }
 
         /// <summary>

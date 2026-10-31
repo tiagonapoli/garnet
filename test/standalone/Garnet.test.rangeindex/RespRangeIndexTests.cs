@@ -6,10 +6,12 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Garnet.common;
 using Garnet.server;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;
+using Tsavorite.core;
 
 namespace Garnet.test
 {
@@ -2030,6 +2032,77 @@ namespace Garnet.test
                 ClassicAssert.AreEqual("new-value", (string)val,
                     "Post-recovery data must survive eviction (flush.bftree, not stale checkpoint)");
             }
+        }
+
+        /// <summary>
+        /// A checkpoint can capture the key's latest stub with <c>IsTransferred</c> set when a newer-version RIPROMOTE
+        /// or RIRESTORE copy marks it after the version shift; recovery discards that copy, so the flagged stub is latest
+        /// again. Restoring its tree must clear the flag, otherwise the record that owns the tree is never flushed or
+        /// evicted, and the tree leaks.
+        /// </summary>
+        [Test]
+        public void RIRecoveredStaleTransferredStubStillEvictsRestoredTreeTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "staletx", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "staletx", "pre-checkpoint", "original");
+
+                // Model the checkpoint image a concurrent newer-version copy leaves behind.
+                var keyBytes = GC.AllocateArray<byte>("staletx"u8.Length, pinned: true);
+                "staletx"u8.CopyTo(keyBytes);
+                var marker = new MarkLatestStubTransferred();
+                server.Provider.StoreWrapper.store.Log.IterateKeyVersions(ref marker, (FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
+                ClassicAssert.IsTrue(marker.Marked, "test setup: latest stub should be marked transferred");
+
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, tryRecover: true);
+            server.Start();
+
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                ClassicAssert.AreEqual("original", (string)db.Execute("RI.GET", "staletx", "pre-checkpoint"));
+                ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount, "Tree should be restored");
+                db.Execute("RI.SET", "staletx", "post-recovery", "new-value");
+
+                for (var i = 0; i < 2000; i++)
+                    db.StringSet($"fill{i:D4}", $"data{i:D4}");
+
+                ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "Restored tree must be evicted with its stub");
+                ClassicAssert.AreEqual("original", (string)db.Execute("RI.GET", "staletx", "pre-checkpoint"));
+                ClassicAssert.AreEqual("new-value", (string)db.Execute("RI.GET", "staletx", "post-recovery"));
+            }
+        }
+
+        private struct MarkLatestStubTransferred : IScanIteratorFunctions
+        {
+            public bool Marked;
+
+            public readonly bool OnStart(long beginAddress, long endAddress) => true;
+
+            public bool Reader<TSourceLogRecord>(in TSourceLogRecord logRecord, RecordMetadata recordMetadata, long numberOfRecords, out CursorRecordResult cursorRecordResult) where TSourceLogRecord : ISourceLogRecord
+            {
+                cursorRecordResult = CursorRecordResult.Accept;
+                RangeIndexManager.SetTransferredFlag(logRecord.ValueSpan);
+                Marked = true;
+                return false;
+            }
+
+            public readonly void OnStop(bool completed, long numberOfRecords) { }
+
+            public readonly void OnException(Exception exception, long numberOfRecords) { }
         }
 
         /// <summary>
