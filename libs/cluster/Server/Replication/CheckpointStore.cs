@@ -211,6 +211,7 @@ namespace Garnet.cluster
                 {
                     var hlogSize = storeWrapper.store.GetLogFileSize(curr.metadata.storeHlogToken);
                     storeWrapper.store.Log.ShiftBeginAddress(hlogSize.hybridLogFileStartAddress, truncateLog: true);
+                    clusterProvider.rangeIndexManager?.DeleteSupersededFlushFiles(hlogSize.hybridLogFileEndAddress);
                 }
                 catch (Exception ex)
                 {
