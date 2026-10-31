@@ -44,13 +44,12 @@ namespace Garnet.test
                 File.WriteAllBytes(Path.Combine(testDir, file), [1]);
 
             const long checkpointEnd = 0x250;
-            var replicatedBefore = ReplicatedFiles(manager, checkpointEnd);
 
             manager.DeleteSupersededFlushFiles(checkpointEnd);
 
             var remaining = Directory.GetFiles(testDir, "*.flush.bftree").Select(Path.GetFileName).Order().ToArray();
             CollectionAssert.AreEqual(new[] { FlushFile(TreeA, 0x200), FlushFile(TreeA, 0x300), FlushFile(TreeB, 0x50) }.Order().ToArray(), remaining);
-            CollectionAssert.AreEqual(replicatedBefore, ReplicatedFiles(manager, checkpointEnd), "the checkpoint must still replicate the same flush files");
+            CollectionAssert.AreEqual(new[] { FlushFile(TreeA, 0x200), FlushFile(TreeB, 0x50) }.Order().ToArray(), ReplicatedFiles(manager, checkpointEnd), "the checkpoint must still replicate the newest flush file of each tree");
         }
 
         private static string FlushFile(string hash, long address) => $"{hash}.{address:x16}.flush.bftree";
