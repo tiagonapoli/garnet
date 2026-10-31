@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -462,6 +463,43 @@ namespace BfTreeInterop.test
             {
                 if (File.Exists(snapshotPath))
                     File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
+        public void RepeatedSnapshots_DoNotSleepBetweenPhases()
+        {
+            const int snapshotCount = 10;
+            var snapshotPaths = new string[snapshotCount];
+            for (int i = 0; i < snapshotCount; i++)
+                snapshotPaths[i] = Path.Combine(Path.GetTempPath(), $"bftree_snap_{Guid.NewGuid():N}.bftree");
+
+            try
+            {
+                tree.Dispose();
+                tree = new BfTreeService(filePath: treePath, enableSnapshots: true, cbMinRecordSize: 4);
+                InsertTestData(20);
+
+                // Each snapshot previously slept 1 s after each of 3 phase transitions, so 10 snapshots took at least 30 s.
+                var stopwatch = Stopwatch.StartNew();
+                foreach (var path in snapshotPaths)
+                    BfTreeService.CprSnapshotByPtr(tree.NativePtr, path);
+                stopwatch.Stop();
+
+                Assert.That(stopwatch.Elapsed, Is.LessThan(TimeSpan.FromSeconds(15)));
+
+                tree.Dispose();
+                tree = BfTreeService.RecoverFromCprSnapshot(snapshotPaths[^1], false, StorageBackendType.Disk);
+                var results = tree.ScanWithCount("key:"u8, 100, ScanReturnField.Key);
+                Assert.That(results, Has.Count.EqualTo(20));
+            }
+            finally
+            {
+                foreach (var path in snapshotPaths)
+                {
+                    if (File.Exists(path))
+                        File.Delete(path);
+                }
             }
         }
 
