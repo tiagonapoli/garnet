@@ -62,6 +62,12 @@ namespace Garnet.cluster
         /// </summary>
         internal const int BrotliWindow = 18;
 
+        /// <summary>
+        /// File read size. Chunk-sized reads at queue depth one are latency-bound on virtual disks (134 MB/s for
+        /// 256 KB direct reads versus 708 MB/s for 4 MB in the soak containers), so chunks are served from a larger buffer.
+        /// </summary>
+        internal const int FileReadSize = 1 << 22;
+
         private readonly string filePath;
         private readonly int chunkSize;
         private readonly ILogger logger;
@@ -166,7 +172,7 @@ namespace Garnet.cluster
         /// <inheritdoc/>
         public async Task<DataSourceReadResult> ReadNextChunkAsync(CancellationToken cancellationToken = default)
         {
-            stream ??= new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: chunkSize, useAsync: true);
+            stream ??= new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: Math.Max(chunkSize, FileReadSize), FileOptions.Asynchronous | FileOptions.SequentialScan);
 
             var remaining = EndOffset - CurrentOffset;
             var bytesToRead = (int)Math.Min(remaining, chunkSize);
