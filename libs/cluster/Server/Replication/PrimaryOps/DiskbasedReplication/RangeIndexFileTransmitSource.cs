@@ -3,6 +3,7 @@
 
 using System;
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.client;
@@ -54,6 +55,8 @@ namespace Garnet.cluster
                     $"Replica error at RangeIndex header {DataSource.Type} {headerResp} keyHash={riDataSource.KeyHash}"));
 
             var stats = new SnapshotTransferStats();
+            var frame = new byte[RangeIndexFileDataSource.DefaultChunkSize + 1];
+            long compressedBytes = 0;
             var window = new SnapshotChunkWindow(timeout, resp => $"Replica error at RangeIndex TransmitAsync {DataSource.Type} {resp} [{DataSource.StartOffset},{DataSource.CurrentOffset},{DataSource.EndOffset}]", cancellationToken);
 
             // Stream file content in chunks, reading the next chunk while the current one is sent
@@ -68,7 +71,9 @@ namespace Garnet.cluster
                     var sendStart = Stopwatch.GetTimestamp();
                     stats.AddRead(sendStart - readStart);
 
-                    await window.AddAsync(gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, new Span<byte>(result.Data, 0, result.BytesRead))).ConfigureAwait(false);
+                    var frameLength = EncodeChunk(result.Data.AsSpan(0, result.BytesRead), frame);
+                    compressedBytes += frameLength;
+                    await window.AddAsync(gcs.ExecuteClusterSnapshotData(fileTokenBytes, (int)DataSource.Type, startAddress: result.ChunkStartAddress, frame.AsSpan(0, frameLength))).ConfigureAwait(false);
                     stats.AddSend(Stopwatch.GetTimestamp() - sendStart, result.BytesRead);
                 }
             }
@@ -89,6 +94,25 @@ namespace Garnet.cluster
                     $"Replica error at RangeIndex TransmitAsync Completion {DataSource.Type} {endResp}"));
 
             stats.Log(logger, "primary", DataSource.Type, $"{riDataSource.KeyHash}@{riDataSource.Address}");
+            logger?.LogInformation("[RangeIndexTransferCompression] type={type} keyHash={keyHash} rawBytes={raw} wireBytes={wire} ratio={ratio:F1}",
+                DataSource.Type, riDataSource.KeyHash, DataSource.CurrentOffset, compressedBytes, compressedBytes == 0 ? 0 : (double)DataSource.CurrentOffset / compressedBytes);
+        }
+
+        /// <summary>
+        /// Writes <paramref name="chunk"/> into <paramref name="frame"/> as a codec byte followed by the Brotli-compressed
+        /// chunk, or by the raw chunk when compression does not shrink it. Returns the frame length.
+        /// </summary>
+        internal static int EncodeChunk(ReadOnlySpan<byte> chunk, Span<byte> frame)
+        {
+            if (BrotliEncoder.TryCompress(chunk, frame[1..chunk.Length], out var written, RangeIndexFileDataSource.BrotliQuality, RangeIndexFileDataSource.BrotliWindow))
+            {
+                frame[0] = (byte)RangeIndexFileDataSource.ChunkCodec.Brotli;
+                return written + 1;
+            }
+
+            frame[0] = (byte)RangeIndexFileDataSource.ChunkCodec.Raw;
+            chunk.CopyTo(frame[1..]);
+            return chunk.Length + 1;
         }
 
         public void Dispose()

@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using Garnet.common;
 using Garnet.server;
@@ -19,6 +20,7 @@ namespace Garnet.cluster
     {
         private readonly string filePath;
         private readonly ILogger logger;
+        private readonly byte[] decodeBuffer;
         private FileStream stream;
 
         public CheckpointFileType Type { get; }
@@ -30,13 +32,16 @@ namespace Garnet.cluster
         /// <param name="type">The checkpoint file type.</param>
         /// <param name="token">The checkpoint token.</param>
         /// <param name="filePath">Full path to write the received file.</param>
+        /// <param name="framed">Whether each content chunk is prefixed with a <see cref="RangeIndexFileDataSource.ChunkCodec"/> byte.</param>
         /// <param name="logger">Optional logger.</param>
-        private RangeIndexFileDataSink(CheckpointFileType type, Guid token, string filePath, ILogger logger = null)
+        private RangeIndexFileDataSink(CheckpointFileType type, Guid token, string filePath, bool framed, ILogger logger = null)
         {
             Type = type;
             Token = token;
             this.filePath = filePath;
             this.logger = logger;
+            if (framed)
+                decodeBuffer = new byte[RangeIndexFileDataSource.DefaultChunkSize];
 
             // Ensure the target directory exists
             var dir = Path.GetDirectoryName(filePath);
@@ -67,6 +72,7 @@ namespace Garnet.cluster
 
             var keyHash = Encoding.ASCII.GetString(metadata[..RangeIndexFileDataSource.KeyHashLength]);
             string filePath;
+            int baseLength;
 
             if (type == CheckpointFileType.STORE_RANGEINDEX_FLUSH)
             {
@@ -74,13 +80,16 @@ namespace Garnet.cluster
                     ExceptionUtils.ThrowException(new GarnetException($"RangeIndex flush metadata too short ({metadata.Length} bytes), expected {RangeIndexFileDataSource.FlushMetadataLength}"));
                 var address = BinaryPrimitives.ReadInt64LittleEndian(metadata[RangeIndexFileDataSource.KeyHashLength..RangeIndexFileDataSource.FlushMetadataLength]);
                 filePath = riManager.LogFlushPath(keyHash, address);
+                baseLength = RangeIndexFileDataSource.FlushMetadataLength;
             }
             else
             {
                 filePath = riManager.CheckpointSnapshotPath(keyHash, token);
+                baseLength = RangeIndexFileDataSource.KeyHashLength;
             }
 
-            return new RangeIndexFileDataSink(type, token, filePath, logger);
+            var framed = metadata.Length > baseLength && metadata[baseLength] == RangeIndexFileDataSource.FramedChunkFormat;
+            return new RangeIndexFileDataSink(type, token, filePath, framed, logger);
         }
 
         /// <inheritdoc/>
@@ -88,7 +97,27 @@ namespace Garnet.cluster
         {
             if (stream.Position != startAddress)
                 ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: expected stream position {startAddress} but found {stream.Position} for {filePath}"));
-            stream.Write(data);
+
+            if (decodeBuffer == null)
+            {
+                stream.Write(data);
+                return;
+            }
+
+            switch ((RangeIndexFileDataSource.ChunkCodec)data[0])
+            {
+                case RangeIndexFileDataSource.ChunkCodec.Raw:
+                    stream.Write(data[1..]);
+                    break;
+                case RangeIndexFileDataSource.ChunkCodec.Brotli:
+                    if (!BrotliDecoder.TryDecompress(data[1..], decodeBuffer, out var decoded))
+                        ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: failed to decompress chunk at {startAddress} for {filePath}"));
+                    stream.Write(decodeBuffer, 0, decoded);
+                    break;
+                default:
+                    ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: unknown chunk codec {data[0]} at {startAddress} for {filePath}"));
+                    break;
+            }
         }
 
         /// <inheritdoc/>

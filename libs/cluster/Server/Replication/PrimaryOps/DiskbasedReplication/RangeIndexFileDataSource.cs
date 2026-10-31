@@ -38,6 +38,30 @@ namespace Garnet.cluster
         /// </summary>
         internal const int FlushMetadataLength = KeyHashLength + AddressLength;
 
+        /// <summary>
+        /// Trailing metadata byte announcing that every content chunk is prefixed with a <see cref="ChunkCodec"/> byte.
+        /// </summary>
+        internal const byte FramedChunkFormat = 1;
+
+        /// <summary>
+        /// Encoding of a framed content chunk, carried in its first byte.
+        /// </summary>
+        internal enum ChunkCodec : byte
+        {
+            Raw = 0,
+            Brotli = 1,
+        }
+
+        /// <summary>
+        /// Brotli quality used for content chunks; level 1 compresses at ~1 GB/s, far above the replication link rate.
+        /// </summary>
+        internal const int BrotliQuality = 1;
+
+        /// <summary>
+        /// Brotli window (log2 bytes); covers a whole chunk.
+        /// </summary>
+        internal const int BrotliWindow = 18;
+
         private readonly string filePath;
         private readonly int chunkSize;
         private readonly ILogger logger;
@@ -86,14 +110,15 @@ namespace Garnet.cluster
 
             if (Type == CheckpointFileType.STORE_RANGEINDEX_FLUSH)
             {
-                var metadata = new byte[FlushMetadataLength];
+                var metadata = new byte[FlushMetadataLength + 1];
                 Buffer.BlockCopy(keyHashBytes, 0, metadata, 0, KeyHashLength);
                 BinaryPrimitives.WriteInt64LittleEndian(metadata.AsSpan(KeyHashLength), Address);
+                metadata[FlushMetadataLength] = FramedChunkFormat;
                 return metadata;
             }
 
             // Snapshot: keyHash only
-            return keyHashBytes;
+            return [.. keyHashBytes, FramedChunkFormat];
         }
 
         /// <summary>
