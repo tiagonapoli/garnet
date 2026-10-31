@@ -410,8 +410,13 @@ namespace Tsavorite.core
         }
 
         /// <inheritdoc/>
+        /// <remarks>Overrides must call this method.</remarks>
         public virtual void Reset()
         {
+            // A reset log may next recover a checkpoint whose segments were written by another device instance and begin
+            // before this instance's earlier truncation point, so forget the range as a freshly opened device would.
+            startSegment = 0;
+            endSegment = -1;
         }
     }
 }

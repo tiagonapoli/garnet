@@ -149,6 +149,7 @@ namespace Tsavorite.core
         /// <inheritdoc />
         public override void Reset()
         {
+            base.Reset();
             DrainPendingIO();
             while (logHandles.Count > 0)
             {

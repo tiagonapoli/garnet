@@ -167,6 +167,7 @@ namespace Tsavorite.core
         /// <inheritdoc />
         public override void Reset()
         {
+            base.Reset();
             while (logHandles.Count > 0)
             {
                 foreach (var handle in logHandles)
