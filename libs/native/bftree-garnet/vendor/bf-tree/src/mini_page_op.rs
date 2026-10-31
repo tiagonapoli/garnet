@@ -465,7 +465,7 @@ impl<'a> LeafEntryXLocked<'a> {
         let page_loc = self.raw_guard.deref().clone();
         match page_loc {
             PageLocation::Base(offset) => {
-                assert!(self.load_base_page(offset).next_level.is_null());
+                // Do not read the page back: dropping a large tree would otherwise read its entire file.
                 self.file_handle.dealloc_offset(offset);
             }
             PageLocation::Mini(ptr) | PageLocation::Full(ptr) => {
