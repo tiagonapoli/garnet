@@ -89,6 +89,9 @@ namespace Garnet.cluster
                 GarnetAsserts.Assert(IsRecovering);
                 GarnetClientSession gcs = null;
                 resetHandler ??= new CancellationTokenSource();
+                var totalWatch = System.Diagnostics.Stopwatch.StartNew();
+                var phaseWatch = System.Diagnostics.Stopwatch.StartNew();
+                long connectMs = 0, resetMs = 0, suspendMs = 0, recoverAofMs = 0;
                 try
                 {
                     // Immediately try to connect to a primary, so we FAIL
@@ -113,6 +116,8 @@ namespace Garnet.cluster
                         authPassword: clusterProvider.ClusterPassword,
                         clientName: nameof(TryReplicateDiskbasedSyncAsync));
                     await gcs.ConnectAsync((int)clusterProvider.serverOptions.ReplicaSyncTimeout.TotalMilliseconds, linkedCts.Token).ConfigureAwait(false);
+                    connectMs = phaseWatch.ElapsedMilliseconds;
+                    phaseWatch.Restart();
 
                     // The primary sync now owns the store contents
                     localRecoveryDeferred = false;
@@ -151,9 +156,13 @@ namespace Garnet.cluster
                     {
                         vectorManager?.ResumeCleanup();
                     }
+                    resetMs = phaseWatch.ElapsedMilliseconds;
+                    phaseWatch.Restart();
 
                     // Suspend background tasks that may interfere with AOF
                     await storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
+                    suspendMs = phaseWatch.ElapsedMilliseconds;
+                    phaseWatch.Restart();
 
                     // Send request to primary
                     //      Primary will initiate background task and start sending checkpoint data
@@ -167,6 +176,8 @@ namespace Garnet.cluster
                     logger?.LogCheckpointEntry(LogLevel.Information, nameof(ReplicaSyncAttachTaskAsync), cEntry);
 
                     await storeWrapper.RecoverAOFAsync().ConfigureAwait(false);
+                    recoverAofMs = phaseWatch.ElapsedMilliseconds;
+                    phaseWatch.Restart();
                     logger?.LogInformation("InitiateReplicaSync: AOF BeginAddress:{beginAddress} AOF TailAddress:{tailAddress}", storeWrapper.appendOnlyFile.Log.BeginAddress, storeWrapper.appendOnlyFile.Log.TailAddress);
 
                     var beginAddress = storeWrapper.appendOnlyFile.Log.BeginAddress;
@@ -186,6 +197,8 @@ namespace Garnet.cluster
                         cEntry.ToByteArray(),
                         beginAddress.Span,
                         tailAddress.Span).WaitAsync(storeWrapper.runtimeConfig.GetTimeSpan(ServerConfigType.REPL_ATTACH_TIMEOUT), linkedCts.Token).ConfigureAwait(false);
+                    logger?.LogInformation("[ResyncTiming] side=replica connectMs={connectMs} resetMs={resetMs} suspendMs={suspendMs} recoverAofMs={recoverAofMs} primarySyncMs={primarySyncMs} totalMs={totalMs}",
+                        connectMs, resetMs, suspendMs, recoverAofMs, phaseWatch.ElapsedMilliseconds, totalWatch.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
@@ -296,6 +309,7 @@ namespace Garnet.cluster
             {
                 errorMessage = [];
                 UpdateLastPrimarySyncTime();
+                var recoverWatch = System.Diagnostics.Stopwatch.StartNew();
 
                 logger?.LogInformation("Replica Recover Store: {storeVersion}>[{sIndexToken} {sHlogToken}]",
                     remoteCheckpoint.metadata.storeVersion,
@@ -310,6 +324,8 @@ namespace Garnet.cluster
                     recoverStoreFromToken,
                     remoteCheckpoint.metadata).AsTask().GetAwaiter().GetResult();
 #pragma warning restore VSTHRD002
+                var recoverCheckpointMs = recoverWatch.ElapsedMilliseconds;
+                recoverWatch.Restart();
 
                 if (replayAOFMap > 0)
                 {
@@ -319,6 +335,8 @@ namespace Garnet.cluster
                         replayUntil[sublogIdx] = (((1UL) << sublogIdx) > 0) ? recoveredReplicationOffset[sublogIdx] : beginAddress[sublogIdx];
                     recoveredReplicationOffset = storeWrapper.ReplayAOF(replayUntil);
                 }
+                var replayMs = recoverWatch.ElapsedMilliseconds;
+                recoverWatch.Restart();
 
                 logger?.LogInformation("Initializing AOF");
                 storeWrapper.appendOnlyFile.Log.Initialize(beginAddress, recoveredReplicationOffset);
@@ -355,6 +373,8 @@ namespace Garnet.cluster
                 // This is necessary to ensure that the stored procedure can perform write operations if needed
                 clusterProvider.replicationManager.aofProcessor.SetInternalWriteSession();
 
+                logger?.LogInformation("[ResyncTiming] side=replica-recover fullCheckpoint={fullCheckpoint} replayAofMap={replayAofMap} recoverCheckpointMs={recoverCheckpointMs} replayMs={replayMs} finalizeMs={finalizeMs}",
+                    recoverStoreFromToken, replayAOFMap, recoverCheckpointMs, replayMs, recoverWatch.ElapsedMilliseconds);
                 return this.replicationOffset;
             }
             catch (Exception ex)

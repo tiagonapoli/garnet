@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
@@ -107,6 +108,9 @@ namespace Garnet.cluster
                 logger: logger);
             CheckpointEntry localEntry = default;
             AofSyncDriver aofSyncDriver = null;
+            var totalWatch = Stopwatch.StartNew();
+            var phaseWatch = Stopwatch.StartNew();
+            long acquireMs = 0, connectMs = 0, validateMs = 0, transferMs = 0, recoverMs = 0;
 
             try
             {
@@ -117,8 +121,12 @@ namespace Garnet.cluster
 
                 (localEntry, aofSyncDriver) = await AcquireCheckpointEntryAsync().ConfigureAwait(false);
                 logger?.LogInformation("Checkpoint search completed");
+                acquireMs = phaseWatch.ElapsedMilliseconds;
+                phaseWatch.Restart();
 
                 await gcs.ConnectAsync((int)storeWrapper.serverOptions.ReplicaSyncTimeout.TotalMilliseconds, cts.Token).ConfigureAwait(false);
+                connectMs = phaseWatch.ElapsedMilliseconds;
+                phaseWatch.Restart();
 
                 var index_size = -1L;
                 var hlog_size = default(LogFileInfo);
@@ -131,6 +139,9 @@ namespace Garnet.cluster
                     if (retryCount-- <= 0)
                         throw new GarnetException("Failed to validate metadata!");
                 }
+
+                validateMs = phaseWatch.ElapsedMilliseconds;
+                phaseWatch.Restart();
 
                 #region sendStoresSnapshotData
                 if (!skipLocalMainStoreCheckpoint)
@@ -155,6 +166,9 @@ namespace Garnet.cluster
                     await checkpointTransmissionDriver.SendCheckpointAsync(cts.Token).ConfigureAwait(false);
                 }
                 #endregion
+
+                transferMs = phaseWatch.ElapsedMilliseconds;
+                phaseWatch.Restart();
 
                 #region startAofSync
                 var recoverFromRemote = !skipLocalMainStoreCheckpoint;
@@ -185,6 +199,8 @@ namespace Garnet.cluster
                     beginAddress.Span,
                     checkpointAofBeginAddress.Span).WaitAsync(storeWrapper.runtimeConfig.GetTimeSpan(ServerConfigType.REPL_ATTACH_TIMEOUT), cts.Token).ConfigureAwait(false);
                 var syncFromAofAddress = AofAddress.FromString(resp);
+                recoverMs = phaseWatch.ElapsedMilliseconds;
+                phaseWatch.Restart();
 
                 // Assert that AOF address the replica will be requesting can be served, except in case of:
                 // Possible AOF data loss: { using null AOF device } OR { main memory replication AND no on-demand checkpoints }
@@ -202,6 +218,10 @@ namespace Garnet.cluster
                     throw new GarnetException("Failed trying to try update replication task");
                 if (!clusterProvider.replicationManager.TryConnectToReplica(replicaNodeId, ref syncFromAofAddress, aofSyncDriver, out _))
                     throw new GarnetException("Failed connecting to replica for aofSync");
+
+                var primaryTail = clusterProvider.storeWrapper.appendOnlyFile.Log.TailAddress;
+                logger?.LogInformation("[ResyncTiming] side=primary replica={replicaId} fullCheckpoint={fullCheckpoint} replayAofMap={replayAofMap} acquireMs={acquireMs} connectMs={connectMs} validateMs={validateMs} transferMs={transferMs} replicaRecoverMs={recoverMs} aofStartMs={aofStartMs} totalMs={totalMs} syncFrom={syncFrom} primaryTail={primaryTail} aofLagBytes={aofLagBytes}",
+                    replicaNodeId, !skipLocalMainStoreCheckpoint, replayAOFMap, acquireMs, connectMs, validateMs, transferMs, recoverMs, phaseWatch.ElapsedMilliseconds, totalWatch.ElapsedMilliseconds, syncFromAofAddress, primaryTail, primaryTail[0] - syncFromAofAddress[0]);
                 #endregion
             }
             catch (Exception ex)
