@@ -23,6 +23,12 @@ namespace Tsavorite.core
         FlushBegin,
 
         /// <summary>
+        /// PERSISTENCE_CALLBACK phase, after the checkpoint's log flush completed and before its metadata is written.
+        /// The application should finish persisting external resources that recovery of this checkpoint reads.
+        /// </summary>
+        PersistenceBegin,
+
+        /// <summary>
         /// REST phase, after the checkpoint is fully persisted. The application
         /// should clean up outdated external checkpoint artifacts.
         /// </summary>

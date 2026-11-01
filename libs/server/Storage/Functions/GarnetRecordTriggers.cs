@@ -183,6 +183,9 @@ namespace Garnet.server
                     rangeIndexManager?.ClearCheckpointBarrier();
                     ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Checkpoint_Pause_At_Flush_Begin);
                     break;
+                case CheckpointTrigger.PersistenceBegin:
+                    rangeIndexManager?.WaitForFlushSnapshotsBeforeCheckpointPersist(checkpointToken);
+                    break;
                 case CheckpointTrigger.CheckpointCompleted:
                     vectorManager?.CheckpointCompleted();
                     break;

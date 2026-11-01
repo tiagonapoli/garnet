@@ -78,6 +78,9 @@ namespace Garnet.test.cluster
             return Path.Combine(context.TestFolder, port.ToString(), "Store", "rangeindex");
         }
 
+        /// <summary>Waits for the flush snapshots a node queued for completed page flushes; flush files are written in the background.</summary>
+        void WaitForFlushSnapshots(int nodeIndex) => context.nodes[nodeIndex].Provider.StoreWrapper.rangeIndexManager.WaitForPendingFlushSnapshots("test");
+
         /// <summary>
         /// Create RI keys on primary and allow them to flow to the replica through AOF.
         /// Verify RI.GET returns correct values on replica.
@@ -171,6 +174,7 @@ namespace Garnet.test.cluster
 
             // Insert fillers and poll until FlushedUntilAddress reaches the captured tail
             await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, tailAfterRiInsert);
+            WaitForFlushSnapshots(primaryIndex);
 
             // Verify flush.bftree files were created on the primary (confirms flush path was triggered).
             var primaryRiLogRoot = GetRiLogRoot(primaryIndex);
@@ -388,6 +392,7 @@ namespace Garnet.test.cluster
 
             var tailAfterRiInsert = long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger));
             await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, tailAfterRiInsert);
+            WaitForFlushSnapshots(primaryIndex);
             ClassicAssert.IsNotEmpty(Directory.GetFiles(GetRiLogRoot(primaryIndex), "*.flush.bftree"), "the checkpoint must carry RangeIndex files for this scenario to be under test");
 
             var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
@@ -497,6 +502,7 @@ namespace Garnet.test.cluster
             foreach (var index in new[] { "idx1", "idx2" })
                 ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", [index, "field0010", "value0010"], logger: context.logger));
             await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger)));
+            WaitForFlushSnapshots(primaryIndex);
 
             static Dictionary<string, string[]> FlushFilesByKey(string root) => Directory.GetFiles(root, "*.flush.bftree").Select(Path.GetFileName).GroupBy(name => name.Split('.')[0]).ToDictionary(g => g.Key, g => g.Order().ToArray());
 
