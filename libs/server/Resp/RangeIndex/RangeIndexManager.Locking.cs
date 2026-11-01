@@ -338,12 +338,13 @@ namespace Garnet.server
                         return false;
                     }
 
+                    var baselineSnapshot = existing?.StagedFrom is { } staged && staged.Matches(workingPath) ? staged.Source : null;
                     var bfTree = BfTreeService.RecoverFromCprSnapshot(
                         workingPath,
                         enableSnapshots: true,
                         (StorageBackendType)stub.StorageBackend);
 
-                    RegisterIndex(bfTree, keyHash, keySpan);
+                    RegisterIndex(bfTree, keyHash, keySpan, baselineSnapshot);
 
                     // Re-look-up to use the WINNER's pointer (handles concurrent restorer race).
                     if (!liveIndexes.TryGetValue(keyId, out var winner) || winner?.Tree == null)
