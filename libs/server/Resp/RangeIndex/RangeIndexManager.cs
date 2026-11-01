@@ -78,6 +78,9 @@ namespace Garnet.server
         /// </summary>
         private readonly ConcurrentDictionary<Guid, TreeEntry> liveIndexes = new();
 
+        /// <summary>Activated entries by native tree pointer, so writers holding only a stub can count mutations.</summary>
+        private readonly ConcurrentDictionary<nint, TreeEntry> entriesByTree = new();
+
         private readonly ILogger logger;
 
         /// <summary>
@@ -141,6 +144,35 @@ namespace Garnet.server
             /// Used to construct file paths under both roots.</summary>
             public readonly string HashPrefix;
 
+            /// <summary>Immutable snapshot that <c>data.bftree</c> was last staged from for this pending entry; null when unknown.</summary>
+            public StagedCopy StagedFrom;
+
+            /// <summary>
+            /// Activates a pending entry with <paramref name="tree"/>, opened from an unmodified copy of
+            /// <paramref name="baselineSnapshot"/> when it is non-null, so an unchanged tree's next snapshot can link that file.
+            /// </summary>
+            /// <returns><c>false</c> if the entry already has a tree.</returns>
+            public bool TryActivate(BfTreeService tree, string baselineSnapshot)
+            {
+                while (!TryClaimSnapshot())
+                    Thread.Yield();
+                try
+                {
+                    if (Volatile.Read(ref Tree) != null)
+                        return false;
+
+                    lastSnapshotPath = baselineSnapshot;
+                    lastSnapshotMutations = Volatile.Read(ref MutationCount);
+                    StagedFrom = null;
+                    Volatile.Write(ref Tree, tree);
+                    return true;
+                }
+                finally
+                {
+                    ReleaseSnapshot();
+                }
+            }
+
             /// <summary>
             /// 1 while this tree is being snapshotted for checkpoint, 0 otherwise.
             /// Set at <see cref="CheckpointTrigger.VersionShift"/> time, cleared after snapshot completes.
@@ -175,15 +207,33 @@ namespace Garnet.server
             /// internal <c>snapshot_in_progress</c> flag, so each caller must hold the claim
             /// while it snapshots. bftree takes the destination path as a <c>cpr_snapshot</c>
             /// argument and writes a fresh self-contained file, so we snapshot straight to
-            /// <paramref name="destinationPath"/>.
+            /// <paramref name="destinationPath"/>. When <paramref name="allowLink"/> is set and the tree has not been mutated
+            /// since its last such snapshot, hard-links that immutable snapshot instead of writing a new one.
             /// </summary>
-            public void SnapshotUnderClaim(string destinationPath)
+            /// <returns><c>true</c> if the destination was hard-linked to the previous snapshot.</returns>
+            public bool SnapshotUnderClaim(string destinationPath, bool allowLink = false)
             {
                 while (!TryClaimSnapshot())
                     Thread.Yield();
                 try
                 {
-                    BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                    // Writers count a mutation only after it completes, so a snapshot taken after this read reflects every counted one.
+                    var mutations = Volatile.Read(ref MutationCount);
+                    var linked = allowLink && lastSnapshotPath != null && mutations == lastSnapshotMutations && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, destinationPath);
+                    if (!linked)
+                    {
+                        // The destination may be a hard link to another snapshot, which writing in place would corrupt.
+                        RangeIndexFileLinks.DeleteIfExists(destinationPath);
+                        BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                    }
+
+                    if (allowLink)
+                    {
+                        lastSnapshotPath = destinationPath;
+                        lastSnapshotMutations = mutations;
+                    }
+
+                    return linked;
                 }
                 finally
                 {
@@ -191,11 +241,35 @@ namespace Garnet.server
                 }
             }
 
+            /// <summary>Completed native inserts and deletes on <see cref="Tree"/>.</summary>
+            public long MutationCount;
+
+            // Guarded by the snapshot claim.
+            string lastSnapshotPath;
+            long lastSnapshotMutations;
+
             public TreeEntry(BfTreeService tree, long keyHash, string hashPrefix)
             {
                 Tree = tree;
                 KeyHash = keyHash;
                 HashPrefix = hashPrefix;
+            }
+        }
+
+        /// <summary>A copy of an immutable snapshot into <c>data.bftree</c>, identified by the copy's length and write time.</summary>
+        internal sealed record StagedCopy(string Source, long Length, DateTime LastWriteTimeUtc)
+        {
+            public static StagedCopy Describe(string source, string dataPath)
+            {
+                var info = new FileInfo(dataPath);
+                return new StagedCopy(source, info.Length, info.LastWriteTimeUtc);
+            }
+
+            /// <summary>Whether <paramref name="dataPath"/> is still this copy, unwritten since staging.</summary>
+            public bool Matches(string dataPath)
+            {
+                var info = new FileInfo(dataPath);
+                return info.Exists && info.Length == Length && info.LastWriteTimeUtc == LastWriteTimeUtc;
             }
         }
 
@@ -393,11 +467,14 @@ namespace Garnet.server
         /// Register a BfTreeService in the live index dictionary after successful creation or restore.
         /// Cold path — called once per RI.CREATE or activation (RestoreTree).
         /// </summary>
-        internal void RegisterIndex(BfTreeService bfTree, long keyHash, ReadOnlySpan<byte> keyBytes)
+        internal void RegisterIndex(BfTreeService bfTree, long keyHash, ReadOnlySpan<byte> keyBytes, string baselineSnapshot = null)
         {
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var keyId = KeyId(keyBytes);
             var newEntry = new TreeEntry(bfTree, keyHash, hashPrefix);
+
+            // Track the tree before its entry becomes visible to snapshots, so no completed write goes uncounted after one.
+            entriesByTree[bfTree.NativePtr] = newEntry;
             if (liveIndexes.TryAdd(keyId, newEntry))
                 return; // First registration for this key — done.
 
@@ -408,16 +485,17 @@ namespace Garnet.server
             //     RegisterIndex, so concurrent RegisterIndex on the same key is impossible.
             //     The only legitimate prior entry is a pending one (Tree==null) registered
             //     earlier by PreStageAndRegisterPending; we activate it in place.
-            // CompareExchange makes the activation atomic so even a future caller-invariant
+            // TryActivate publishes the tree under the snapshot claim, so even a future caller-invariant
             // violation cannot result in two threads both believing they activated the entry
-            // (one would observe a non-null prior in CompareExchange and dispose its duplicate).
+            // (the second observes a non-null tree and disposes its duplicate).
             if (liveIndexes.TryGetValue(keyId, out var existing))
             {
-                var prior = Interlocked.CompareExchange(ref existing.Tree, bfTree, null);
-                if (prior is null)
+                entriesByTree[bfTree.NativePtr] = existing;
+                if (existing.TryActivate(bfTree, baselineSnapshot))
                     return; // We activated the pending entry.
             }
 
+            ForgetTree(bfTree);
             logger?.LogError(
                 "RegisterIndex: liveIndexes entry for {Hash} is unexpectedly already activated. " +
                 "Caller invariant violated (RICREATE should fire only on Record.Created=true; " +
@@ -473,6 +551,7 @@ namespace Garnet.server
             var keyId = KeyId(keyBytes);
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
+                ForgetTree(entry.Tree);
                 try { entry.Tree?.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree on unregister"); }
                 return true;
@@ -492,6 +571,22 @@ namespace Garnet.server
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree {Hash}", kvp.Value.HashPrefix); }
             }
             liveIndexes.Clear();
+            entriesByTree.Clear();
+        }
+
+        /// <summary>Stops tracking mutations of <paramref name="tree"/>; must precede its disposal so a reused native pointer is never confused with it.</summary>
+        private void ForgetTree(BfTreeService tree)
+        {
+            if (tree != null)
+                _ = entriesByTree.TryRemove(tree.NativePtr, out _);
+        }
+
+        /// <summary>Records a completed insert or delete on <paramref name="treePtr"/>, invalidating snapshot reuse for its tree.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void NoteTreeMutated(nint treePtr)
+        {
+            if (entriesByTree.TryGetValue(treePtr, out var entry))
+                _ = Interlocked.Increment(ref entry.MutationCount);
         }
 
         /// <summary>
@@ -554,7 +649,9 @@ namespace Garnet.server
                 File.Copy(snapshotPath, dataPath, overwrite: true);
 
                 var keyId = KeyId(keyBytes);
-                _ = liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix));
+                var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
+                if (entry.Tree == null)
+                    entry.StagedFrom = StagedCopy.Describe(snapshotPath, dataPath);
             }
             catch (Exception ex)
             {
@@ -709,7 +806,7 @@ namespace Garnet.server
                     SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                     return;
                 }
-                entry.SnapshotUnderClaim(flushPath);
+                _ = entry.SnapshotUnderClaim(flushPath, allowLink: true);
                 SetFlushedFlag(valueSpan);
             }
             else
@@ -753,7 +850,7 @@ namespace Garnet.server
                 // (RestoreTree completed before we acquired the shared lock).
                 if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null)
                 {
-                    entry.SnapshotUnderClaim(flushPath);
+                    _ = entry.SnapshotUnderClaim(flushPath, allowLink: true);
                     SetFlushedFlag(valueSpan);
                     return;
                 }
@@ -766,6 +863,7 @@ namespace Garnet.server
                     return; // do NOT set IsFlushed
                 }
                 // Overwrite: a file already here is from the run before a restart (see SnapshotTreeForFlush).
+                RangeIndexFileLinks.DeleteIfExists(flushPath);
                 File.Copy(dataPath, flushPath, overwrite: true);
                 SetFlushedFlag(valueSpan);
             }
@@ -846,7 +944,7 @@ namespace Garnet.server
                             // Snapshot straight to the token-tagged checkpoint destination under
                             // the per-tree claim (serializes against concurrent OnFlush / migration
                             // on the same tree).
-                            entry.SnapshotUnderClaim(checkpointPath);
+                            _ = entry.SnapshotUnderClaim(checkpointPath, allowLink: true);
                         }
                         else
                         {
@@ -855,7 +953,10 @@ namespace Garnet.server
                             // correct source. No live tree means no concurrent writer.
                             var dataPath = LogDataPath(entry.HashPrefix);
                             if (File.Exists(dataPath))
+                            {
+                                RangeIndexFileLinks.DeleteIfExists(checkpointPath);
                                 File.Copy(dataPath, checkpointPath, overwrite: true);
+                            }
                             else
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: data.bftree missing for pending {Hash}", entry.HashPrefix);
                         }

@@ -43,7 +43,9 @@ namespace Garnet.cluster
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
 
-            // Open for writing (overwrite any partial file from a prior failed attempt)
+            // Replace rather than truncate: the target may be a hard link shared with another snapshot file.
+            if (File.Exists(filePath))
+                File.Delete(filePath);
             stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1 << 17, useAsync: false);
         }
 

@@ -316,6 +316,7 @@ namespace Garnet.server
             // file handles, then File.Delete (otherwise the unlink races with the close).
             if (tree != null)
             {
+                ForgetTree(tree);
                 try { tree.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Deferred dispose failed for BfTree"); }
             }
