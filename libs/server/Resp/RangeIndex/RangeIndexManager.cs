@@ -1030,6 +1030,32 @@ namespace Garnet.server
             }
         }
 
+        /// <summary>Deletes every flush file under the log root, for when the hybrid log they belong to is discarded.</summary>
+        /// <param name="reason">Why the files are discarded; logged.</param>
+        public void DeleteAllFlushFiles(string reason)
+        {
+            try
+            {
+                var start = Stopwatch.GetTimestamp();
+                var deleted = 0;
+                long deletedBytes = 0;
+                foreach (var (path, _, _) in new List<(string, string, long)>(EnumerateFlushFiles()))
+                {
+                    if (TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
+                }
+
+                LogFlushFileDeletion(reason, 0, deleted, deletedBytes, start);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "DeleteAllFlushFiles: enumeration failed under {Root}", riLogRoot);
+            }
+        }
+
         private bool TryDeleteFlushFile(string path, out long bytes)
         {
             bytes = TryGetFileLength(path);

@@ -21,12 +21,26 @@ namespace Garnet.cluster
 
         // Active sink (one at a time, matching the sequential protocol)
         ISnapshotDataSink activeSink;
+        bool localFlushFilesPurged;
 
         public ReceiveCheckpointHandler(ClusterProvider clusterProvider, ILogger logger = null)
         {
             this.clusterProvider = clusterProvider;
             this.logger = logger;
             cts = new();
+        }
+
+        /// <summary>
+        /// The primary only ships checkpoint data when the replica adopts the primary's checkpoint, whose hybrid log
+        /// address space is unrelated to the flush files this replica wrote, so those files must not outlive it.
+        /// </summary>
+        void PurgeLocalFlushFilesOnce()
+        {
+            if (localFlushFilesPurged)
+                return;
+
+            localFlushFilesPurged = true;
+            clusterProvider.rangeIndexManager?.DeleteAllFlushFiles("full-sync");
         }
 
         public void Dispose()
@@ -51,6 +65,7 @@ namespace Garnet.cluster
         public void ProcessFileSegment(Guid token, CheckpointFileType type, long startAddress, ReadOnlySpan<byte> data)
         {
             clusterProvider.replicationManager.UpdateLastPrimarySyncTime();
+            PurgeLocalFlushFilesOnce();
 
             if (data.Length == 0)
             {
@@ -84,6 +99,7 @@ namespace Garnet.cluster
         public void ProcessMetadata(Guid token, CheckpointFileType type, ReadOnlySpan<byte> checkpointMetadata)
         {
             clusterProvider.replicationManager.UpdateLastPrimarySyncTime();
+            PurgeLocalFlushFilesOnce();
             using var sink = new MetadataDataSink(type, token, clusterProvider);
             sink.WriteChunk(0, checkpointMetadata);
             sink.Complete();
@@ -105,6 +121,7 @@ namespace Garnet.cluster
         public void ProcessSnapshotData(Guid token, CheckpointFileType type, long startAddress, ReadOnlySpan<byte> data)
         {
             clusterProvider.replicationManager.UpdateLastPrimarySyncTime();
+            PurgeLocalFlushFilesOnce();
 
             // Single-message payload (startAddress == -1)
             // NOTE: Use for single write metadata or to configure initialization parameters for shipping multi-segments files.
