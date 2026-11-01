@@ -2,9 +2,9 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Hashing;
@@ -1132,6 +1132,32 @@ namespace Garnet.server
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "DeleteSupersededFlushFiles: enumeration failed under {Root}", riLogRoot);
+            }
+        }
+
+        /// <summary>Deletes every flush file under the log root, for when the hybrid log they belong to is discarded.</summary>
+        /// <param name="reason">Why the files are discarded; logged.</param>
+        public void DeleteAllFlushFiles(string reason)
+        {
+            try
+            {
+                var start = Stopwatch.GetTimestamp();
+                var deleted = 0;
+                long deletedBytes = 0;
+                foreach (var (path, _, _) in new List<(string, string, long)>(EnumerateFlushFiles()))
+                {
+                    if (TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
+                }
+
+                LogFlushFileDeletion(reason, 0, deleted, deletedBytes, start);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "DeleteAllFlushFiles: enumeration failed under {Root}", riLogRoot);
             }
         }
 
