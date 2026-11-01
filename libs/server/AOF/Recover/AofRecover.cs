@@ -60,9 +60,11 @@ namespace Garnet.server
                     // Set the tail address for replay recovery to the tail address of the AOF if none specified
                     untilAddress.SetValueIf(appendOnlyFile.Log.TailAddress, -1);
 
+                    maxReplayedStoreVersion = 0;
                     var recordsReplayed = storeWrapper.serverOptions.MultiLogEnabled ? MultiLogRecover(appendOnlyFile, db.Id, untilAddress) : SingleLogRecover(appendOnlyFile, db.Id, 0, untilAddress);
 
                     _ = Interlocked.Add(ref total_number_of_replayed_records, recordsReplayed);
+                    AdvanceStoreVersionPastReplayedRecords(db);
                     return untilAddress;
                 }
                 catch (Exception ex)
@@ -75,6 +77,23 @@ namespace Garnet.server
 
                 return AofAddress.Create(storeWrapper.serverOptions.AofPhysicalSublogCount, -1);
             }
+        }
+
+        /// <summary>
+        /// Moves the store version to at least the highest version stamped on any replayed AOF record. Recovery can
+        /// fall back to an older checkpoint (for example, when the newest one is unreadable after a crash) while the
+        /// AOF already holds commit markers of the newer checkpoint. Replicas that replay those markers advance to the
+        /// newer version and drop every record stamped with an older one, so new writes must not reuse an older version.
+        /// </summary>
+        private void AdvanceStoreVersionPastReplayedRecords(GarnetDatabase db)
+        {
+            var replayedVersion = Interlocked.Read(ref maxReplayedStoreVersion);
+            var currentVersion = db.Store.CurrentVersion;
+            if (replayedVersion <= currentVersion)
+                return;
+
+            logger?.LogWarning("AofRecoveryVersionAdvanced dbId={id} from={currentVersion} to={replayedVersion}: the AOF contains records of a newer version than the recovered checkpoint", db.Id, currentVersion, replayedVersion);
+            db.Store.SetVersion(replayedVersion);
         }
 
         /// <summary>
