@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Hashing;
@@ -694,6 +695,8 @@ namespace Garnet.server
             var dataPath = LogDataPath(hashPrefix);
             var flushPath = LogFlushPath(hashPrefix, logicalAddress);
             var keyId = KeyId(key);
+            var start = Stopwatch.GetTimestamp();
+            string mode;
 
             if (stub.TreeHandle != nint.Zero)
             {
@@ -702,16 +705,63 @@ namespace Garnet.server
                 {
                     // Edge case: stub.TreeHandle points at a tree no longer in liveIndexes
                     // (DEL deferred-disposed it but stub bytes weren't updated). Treat as cold.
-                    SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
-                    return;
+                    mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
-                entry.SnapshotUnderClaim(flushPath);
-                SetFlushedFlag(valueSpan);
+                else
+                {
+                    entry.SnapshotUnderClaim(flushPath);
+                    SetFlushedFlag(valueSpan);
+                    mode = "live";
+                }
             }
             else
             {
-                SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
+                mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
             }
+
+            LogFlushSnapshot(hashPrefix, logicalAddress, flushPath, mode, start);
+        }
+
+        /// <summary>Logs one flush snapshot with its cost and the flush files retained afterwards.</summary>
+        private void LogFlushSnapshot(string hashPrefix, long logicalAddress, string flushPath, string mode, long start)
+        {
+            if (logger is null || !logger.IsEnabled(LogLevel.Information))
+                return;
+
+            var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var bytes = mode is null ? 0 : TryGetFileLength(flushPath);
+            var (retained, retainedBytes) = MeasureFlushFiles();
+            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} bytes={Bytes} ms={Ms:F0} retainedFiles={Retained} retainedBytes={RetainedBytes}",
+                hashPrefix, logicalAddress, mode ?? "failed", bytes, ms, retained, retainedBytes);
+        }
+
+        private static long TryGetFileLength(string path)
+        {
+            try { return new FileInfo(path).Length; }
+            catch (IOException) { return -1; }
+        }
+
+        /// <summary>Counts the flush files under the log root and their total size.</summary>
+        private (int Files, long Bytes) MeasureFlushFiles()
+        {
+            var files = 0;
+            long bytes = 0;
+            try
+            {
+                foreach (var (path, _, _) in EnumerateFlushFiles())
+                {
+                    var length = TryGetFileLength(path);
+                    if (length < 0)
+                        continue;
+                    files++;
+                    bytes += length;
+                }
+            }
+            catch (IOException)
+            {
+            }
+
+            return (files, bytes);
         }
 
         /// <summary>
@@ -723,8 +773,8 @@ namespace Garnet.server
         /// OnFlush (RestoreTree releases X before its RMW; PreStage / DisposeTreeUnderLock
         /// don't issue Tsavorite ops while holding X; OnFlush itself doesn't take X).
         /// </summary>
-        private void SnapshotForFlushCold(ReadOnlySpan<byte> key, string hashPrefix,
-            string dataPath, string flushPath, Span<byte> valueSpan, long logicalAddress)
+        /// <returns>How the snapshot was taken, or <c>null</c> if no source existed.</returns>
+        private string SnapshotForFlushCold(ReadOnlySpan<byte> key, string hashPrefix, string dataPath, string flushPath, Span<byte> valueSpan, long logicalAddress)
         {
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(key));
             var lockIndex = rangeIndexLocks.CalculateIndexWithHint(keyHash);
@@ -751,7 +801,7 @@ namespace Garnet.server
                 {
                     entry.SnapshotUnderClaim(flushPath);
                     SetFlushedFlag(valueSpan);
-                    return;
+                    return "cold-live";
                 }
 
                 // No live tree exists for this key (S-lock blocks RestoreTree from activating
@@ -759,10 +809,11 @@ namespace Garnet.server
                 if (!File.Exists(dataPath))
                 {
                     LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
-                    return; // do NOT set IsFlushed
+                    return null; // do NOT set IsFlushed
                 }
                 File.Copy(dataPath, flushPath, overwrite: false);
                 SetFlushedFlag(valueSpan);
+                return "cold-copy";
             }
             finally
             {
@@ -823,6 +874,9 @@ namespace Garnet.server
                     return;
 
                 var snapshotDir = CheckpointSnapshotDir(checkpointToken);
+                var allStart = Stopwatch.GetTimestamp();
+                var trees = 0;
+                long totalBytes = 0;
 
                 foreach (var kvp in liveIndexes)
                 {
@@ -835,6 +889,8 @@ namespace Garnet.server
                     {
                         Directory.CreateDirectory(snapshotDir);
                         var checkpointPath = CheckpointSnapshotPath(entry.HashPrefix, checkpointToken);
+                        var treeStart = Stopwatch.GetTimestamp();
+                        string mode = null;
 
                         if (entry.Tree is not null)
                         {
@@ -842,6 +898,7 @@ namespace Garnet.server
                             // the per-tree claim (serializes against concurrent OnFlush / migration
                             // on the same tree).
                             entry.SnapshotUnderClaim(checkpointPath);
+                            mode = "live";
                         }
                         else
                         {
@@ -850,9 +907,23 @@ namespace Garnet.server
                             // correct source. No live tree means no concurrent writer.
                             var dataPath = LogDataPath(entry.HashPrefix);
                             if (File.Exists(dataPath))
+                            {
                                 File.Copy(dataPath, checkpointPath, overwrite: true);
+                                mode = "pending-copy";
+                            }
                             else
+                            {
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: data.bftree missing for pending {Hash}", entry.HashPrefix);
+                            }
+                        }
+
+                        if (mode != null)
+                        {
+                            var bytes = TryGetFileLength(checkpointPath);
+                            trees++;
+                            totalBytes += Math.Max(bytes, 0);
+                            logger?.LogInformation("[RangeIndexCheckpointSnapshot] token={Token} hash={Hash} mode={Mode} bytes={Bytes} ms={Ms:F0}",
+                                checkpointToken, entry.HashPrefix, mode, bytes, Stopwatch.GetElapsedTime(treeStart).TotalMilliseconds);
                         }
                     }
                     finally
@@ -860,6 +931,9 @@ namespace Garnet.server
                         Volatile.Write(ref entry.SnapshotPending, 0);
                     }
                 }
+
+                logger?.LogInformation("[RangeIndexCheckpointSnapshotSummary] token={Token} trees={Trees} bytes={Bytes} ms={Ms:F0}",
+                    checkpointToken, trees, totalBytes, Stopwatch.GetElapsedTime(allStart).TotalMilliseconds);
             }
             finally
             {
@@ -887,22 +961,124 @@ namespace Garnet.server
 
             try
             {
+                var start = Stopwatch.GetTimestamp();
+                var deleted = 0;
+                long deletedBytes = 0;
                 foreach (var (path, _, addr) in EnumerateFlushFiles())
                 {
-                    if (addr < newBeginAddress)
-                        TryDelete(path);
+                    if (addr < newBeginAddress && TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
                 }
+
+                LogFlushFileDeletion("truncated", newBeginAddress, deleted, deletedBytes, start);
             }
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "OnTruncate: enumeration failed under {Root}", riLogRoot);
             }
+        }
 
-            void TryDelete(string p)
+        /// <summary>
+        /// Deletes flush files that no retained checkpoint and no live record can reference: for each tree, every flush
+        /// file below <paramref name="oldestCheckpointEndAddress"/> except the newest one.
+        ///
+        /// <para>A flush file is read only through the latest log record of its tree (RIPROMOTE, copy-to-tail), and
+        /// recovering or replicating a checkpoint uses the newest file below that checkpoint's end address. When a newer
+        /// file of the same tree exists below the end address of the oldest retained checkpoint, the older file is
+        /// therefore unreachable, even though log truncation would keep it until <c>BeginAddress</c> passes it.</para>
+        /// </summary>
+        /// <param name="oldestCheckpointEndAddress">The hybrid log end address of the oldest retained checkpoint.</param>
+        public void DeleteSupersededFlushFiles(long oldestCheckpointEndAddress)
+        {
+            if (string.IsNullOrEmpty(riLogRoot) || !Directory.Exists(riLogRoot))
+                return;
+
+            try
             {
-                try { File.Delete(p); }
-                catch (Exception ex) { logger?.LogWarning(ex, "OnTruncate: failed to delete {Path}", p); }
+                var start = Stopwatch.GetTimestamp();
+                var newest = new Dictionary<string, long>();
+                var candidates = new List<(string Path, string Hash, long Address)>();
+                foreach (var (path, name, addr) in EnumerateFlushFiles())
+                {
+                    if (addr >= oldestCheckpointEndAddress)
+                        continue;
+                    var hash = name[..HashPrefixLength];
+                    candidates.Add((path, hash, addr));
+                    if (!newest.TryGetValue(hash, out var newestAddr) || addr > newestAddr)
+                        newest[hash] = addr;
+                }
+
+                var deleted = 0;
+                long deletedBytes = 0;
+                foreach (var (path, hash, addr) in candidates)
+                {
+                    if (addr < newest[hash] && TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
+                }
+
+                LogFlushFileDeletion("superseded", oldestCheckpointEndAddress, deleted, deletedBytes, start);
             }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "DeleteSupersededFlushFiles: enumeration failed under {Root}", riLogRoot);
+            }
+        }
+
+        /// <summary>Deletes every flush file under the log root, for when the hybrid log they belong to is discarded.</summary>
+        /// <param name="reason">Why the files are discarded; logged.</param>
+        public void DeleteAllFlushFiles(string reason)
+        {
+            try
+            {
+                var start = Stopwatch.GetTimestamp();
+                var deleted = 0;
+                long deletedBytes = 0;
+                foreach (var (path, _, _) in new List<(string, string, long)>(EnumerateFlushFiles()))
+                {
+                    if (TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
+                }
+
+                LogFlushFileDeletion(reason, 0, deleted, deletedBytes, start);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "DeleteAllFlushFiles: enumeration failed under {Root}", riLogRoot);
+            }
+        }
+
+        private bool TryDeleteFlushFile(string path, out long bytes)
+        {
+            bytes = TryGetFileLength(path);
+            try
+            {
+                File.Delete(path);
+                return bytes >= 0;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "Failed to delete flush file {Path}", path);
+                return false;
+            }
+        }
+
+        private void LogFlushFileDeletion(string reason, long address, int deleted, long deletedBytes, long start)
+        {
+            if (logger is null || !logger.IsEnabled(LogLevel.Information))
+                return;
+
+            var (retained, retainedBytes) = MeasureFlushFiles();
+            logger.LogInformation("[RangeIndexFlushFilesDeleted] reason={Reason} address=0x{Addr:x16} deleted={Deleted} deletedBytes={DeletedBytes} retainedFiles={Retained} retainedBytes={RetainedBytes} ms={Ms:F0}",
+                reason, address, deleted, deletedBytes, retained, retainedBytes, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
 
         // ---------------------------------------------------------------

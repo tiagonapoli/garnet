@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -358,6 +359,49 @@ namespace Garnet.test.cluster
                 ["idx1", "field0010", "value0010"],
                 logger: context.logger);
             ClassicAssert.AreEqual("OK", (string)result);
+        }
+
+        /// <summary>
+        /// Flush files a replica wrote in its own hybrid log address space are meaningless once it adopts the primary's
+        /// checkpoint. A leftover file at a higher address would otherwise be taken as the newest flush of its tree.
+        /// </summary>
+        [Test, Order(7)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexFullSyncPurgesReplicaLocalFlushFiles()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var nodesCount = 2;
+
+            context.CreateInstances(nodesCount, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+            await context.clusterTestUtils.FlushAndWaitForStoreAsync(primaryIndex, long.Parse(context.clusterTestUtils.GetInfo(primaryIndex, "STORE", "Log.TailAddress", logger: context.logger)));
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            var primaryFlushFile = Path.GetFileName(Directory.GetFiles(GetRiLogRoot(primaryIndex), "*.flush.bftree").Single());
+            var replicaRoot = GetRiLogRoot(replicaIndex);
+            Directory.CreateDirectory(replicaRoot);
+            var staleFile = Path.Combine(replicaRoot, $"{primaryFlushFile.Split('.')[0]}.{long.MaxValue - 1:x16}.flush.bftree");
+            File.WriteAllBytes(staleFile, [1, 2, 3]);
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            string[] expected = [primaryFlushFile];
+            Assert.That(Directory.GetFiles(replicaRoot, "*.flush.bftree").Select(Path.GetFileName), Is.EqualTo(expected), "the replica must hold exactly the flush files of the adopted checkpoint");
+            ValidateRangeIndex(replicaIndex, "idx1", 10);
         }
 
     }
