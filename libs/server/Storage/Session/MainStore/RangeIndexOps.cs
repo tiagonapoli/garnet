@@ -221,6 +221,7 @@ namespace Garnet.server
                 }
 
                 var insertResult = BfTreeService.InsertByPtr(treePtr, field, value);
+                functionsState.rangeIndexManager.NoteTreeMutated(treePtr);
                 if (insertResult == BfTreeInsertResult.InvalidArguments)
                 {
                     logger?.LogError("RI.SET: invalid arguments for a {keyLen}-byte field and {valueLen}-byte value.", field.Length, value.Length);
@@ -431,6 +432,7 @@ namespace Garnet.server
                 }
 
                 var deleteResult = BfTreeService.DeleteByPtr(treePtr, field);
+                functionsState.rangeIndexManager.NoteTreeMutated(treePtr);
                 if (deleteResult != BfTreeDeleteResult.Success)
                 {
                     logger?.LogError("RI.DEL: invalid arguments for a {fieldLen}-byte field.", field.Length);

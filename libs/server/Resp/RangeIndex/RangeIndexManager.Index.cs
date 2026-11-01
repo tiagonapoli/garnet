@@ -2,8 +2,8 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -333,6 +333,7 @@ namespace Garnet.server
             // file handles, then File.Delete (otherwise the unlink races with the close).
             // The checkpoint snapshot loop is not epoch-protected and may still hold this entry.
             entry?.Retire();
+            ForgetTree(tree);
             if (tree != null)
             {
                 var disposeStart = Stopwatch.GetTimestamp();

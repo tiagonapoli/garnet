@@ -79,6 +79,9 @@ namespace Garnet.server
         /// </summary>
         private readonly ConcurrentDictionary<Guid, TreeEntry> liveIndexes = new();
 
+        /// <summary>Activated entries by native tree pointer, so writers holding only a stub can count mutations.</summary>
+        private readonly ConcurrentDictionary<nint, TreeEntry> entriesByTree = new();
+
         private readonly ILogger logger;
 
         /// <summary>
@@ -182,8 +185,15 @@ namespace Garnet.server
             /// <paramref name="destinationPath"/>.
             /// </summary>
             /// <returns><c>false</c> without snapshotting if the entry was retired by <see cref="Retire"/>.</returns>
-            public bool TrySnapshotUnderClaim(string destinationPath)
+            public bool TrySnapshotUnderClaim(string destinationPath) => TrySnapshotUnderClaim(destinationPath, allowLink: false, out _);
+
+            /// <summary>
+            /// Like <see cref="TrySnapshotUnderClaim(string)"/>, but when <paramref name="allowLink"/> is set and the tree has not
+            /// been mutated since its last snapshot, hard-links that immutable snapshot instead of writing a new one.
+            /// </summary>
+            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, out bool linked)
             {
+                linked = false;
                 while (!TryClaimSnapshot())
                     Thread.Yield();
                 try
@@ -191,7 +201,25 @@ namespace Garnet.server
                     if (Volatile.Read(ref retired) != 0)
                         return false;
 
-                    BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                    // Writers count a mutation only after it completes, so a snapshot taken after this read reflects every counted one.
+                    var mutations = Volatile.Read(ref MutationCount);
+                    if (allowLink && lastSnapshotPath != null && mutations == lastSnapshotMutations && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, destinationPath))
+                    {
+                        linked = true;
+                    }
+                    else
+                    {
+                        // The destination may be a hard link to another snapshot, which writing in place would corrupt.
+                        RangeIndexFileLinks.DeleteIfExists(destinationPath);
+                        BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                    }
+
+                    if (allowLink)
+                    {
+                        lastSnapshotPath = destinationPath;
+                        lastSnapshotMutations = mutations;
+                    }
+
                     return true;
                 }
                 finally
@@ -199,6 +227,13 @@ namespace Garnet.server
                     ReleaseSnapshot();
                 }
             }
+
+            /// <summary>Completed native inserts and deletes on <see cref="Tree"/>.</summary>
+            public long MutationCount;
+
+            // Guarded by the snapshot claim.
+            string lastSnapshotPath;
+            long lastSnapshotMutations;
 
             /// <summary>
             /// Mark the entry retired under the snapshot claim; must precede disposing <see cref="Tree"/>. Callers holding a
@@ -423,7 +458,10 @@ namespace Garnet.server
             var keyId = KeyId(keyBytes);
             var newEntry = new TreeEntry(bfTree, keyHash, hashPrefix);
             if (liveIndexes.TryAdd(keyId, newEntry))
+            {
+                entriesByTree[bfTree.NativePtr] = newEntry;
                 return; // First registration for this key — done.
+            }
 
             // A prior entry exists. Per caller invariants:
             //   - RICREATE: invoked only when the underlying RMW reports Record.Created=true,
@@ -439,7 +477,10 @@ namespace Garnet.server
             {
                 var prior = Interlocked.CompareExchange(ref existing.Tree, bfTree, null);
                 if (prior is null)
+                {
+                    entriesByTree[bfTree.NativePtr] = existing;
                     return; // We activated the pending entry.
+                }
             }
 
             logger?.LogError(
@@ -498,6 +539,7 @@ namespace Garnet.server
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
                 entry.Retire();
+                ForgetTree(entry.Tree);
                 try { entry.Tree?.Dispose(); }
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree on unregister"); }
                 return true;
@@ -526,6 +568,7 @@ namespace Garnet.server
                     // Dispose synchronously: recovery overwrites data.bftree next, so the native tree must release it first.
                     // Readers call into the native tree only under the shared lock held off by our exclusive lock.
                     entry.Retire();
+                    ForgetTree(entry.Tree);
                     try { entry.Tree?.Dispose(); }
                     catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree {Hash} after store reset", entry.HashPrefix); }
                 }
@@ -549,6 +592,22 @@ namespace Garnet.server
                 catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree {Hash}", kvp.Value.HashPrefix); }
             }
             liveIndexes.Clear();
+            entriesByTree.Clear();
+        }
+
+        /// <summary>Stops tracking mutations of <paramref name="tree"/>; must precede its disposal so a reused native pointer is never confused with it.</summary>
+        private void ForgetTree(BfTreeService tree)
+        {
+            if (tree != null)
+                _ = entriesByTree.TryRemove(tree.NativePtr, out _);
+        }
+
+        /// <summary>Records a completed insert or delete on <paramref name="treePtr"/>, invalidating snapshot reuse for its tree.</summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal void NoteTreeMutated(nint treePtr)
+        {
+            if (entriesByTree.TryGetValue(treePtr, out var entry))
+                _ = Interlocked.Increment(ref entry.MutationCount);
         }
 
         /// <summary>
@@ -708,6 +767,8 @@ namespace Garnet.server
                 var source = (entry == null ? null : Volatile.Read(ref entry.StagingSource)) ?? dataPath;
                 try
                 {
+                    if (overwrite)
+                        RangeIndexFileLinks.DeleteIfExists(destinationPath);
                     File.Copy(source, destinationPath, overwrite);
                     return true;
                 }
@@ -805,14 +866,14 @@ namespace Garnet.server
                     // (DEL deferred-disposed it but stub bytes weren't updated). Treat as cold.
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
-                else if (!entry.TrySnapshotUnderClaim(flushPath))
+                else if (!entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var linked))
                 {
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
                 else
                 {
                     SetFlushedFlag(valueSpan);
-                    mode = "live";
+                    mode = linked ? "linked" : "live";
                 }
             }
             else
@@ -898,10 +959,10 @@ namespace Garnet.server
             {
                 // Re-check: a tree may have become live under a different stub for this key
                 // (RestoreTree completed before we acquired the shared lock).
-                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath))
+                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var linked))
                 {
                     SetFlushedFlag(valueSpan);
-                    return "cold-live";
+                    return linked ? "cold-linked" : "cold-live";
                 }
 
                 // No live tree exists for this key (S-lock blocks RestoreTree from activating
@@ -998,10 +1059,10 @@ namespace Garnet.server
                             // Snapshot straight to the token-tagged checkpoint destination under
                             // the per-tree claim (serializes against concurrent OnFlush / migration
                             // on the same tree).
-                            if (!entry.TrySnapshotUnderClaim(checkpointPath))
+                            if (!entry.TrySnapshotUnderClaim(checkpointPath, allowLink: true, out var linked))
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: skipped {Hash}; tree was disposed after removal from liveIndexes", entry.HashPrefix);
                             else
-                                mode = "live";
+                                mode = linked ? "linked" : "live";
                         }
                         else
                         {

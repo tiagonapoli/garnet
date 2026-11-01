@@ -2653,6 +2653,48 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Re-flushing a tree that was not mutated since its last snapshot must hard-link that immutable snapshot instead
+        /// of writing a new copy, while a mutation must force a fresh, independent snapshot.
+        /// </summary>
+        [Test]
+        public void RIFlushOfUnmodifiedTreeLinksPreviousSnapshotTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var store = server.Provider.StoreWrapper.store;
+            var dir = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
+            string[] FlushFiles() => Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            db.Execute("RI.CREATE", "linkkey", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "linkkey", "field-x", "value-v1");
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var first = FlushFiles().Single();
+
+            // A read promotes the flushed stub to the tail without mutating the tree.
+            ClassicAssert.AreEqual("value-v1", (string)db.Execute("RI.GET", "linkkey", "field-x"));
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var second = FlushFiles().Except([first]).Single();
+
+            db.Execute("RI.SET", "linkkey", "field-x", "value-v2");
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var third = FlushFiles().Except([first, second]).Single();
+            ClassicAssert.AreEqual("value-v2", (string)db.Execute("RI.GET", "linkkey", "field-x"));
+
+            // Appending through one name is visible through every hard link to the same file.
+            var secondLength = new FileInfo(second).Length;
+            var thirdLength = new FileInfo(third).Length;
+            using (var stream = new FileStream(first, FileMode.Append, FileAccess.Write))
+                stream.WriteByte(0);
+            ClassicAssert.AreEqual(secondLength + 1, new FileInfo(second).Length, "the unmodified tree's flush must link the previous snapshot");
+            ClassicAssert.AreEqual(thirdLength, new FileInfo(third).Length, "a mutated tree must get an independent snapshot");
+        }
+
+        /// <summary>
         /// Verifies that <c>DisposeTreeUnderLock</c> with <c>deleteFiles: false</c> (eviction
         /// path) NO-OPS when the source stub has <c>IsTransferred=true</c>, even when its
         /// <c>TreeHandle</c> is zero. After <c>PostCopyToTail</c> (compaction) or RIPROMOTE
