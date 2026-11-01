@@ -218,11 +218,12 @@ namespace Garnet.server
 
             /// <summary>
             /// Like <see cref="TrySnapshotUnderClaim(string)"/>, but when <paramref name="allowLink"/> is set and the tree has not
-            /// been mutated since its last snapshot, hard-links that immutable snapshot instead of writing a new one.
+            /// been mutated since its last snapshot, hard-links that immutable snapshot instead of writing a new one, or copies it
+            /// when it is on another file system.
             /// </summary>
-            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, out bool linked)
+            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, out TreeSnapshotKind kind)
             {
-                linked = false;
+                kind = TreeSnapshotKind.Written;
                 while (!TryClaimSnapshot())
                     Thread.Yield();
                 try
@@ -232,9 +233,14 @@ namespace Garnet.server
 
                     // Writers count a mutation only after it completes, so a snapshot taken after this read reflects every counted one.
                     var mutations = Volatile.Read(ref MutationCount);
-                    if (allowLink && lastSnapshotPath != null && mutations == lastSnapshotMutations && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, destinationPath))
+                    var unchanged = allowLink && lastSnapshotPath != null && mutations == lastSnapshotMutations;
+                    if (unchanged && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, destinationPath))
                     {
-                        linked = true;
+                        kind = TreeSnapshotKind.Linked;
+                    }
+                    else if (unchanged && RangeIndexFileLinks.TryReplaceWithCopy(lastSnapshotPath, destinationPath))
+                    {
+                        kind = TreeSnapshotKind.Copied;
                     }
                     else
                     {
@@ -286,6 +292,25 @@ namespace Garnet.server
                 HashPrefix = hashPrefix;
             }
         }
+
+        /// <summary>How a tree snapshot file was produced.</summary>
+        internal enum TreeSnapshotKind
+        {
+            /// <summary>Written from the live tree.</summary>
+            Written,
+            /// <summary>Hard-linked to the unchanged tree's previous snapshot.</summary>
+            Linked,
+            /// <summary>Copied from the unchanged tree's previous snapshot, which is on another file system.</summary>
+            Copied,
+        }
+
+        /// <summary>Log mode for a tree snapshot: <paramref name="written"/>, "linked", or "copied" (with a "cold-" prefix kept).</summary>
+        private static string SnapshotMode(string written, TreeSnapshotKind kind) => kind switch
+        {
+            TreeSnapshotKind.Linked => written.StartsWith("cold-", StringComparison.Ordinal) ? "cold-linked" : "linked",
+            TreeSnapshotKind.Copied => written.StartsWith("cold-", StringComparison.Ordinal) ? "cold-copied" : "copied",
+            _ => written,
+        };
 
         /// <summary>A copy of an immutable snapshot into <c>data.bftree</c>, identified by the copy's length and write time.</summary>
         internal sealed record StagedCopy(string Source, long Length, DateTime LastWriteTimeUtc)
@@ -916,14 +941,14 @@ namespace Garnet.server
                     // (DEL deferred-disposed it but stub bytes weren't updated). Treat as cold.
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
-                else if (!entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var linked))
+                else if (!entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
                 {
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
                 else
                 {
                     SetFlushedFlag(valueSpan);
-                    mode = linked ? "linked" : "live";
+                    mode = SnapshotMode("live", kind);
                 }
             }
             else
@@ -1009,10 +1034,10 @@ namespace Garnet.server
             {
                 // Re-check: a tree may have become live under a different stub for this key
                 // (RestoreTree completed before we acquired the shared lock).
-                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var linked))
+                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
                 {
                     SetFlushedFlag(valueSpan);
-                    return linked ? "cold-linked" : "cold-live";
+                    return SnapshotMode("cold-live", kind);
                 }
 
                 // No live tree exists for this key (S-lock blocks RestoreTree from activating
@@ -1109,10 +1134,10 @@ namespace Garnet.server
                             // Snapshot straight to the token-tagged checkpoint destination under
                             // the per-tree claim (serializes against concurrent OnFlush / migration
                             // on the same tree).
-                            if (!entry.TrySnapshotUnderClaim(checkpointPath, allowLink: true, out var linked))
+                            if (!entry.TrySnapshotUnderClaim(checkpointPath, allowLink: true, out var kind))
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: skipped {Hash}; tree was disposed after removal from liveIndexes", entry.HashPrefix);
                             else
-                                mode = linked ? "linked" : "live";
+                                mode = SnapshotMode("live", kind);
                         }
                         else
                         {

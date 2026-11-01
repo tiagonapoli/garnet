@@ -32,6 +32,23 @@ namespace Garnet.server
             }
         }
 
+        /// <summary>Replaces <paramref name="destinationPath"/> with a byte copy of the immutable snapshot <paramref name="sourcePath"/>.</summary>
+        /// <returns><c>false</c> if the source is gone or the copy failed; no partial destination is left behind.</returns>
+        public static bool TryReplaceWithCopy(string sourcePath, string destinationPath)
+        {
+            DeleteIfExists(destinationPath);
+            try
+            {
+                File.Copy(sourcePath, destinationPath);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                DeleteIfExists(destinationPath);
+                return false;
+            }
+        }
+
         [DllImport("libc", SetLastError = true)]
         private static extern int link([MarshalAs(UnmanagedType.LPUTF8Str)] string oldpath, [MarshalAs(UnmanagedType.LPUTF8Str)] string newpath);
 
