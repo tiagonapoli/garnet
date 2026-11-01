@@ -540,6 +540,54 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(storeCurrentAofAddress, storeRecoveredAofAddress);
         }
 
+        [Test]
+        [Category("REPLICATION")]
+        public void ClusterSRPrimaryRestartReusesReplicaCheckpoint()
+        {
+            // A replica's own checkpoints must carry its primary's history id, otherwise a primary restart forces a full resync
+            const int primaryIndex = 0;
+            const int replicaIndex = 1;
+            context.CreateInstances(2, tryRecover: true, enableAOF: true, useTLS: useTLS, asyncReplay: asyncReplay, clusterReplicationReestablishmentTimeout: 1, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            Dictionary<string, int> kvPairs = [];
+            context.PopulatePrimary(ref kvPairs, keyLength: 32, kvpairCount: 1000, primaryIndex: primaryIndex);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            var replicaLastSaveTime = context.clusterTestUtils.LastSave(replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.WaitUntilNextSecond(replicaIndex, replicaLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(replicaIndex, replicaLastSaveTime, logger: context.logger);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            HashSet<string> CheckpointTokens(int nodeIndex)
+                => [.. Directory.EnumerateDirectories(Path.Join(context.TestFolder, context.clusterTestUtils.GetEndPoint(nodeIndex).Port.ToString()), "*", SearchOption.AllDirectories).Select(Path.GetFileName).Where(name => Guid.TryParse(name, out _))];
+
+            var primaryTokens = CheckpointTokens(primaryIndex);
+            var replicaTokens = CheckpointTokens(replicaIndex);
+            ClassicAssert.IsNotEmpty(primaryTokens);
+            ClassicAssert.IsFalse(replicaTokens.Overlaps(primaryTokens), "the replica must have taken its own checkpoint");
+
+            context.nodes[primaryIndex].Dispose(false);
+            context.nodes[primaryIndex] = context.CreateInstance(context.clusterTestUtils.GetEndPoint(primaryIndex), tryRecover: true, enableAOF: true, timeout: timeout, useTLS: useTLS, cleanClusterConfig: false, asyncReplay: asyncReplay, sublogCount: sublogCount);
+            context.nodes[primaryIndex].Start();
+            context.CreateConnection(useTLS: useTLS);
+
+            Dictionary<string, int> newKvPairs = [];
+            context.PopulatePrimary(ref newKvPairs, keyLength: 32, kvpairCount: 100, primaryIndex: primaryIndex);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            context.clusterTestUtils.WaitForReplicaRecovery(replicaIndex, context.logger);
+            foreach (var (key, value) in newKvPairs)
+                kvPairs[key] = value;
+            context.ValidateKVCollectionAgainstReplica(ref kvPairs, replicaIndex);
+
+            ClassicAssert.IsFalse(CheckpointTokens(replicaIndex).Overlaps(primaryTokens), "the replica resynced by receiving the primary's checkpoint instead of reusing its own");
+        }
+
         [Test, Order(9)]
         [Category("REPLICATION")]
         public void ClusterSRRedirectWrites()
