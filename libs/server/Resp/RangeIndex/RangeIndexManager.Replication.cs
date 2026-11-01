@@ -200,6 +200,7 @@ namespace Garnet.server
                 if (treePtr == nint.Zero) return;
 
                 var insertResult = BfTreeService.InsertByPtr(treePtr, field, value);
+                NoteTreeMutated(treePtr);
                 if (insertResult != BfTreeInsertResult.Success)
                 {
                     logger?.LogError("RI.SET AOF replay: native insert rejected ({result}) for a {keyLen}-byte key with field {fieldLen}B and value {valueLen}B; primary/replica divergence.", insertResult, key.Length, field.Length, value.Length);
@@ -231,6 +232,7 @@ namespace Garnet.server
                 if (treePtr == nint.Zero) return;
 
                 var deleteResult = BfTreeService.DeleteByPtr(treePtr, field);
+                NoteTreeMutated(treePtr);
                 if (deleteResult != BfTreeDeleteResult.Success)
                 {
                     logger?.LogError("RI.DEL AOF replay: native delete rejected ({result}) for a {keyLen}-byte key with field {fieldLen}B; primary/replica divergence.", deleteResult, key.Length, field.Length);
