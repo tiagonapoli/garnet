@@ -58,6 +58,7 @@ namespace Tsavorite.core
                     break;
 
                 case Phase.PERSISTENCE_CALLBACK:
+                    store.storeFunctions.OnCheckpoint(CheckpointTrigger.PersistenceBegin, guid);
                     store.WriteHybridLogMetaInfo();
                     store.lastVersion = lastVersion;
                     break;

@@ -1,0 +1,293 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT license.
+
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Garnet.common;
+using Garnet.server.BfTreeInterop;
+using Microsoft.Extensions.Logging;
+
+namespace Garnet.server
+{
+    /// <summary>
+    /// Background flush snapshots. <see cref="SnapshotTreeForFlush"/> runs inside the Tsavorite epoch drain that marks pages
+    /// read-only — on a replica that is the AOF replay thread — so writing a multi-gigabyte tree snapshot there stalls
+    /// replication. Live trees are instead snapshotted by dedicated workers while the stub is marked flushed immediately.
+    ///
+    /// <para>The snapshot cut lands after the stub became read-only. That is safe because every tree mutation (RI.SET,
+    /// RI.DEL) is idempotent and last-writer-wins, so replaying the AOF over a later cut converges to the same tree, and
+    /// later writes promote the stub to the tail first, so the flush file is never the newest state of a reachable record.</para>
+    ///
+    /// <para>Every consumer of a flush file waits for its pending snapshot: checkpoint persistence
+    /// (<see cref="WaitForFlushSnapshotsBeforeCheckpointPersist"/>), replica sync enumeration, restoring an evicted stub
+    /// (<see cref="PreStageAndRegisterPending"/>), and file deletion. Files are written under a temporary name and renamed,
+    /// so enumerations never observe a partial snapshot.</para>
+    /// </summary>
+    public sealed partial class RangeIndexManager
+    {
+        /// <summary>Concurrent flush snapshot writers; snapshots of different trees proceed in parallel.</summary>
+        internal const int FlushSnapshotConcurrency = 4;
+
+        /// <summary>Suffix of a snapshot being written; renamed to its final name when complete.</summary>
+        internal const string InProgressSuffix = ".inprogress";
+
+        private FlushSnapshotScheduler flushSnapshotScheduler;
+
+        /// <summary>Flush snapshots not yet written, by final path.</summary>
+        private readonly ConcurrentDictionary<string, PendingFlushSnapshot> pendingFlushSnapshots = new();
+
+        /// <summary>Evicted or deleted trees whose disposal waits for their pending flush snapshots, by key id.</summary>
+        private readonly ConcurrentDictionary<Guid, Task> pendingTreeReleases = new();
+
+        /// <summary>Flush files below this address are truncated; a snapshot finishing below it deletes its file.</summary>
+        private long flushFilesTruncatedBelow;
+
+        /// <summary>Set on dispose and store reset; queued snapshots are skipped.</summary>
+        private volatile bool flushSnapshotsStopped;
+
+        /// <summary>Gets the number of flush snapshots queued or being written.</summary>
+        internal int PendingFlushSnapshotCount => pendingFlushSnapshots.Count;
+
+        /// <summary>Test hook run by a flush worker before it snapshots; null in production.</summary>
+        internal Action<string> BeforeFlushSnapshotForTest;
+
+        private sealed class PendingFlushSnapshot(long address)
+        {
+            public readonly long Address = address;
+            private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public Task Completion => done.Task;
+
+            public void Complete() => _ = done.TrySetResult();
+        }
+
+        private FlushSnapshotScheduler FlushScheduler => LazyInitializer.EnsureInitialized(ref flushSnapshotScheduler, () => new FlushSnapshotScheduler(FlushSnapshotConcurrency));
+
+        /// <summary>Removes snapshot files a crash left half-written.</summary>
+        private void DeleteInProgressSnapshots()
+        {
+            try
+            {
+                foreach (var path in Directory.EnumerateFiles(riLogRoot, "*" + InProgressSuffix))
+                    File.Delete(path);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "RangeIndexManager: failed to delete in-progress snapshots under {Path}", riLogRoot);
+            }
+        }
+
+        /// <summary>
+        /// Queues a flush snapshot of <paramref name="entry"/>'s live tree to <paramref name="flushPath"/>.
+        /// </summary>
+        /// <returns><c>false</c> if the entry no longer accepts snapshots because its tree is being released.</returns>
+        private bool TryEnqueueFlushSnapshot(TreeEntry entry, long logicalAddress, string flushPath)
+        {
+            var enqueuedAt = Stopwatch.GetTimestamp();
+            var pending = new PendingFlushSnapshot(logicalAddress);
+
+            // Registered first so a waiter never misses a snapshot that is already running.
+            pendingFlushSnapshots[flushPath] = pending;
+            if (entry.TryAppendFlush(() => RunFlushSnapshot(entry, pending, flushPath, enqueuedAt), FlushScheduler))
+                return true;
+
+            _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
+            pending.Complete();
+            return false;
+        }
+
+        private void RunFlushSnapshot(TreeEntry entry, PendingFlushSnapshot pending, string flushPath, long enqueuedAt)
+        {
+            var logicalAddress = pending.Address;
+            var start = Stopwatch.GetTimestamp();
+            string mode = null;
+            try
+            {
+                BeforeFlushSnapshotForTest?.Invoke(flushPath);
+
+                if (flushSnapshotsStopped)
+                    mode = "skipped-stopped";
+                else if (logicalAddress < Volatile.Read(ref flushFilesTruncatedBelow))
+                    mode = "skipped-truncated";
+                else if (entry.TrySnapshotUnderClaim(flushPath, allowLink: true, atomic: true, out var kind))
+                {
+                    mode = SnapshotMode("live", kind);
+
+                    // A truncation that enumerated the directory before the rename cannot have seen this file.
+                    if (logicalAddress < Volatile.Read(ref flushFilesTruncatedBelow))
+                        _ = TryDeleteFlushFile(flushPath, out _);
+                }
+                else
+                {
+                    logger?.LogCritical("[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16} reason=retired; the flushed stub has no flush file",
+                        entry.HashPrefix, logicalAddress);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogCritical(ex, "[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16}; the flushed stub has no flush file", entry.HashPrefix, logicalAddress);
+            }
+            finally
+            {
+                _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
+                pending.Complete();
+                LogFlushSnapshot(entry.HashPrefix, logicalAddress, flushPath, mode, start, Stopwatch.GetElapsedTime(enqueuedAt, start).TotalMilliseconds);
+            }
+        }
+
+        /// <summary>
+        /// Waits for queued flush snapshots whose address satisfies <paramref name="filter"/>, or all of them when null.
+        /// Only snapshots queued before the call are awaited.
+        /// </summary>
+        /// <param name="reason">Why the caller needs the files; logged with the wait.</param>
+        /// <param name="filter">Selects snapshots by logical address.</param>
+        internal void WaitForPendingFlushSnapshots(string reason, Func<long, bool> filter = null)
+        {
+            if (pendingFlushSnapshots.IsEmpty)
+                return;
+
+            var start = Stopwatch.GetTimestamp();
+            var waited = 0;
+            foreach (var kvp in pendingFlushSnapshots)
+            {
+                if (filter != null && !filter(kvp.Value.Address))
+                    continue;
+                if (kvp.Value.Completion.IsCompleted)
+                    continue;
+                waited++;
+                AsyncUtils.BlockingWait(kvp.Value.Completion);
+            }
+
+            LogFlushDrainWait(reason, waited, start);
+        }
+
+        /// <summary>Waits for the flush file at <paramref name="flushPath"/> and for the release of the key's previous tree.</summary>
+        private void WaitForFlushFile(Guid keyId, string flushPath, string reason)
+        {
+            var start = Stopwatch.GetTimestamp();
+            var waited = 0;
+            if (pendingFlushSnapshots.TryGetValue(flushPath, out var pending) && !pending.Completion.IsCompleted)
+            {
+                waited++;
+                AsyncUtils.BlockingWait(pending.Completion);
+            }
+
+            // The evicted tree may still have data.bftree open; staging over it must wait for its disposal.
+            if (pendingTreeReleases.TryGetValue(keyId, out var release) && !release.IsCompleted)
+            {
+                waited++;
+                AsyncUtils.BlockingWait(release);
+            }
+
+            LogFlushDrainWait(reason, waited, start);
+        }
+
+        /// <summary>
+        /// Called before Tsavorite persists checkpoint metadata. Records below the checkpoint's flushed address may be
+        /// flushed stubs whose recovery reads their flush files, and their OnFlush calls all preceded the page writes the
+        /// checkpoint waited for, so every such snapshot is already queued.
+        /// </summary>
+        internal void WaitForFlushSnapshotsBeforeCheckpointPersist(Guid checkpointToken) => WaitForPendingFlushSnapshots($"checkpoint:{checkpointToken}");
+
+        /// <summary>Stops writing queued flush snapshots and waits for those in flight; used before trees are discarded.</summary>
+        private void StopFlushSnapshots(string reason)
+        {
+            flushSnapshotsStopped = true;
+            WaitForPendingFlushSnapshots(reason);
+            foreach (var kvp in pendingTreeReleases)
+                AsyncUtils.BlockingWait(kvp.Value);
+        }
+
+        /// <summary>
+        /// Hands an evicted tree with queued flush snapshots to its last snapshot, which disposes it when done. The
+        /// caller has removed the entry under the per-key exclusive lock, which drained every reader of the evicted
+        /// record, and readers of the evicted record now restore from disk, so no reader can still use the tree.
+        /// </summary>
+        /// <returns><c>false</c> if no snapshot is pending, so the caller disposes the tree itself.</returns>
+        private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree)
+        {
+            var chain = entry.CloseFlushChainAsync();
+            if (chain.IsCompleted)
+                return false;
+
+            var queuedAt = Stopwatch.GetTimestamp();
+            var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            pendingTreeReleases[keyId] = released.Task;
+            _ = chain.ContinueWith(prior =>
+            {
+                try
+                {
+                    DisposeAndDeleteFilesDeferred(entry, tree, hashPrefix: null);
+                    logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0}", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
+                }
+                finally
+                {
+                    _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, Task>(keyId, released.Task));
+                    _ = released.TrySetResult();
+                }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            return true;
+        }
+
+        /// <summary>Closes <paramref name="entry"/> to new flush snapshots and waits for the queued ones.</summary>
+        private void DrainEntryFlushSnapshots(TreeEntry entry, string reason)
+        {
+            var chain = entry.CloseFlushChainAsync();
+            if (chain.IsCompleted)
+                return;
+
+            var start = Stopwatch.GetTimestamp();
+            AsyncUtils.BlockingWait(chain);
+            LogFlushDrainWait(reason, 1, start);
+        }
+
+        private void LogFlushDrainWait(string reason, int waited, long start)
+        {
+            if (waited == 0)
+                return;
+
+            logger?.LogInformation("[RangeIndexFlushDrainWait] reason={Reason} snapshots={Waited} pending={Pending} ms={Ms:F0}",
+                reason, waited, pendingFlushSnapshots.Count, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+        }
+
+        private void DisposeFlushScheduler() => flushSnapshotScheduler?.Dispose();
+
+        /// <summary>Runs flush snapshots on dedicated threads, keeping long blocking writes off the thread pool.</summary>
+        private sealed class FlushSnapshotScheduler : TaskScheduler, IDisposable
+        {
+            private readonly BlockingCollection<Task> tasks = new();
+            private readonly Thread[] threads;
+
+            public FlushSnapshotScheduler(int concurrency)
+            {
+                threads = new Thread[concurrency];
+                for (var i = 0; i < concurrency; i++)
+                {
+                    threads[i] = new Thread(Run) { IsBackground = true, Name = $"RangeIndexFlush-{i}" };
+                    threads[i].Start();
+                }
+            }
+
+            public override int MaximumConcurrencyLevel => threads.Length;
+
+            private void Run()
+            {
+                foreach (var task in tasks.GetConsumingEnumerable())
+                    _ = TryExecuteTask(task);
+            }
+
+            protected override void QueueTask(Task task) => tasks.Add(task);
+
+            protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+            protected override IEnumerable<Task> GetScheduledTasks() => tasks.ToArray();
+
+            public void Dispose() => tasks.CompleteAdding();
+        }
+    }
+}

@@ -2285,6 +2285,7 @@ namespace Garnet.test
 
                 for (var i = 0; i < 2000 && !Directory.EnumerateFiles(riLogRoot, "*.flush.bftree").Any(); i++)
                     db.StringSet($"fill{i:D4}", $"data{i:D4}");
+                WaitForFlushSnapshots();
 
                 ClassicAssert.IsTrue(Directory.EnumerateFiles(riLogRoot, "*.flush.bftree").Any(), "Stub should have been flushed after the checkpoint");
             }
@@ -2323,6 +2324,7 @@ namespace Garnet.test
 
             storeWrapper.store.Log.FlushAndEvict(wait: true);
             ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "Eviction should dispose the tree");
+            WaitForFlushSnapshots();
 
             // Track a tree that no record references, opened over data.bftree like RestoreTree does.
             var flushFile = Directory.GetFiles(rangeIndexManager.RiLogRoot, $"{hashPrefix}.*.flush.bftree").Single();
@@ -2465,6 +2467,7 @@ namespace Garnet.test
             db.Execute("RI.CREATE", "preservetest", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
             db.Execute("RI.SET", "preservetest", "field-x", "value-v1");
             store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            WaitForFlushSnapshots();
 
             var riLogRoot = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
             var flushBefore = Directory.GetFiles(riLogRoot, "*.flush.bftree");
@@ -2531,6 +2534,7 @@ namespace Garnet.test
 
             // Verify eviction actually occurred
             ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "tree should have been freed by eviction");
+            WaitForFlushSnapshots();
 
             // Files should still exist after eviction (preserved for lazy restore).
             var dataFiles = Directory.GetFiles(riLogRoot, "*.data.bftree");
@@ -2575,6 +2579,9 @@ namespace Garnet.test
             return Directory.GetFiles(riLogRoot, "*.flush.bftree").Length;
         }
 
+        /// <summary>Waits for flush snapshots queued by completed page flushes; flush files are written in the background.</summary>
+        private void WaitForFlushSnapshots() => server.Provider.StoreWrapper.rangeIndexManager.WaitForPendingFlushSnapshots("test");
+
         /// <summary>
         /// Verifies the per-flush snapshot file immutability invariant: a
         /// <c>&lt;hash&gt;.&lt;addr&gt;.flush.bftree</c> file, once written, is never overwritten.
@@ -2608,6 +2615,7 @@ namespace Garnet.test
 
                 // Force flush so the v1 stub is on a flushed page (creates <hash>.<A1>.flush.bftree).
                 store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+                WaitForFlushSnapshots();
 
                 // Snapshot the flush file count and capture the v1 file content.
                 var afterV1 = ListFlushFiles();
@@ -2621,6 +2629,7 @@ namespace Garnet.test
 
                 // Force another flush — must create a NEW <hash>.<A2>.flush.bftree at a distinct addr.
                 store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+                WaitForFlushSnapshots();
 
                 // Verify: each pre-existing v1 file STILL exists with byte-identical content.
                 foreach (var (path, originalBytes) in v1FileContents)
@@ -2666,7 +2675,11 @@ namespace Garnet.test
 
             var store = server.Provider.StoreWrapper.store;
             var dir = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
-            string[] FlushFiles() => Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+            string[] FlushFiles()
+            {
+                WaitForFlushSnapshots();
+                return Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+            }
 
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
             var db = redis.GetDatabase(0);
@@ -2708,7 +2721,11 @@ namespace Garnet.test
 
             var store = server.Provider.StoreWrapper.store;
             var dir = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
-            string[] FlushFiles() => Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+            string[] FlushFiles()
+            {
+                WaitForFlushSnapshots();
+                return Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+            }
 
             using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
             var db = redis.GetDatabase(0);
@@ -3001,6 +3018,92 @@ namespace Garnet.test
                 var got = (string)db.Execute("RI.GET", "rikey", $"field-{i:000}");
                 ClassicAssert.AreEqual($"value-{i:000}-pad", got, $"field-{i:000}");
             }
+        }
+
+        /// <summary>
+        /// A flush snapshot is written by a background worker, so marking pages read-only and evicting them must not wait
+        /// for it, while a checkpoint must not persist and a restore must not stage until the flush file exists.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public async Task RIFlushSnapshotRunsInBackgroundAndGatesCheckpointAndRestoreAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            var store = server.Provider.StoreWrapper.store;
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            rim.BeforeFlushSnapshotForTest = path =>
+            {
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "asyncflush", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "asyncflush", "field-x", "value-v1");
+
+                // Flushing and evicting completes while the snapshot is blocked, which leaves the tree to its snapshot.
+                await Task.Run(() => store.Log.FlushAndEvict(wait: true)).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30)), "the flush must queue a snapshot");
+                ClassicAssert.AreEqual(1, rim.PendingFlushSnapshotCount);
+                ClassicAssert.AreEqual(0, rim.LiveIndexCount, "eviction must not wait for the snapshot");
+                ClassicAssert.IsEmpty(Directory.GetFiles(rim.RiLogRoot, "*.flush.bftree"), "the flush file must not exist before its snapshot runs");
+
+                var save = Task.Run(() => db.Execute("SAVE"), cancellationToken);
+                var get = Task.Run(() =>
+                {
+                    using var getRedis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+                    return (string)getRedis.GetDatabase(0).Execute("RI.GET", "asyncflush", "field-x");
+                }, cancellationToken);
+
+                // Neither may finish while the flush file is missing; completing early would expose a missing file.
+                ClassicAssert.AreEqual(-1, Task.WaitAny([save, get], TimeSpan.FromSeconds(1)), "checkpoint and restore must wait for the pending snapshot");
+
+                gate.Set();
+                _ = await save.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                ClassicAssert.AreEqual("value-v1", await get.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+                ClassicAssert.AreEqual(0, rim.PendingFlushSnapshotCount);
+                ClassicAssert.IsNotEmpty(Directory.GetFiles(rim.RiLogRoot, "*.flush.bftree"));
+                ClassicAssert.IsEmpty(Directory.GetFiles(rim.RiLogRoot, "*" + RangeIndexManager.InProgressSuffix), "completed snapshots must be renamed to their final name");
+            }
+            finally
+            {
+                gate.Set();
+                rim.BeforeFlushSnapshotForTest = null;
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+                ClassicAssert.AreEqual("value-v1", (string)redis.GetDatabase(0).Execute("RI.GET", "asyncflush", "field-x"));
+        }
+
+        /// <summary>
+        /// Snapshot files left half-written by a crash carry the in-progress suffix and must be removed on startup.
+        /// </summary>
+        [Test]
+        public void RIInProgressSnapshotsAreDeletedOnStartupTest()
+        {
+            var riLogRoot = server.Provider.StoreWrapper.rangeIndexManager.RiLogRoot;
+            server.Dispose();
+
+            Directory.CreateDirectory(riLogRoot);
+            var partial = Path.Combine(riLogRoot, $"deadbeef.{0x40L:x16}.flush.bftree{RangeIndexManager.InProgressSuffix}");
+            File.WriteAllBytes(partial, [1, 2, 3]);
+
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true);
+            server.Start();
+            ClassicAssert.IsFalse(File.Exists(partial));
         }
 
         /// <summary>

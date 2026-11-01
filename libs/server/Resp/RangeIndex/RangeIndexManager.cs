@@ -10,6 +10,7 @@ using System.IO;
 using System.IO.Hashing;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Garnet.common;
 using Garnet.server.BfTreeInterop;
 using Microsoft.Extensions.Logging;
@@ -221,7 +222,13 @@ namespace Garnet.server
             /// been mutated since its last snapshot, hard-links that immutable snapshot instead of writing a new one, or copies it
             /// when it is on another file system.
             /// </summary>
-            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, out TreeSnapshotKind kind)
+            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, out TreeSnapshotKind kind) => TrySnapshotUnderClaim(destinationPath, allowLink, atomic: false, out kind);
+
+            /// <summary>
+            /// Like <see cref="TrySnapshotUnderClaim(string, bool, out TreeSnapshotKind)"/>; when <paramref name="atomic"/> is set the
+            /// snapshot is written under a temporary name and renamed, so <paramref name="destinationPath"/> never holds a partial file.
+            /// </summary>
+            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, bool atomic, out TreeSnapshotKind kind)
             {
                 kind = TreeSnapshotKind.Written;
                 while (!TryClaimSnapshot())
@@ -231,23 +238,29 @@ namespace Garnet.server
                     if (Volatile.Read(ref retired) != 0)
                         return false;
 
+                    var target = atomic ? destinationPath + InProgressSuffix : destinationPath;
+
                     // Writers count a mutation only after it completes, so a snapshot taken after this read reflects every counted one.
                     var mutations = Volatile.Read(ref MutationCount);
                     var unchanged = allowLink && lastSnapshotPath != null && mutations == lastSnapshotMutations;
-                    if (unchanged && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, destinationPath))
+                    if (unchanged && RangeIndexFileLinks.TryReplaceWithHardLink(lastSnapshotPath, target))
                     {
                         kind = TreeSnapshotKind.Linked;
                     }
-                    else if (unchanged && RangeIndexFileLinks.TryReplaceWithCopy(lastSnapshotPath, destinationPath))
+                    else if (unchanged && RangeIndexFileLinks.TryReplaceWithCopy(lastSnapshotPath, target))
                     {
                         kind = TreeSnapshotKind.Copied;
                     }
                     else
                     {
                         // The destination may be a hard link to another snapshot, which writing in place would corrupt.
-                        RangeIndexFileLinks.DeleteIfExists(destinationPath);
-                        BfTreeService.CprSnapshotByPtr(Tree.NativePtr, destinationPath);
+                        RangeIndexFileLinks.DeleteIfExists(target);
+                        BfTreeService.CprSnapshotByPtr(Tree.NativePtr, target);
                     }
+
+                    // Renaming replaces only the directory entry, so a destination hard-linked to another snapshot is unaffected.
+                    if (atomic)
+                        File.Move(target, destinationPath, overwrite: true);
 
                     if (allowLink)
                     {
@@ -284,6 +297,34 @@ namespace Garnet.server
             }
 
             int retired;
+
+            // Background flush snapshots of this tree, chained so the tail completes after all of them.
+            readonly object flushChainLock = new();
+            Task flushChain = Task.CompletedTask;
+            bool flushChainClosed;
+
+            /// <summary>Queues <paramref name="work"/> after this tree's earlier flush snapshots.</summary>
+            /// <returns><c>false</c> if <see cref="CloseFlushChainAsync"/> was called because the tree is being released.</returns>
+            public bool TryAppendFlush(Action work, TaskScheduler scheduler)
+            {
+                lock (flushChainLock)
+                {
+                    if (flushChainClosed)
+                        return false;
+                    flushChain = flushChain.ContinueWith(_ => work(), CancellationToken.None, TaskContinuationOptions.None, scheduler);
+                    return true;
+                }
+            }
+
+            /// <summary>Rejects further flush snapshots and returns a task completing after the queued ones.</summary>
+            public Task CloseFlushChainAsync()
+            {
+                lock (flushChainLock)
+                {
+                    flushChainClosed = true;
+                    return flushChain;
+                }
+            }
 
             public TreeEntry(BfTreeService tree, long keyHash, string hashPrefix)
             {
@@ -377,6 +418,8 @@ namespace Garnet.server
                     "Check that the parent directory exists and the process has write permissions.",
                     ex);
             }
+
+            DeleteInProgressSnapshots();
 
             // Clean up partial migration artifacts from prior crashes, then ensure directory exists
             migrationTempDir = Path.Combine(riLogRoot, "migration-tmp");
@@ -608,6 +651,7 @@ namespace Garnet.server
             var keyId = KeyId(keyBytes);
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
+                DrainEntryFlushSnapshots(entry, "unregister");
                 entry.Retire();
                 ForgetTree(entry.Tree);
                 try { entry.Tree?.Dispose(); }
@@ -622,6 +666,22 @@ namespace Garnet.server
         /// rewrites their <c>data.bftree</c> files, so a surviving tree would later be reused over replaced files.
         /// </summary>
         internal void DiscardTreesAfterStoreReset()
+        {
+            // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
+            StopFlushSnapshots("store-reset");
+            try
+            {
+                DiscardTrees();
+            }
+            finally
+            {
+                // The reset log restarts its addresses, so the old truncation point no longer applies.
+                Volatile.Write(ref flushFilesTruncatedBelow, 0);
+                flushSnapshotsStopped = false;
+            }
+        }
+
+        private void DiscardTrees()
         {
             foreach (var kvp in liveIndexes)
             {
@@ -654,6 +714,9 @@ namespace Garnet.server
         {
             // Drop any in-progress AOF-stream reassembly
             DisposeIncompleteStreamReassembly();
+
+            StopFlushSnapshots("dispose");
+            DisposeFlushScheduler();
 
             foreach (var kvp in liveIndexes)
             {
@@ -710,6 +773,7 @@ namespace Garnet.server
 
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var snapshotPath = LogFlushPath(hashPrefix, srcFlushAddress);
+            WaitForFlushFile(KeyId(keyBytes), snapshotPath, "prestage");
             if (!File.Exists(snapshotPath))
             {
                 // Per Invariant 2 (Per-flush snapshot invariant), the per-flush file must exist
@@ -941,6 +1005,15 @@ namespace Garnet.server
                     // (DEL deferred-disposed it but stub bytes weren't updated). Treat as cold.
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
                 }
+                else if (TryEnqueueFlushSnapshot(entry, logicalAddress, flushPath))
+                {
+                    // The worker logs the snapshot; only the time this flush thread spent is logged here.
+                    SetFlushedFlag(valueSpan);
+                    var enqueueMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+                    if (enqueueMs >= 10)
+                        logger?.LogInformation("[RangeIndexFlushEnqueueSlow] hash={Hash} addr=0x{Addr:x16} ms={Ms:F0}", hashPrefix, logicalAddress, enqueueMs);
+                    return;
+                }
                 else if (!entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
                 {
                     mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
@@ -960,7 +1033,8 @@ namespace Garnet.server
         }
 
         /// <summary>Logs one flush snapshot with its cost and the flush files retained afterwards.</summary>
-        private void LogFlushSnapshot(string hashPrefix, long logicalAddress, string flushPath, string mode, long start)
+        /// <param name="queueMs">Time the snapshot waited for a background writer, or null when taken synchronously.</param>
+        private void LogFlushSnapshot(string hashPrefix, long logicalAddress, string flushPath, string mode, long start, double? queueMs = null)
         {
             if (logger is null || !logger.IsEnabled(LogLevel.Information))
                 return;
@@ -968,8 +1042,8 @@ namespace Garnet.server
             var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             var bytes = mode is null ? 0 : TryGetFileLength(flushPath);
             var (retained, retainedBytes) = MeasureFlushFiles();
-            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} bytes={Bytes} ms={Ms:F0} retainedFiles={Retained} retainedBytes={RetainedBytes}",
-                hashPrefix, logicalAddress, mode ?? "failed", bytes, ms, retained, retainedBytes);
+            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} async={Async} bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0} pending={Pending} retainedFiles={Retained} retainedBytes={RetainedBytes}",
+                hashPrefix, logicalAddress, mode ?? "failed", queueMs.HasValue, bytes, ms, queueMs ?? 0, pendingFlushSnapshots.Count, retained, retainedBytes);
         }
 
         private static long TryGetFileLength(string path)
@@ -1197,6 +1271,14 @@ namespace Garnet.server
         {
             if (string.IsNullOrEmpty(riLogRoot))
                 return;
+
+            // Published before enumerating, so a queued snapshot below it either sees it or is enumerated here.
+            long truncated;
+            while ((truncated = Volatile.Read(ref flushFilesTruncatedBelow)) < newBeginAddress
+                && Interlocked.CompareExchange(ref flushFilesTruncatedBelow, newBeginAddress, truncated) != truncated)
+            {
+            }
+
             if (!Directory.Exists(riLogRoot))
                 return;
 
@@ -1275,6 +1357,17 @@ namespace Garnet.server
         /// <param name="reason">Why the files are discarded; logged.</param>
         public void DeleteAllFlushFiles(string reason)
         {
+            // The discarded log's queued snapshots are skipped; waiting lets those in flight finish before their files are deleted.
+            flushSnapshotsStopped = true;
+            try
+            {
+                WaitForPendingFlushSnapshots("delete-all:" + reason);
+            }
+            finally
+            {
+                flushSnapshotsStopped = false;
+            }
+
             try
             {
                 var start = Stopwatch.GetTimestamp();
@@ -1417,6 +1510,8 @@ namespace Garnet.server
         public IEnumerable<RangeIndexFileEntry> EnumerateFilesForReplication(
             Guid checkpointToken, long hlogStartAddress, long hlogEndAddress)
         {
+            WaitForPendingFlushSnapshots("replication", addr => addr >= hlogStartAddress && addr < hlogEndAddress);
+
             // 1. Per-flush files: <hash>.<addr:x16>.flush.bftree where addr ∈ [start, end), latest per hash only
             var latestFlushFiles = new Dictionary<string, (string Path, long Address)>();
             foreach (var (path, name, addr) in EnumerateFlushFiles())
