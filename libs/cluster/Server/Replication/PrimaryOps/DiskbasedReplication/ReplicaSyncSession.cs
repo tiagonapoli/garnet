@@ -73,6 +73,11 @@ namespace Garnet.cluster
             // 2. Local checkpoint is of same version and history as the remote checkpoint
             skipLocalMainStoreCheckpoint = localEntry.metadata.storeHlogToken == default || (sameMainStoreCheckpointHistory && localEntry.metadata.storeVersion == replicaCheckpointEntry.metadata.storeVersion);
 
+            var reason = skipLocalMainStoreCheckpoint
+                ? (localEntry.metadata.storeHlogToken == default ? "no-local-checkpoint" : "same-history-and-version")
+                : (!sameMainStoreCheckpointHistory ? "history-mismatch" : "version-mismatch");
+            logger?.LogInformation("[ResyncDecision] sendCheckpoint={send} reason={reason} replicaReplId={replicaReplId} localReplId={localReplId} replicaVersion={replicaVersion} localVersion={localVersion} replicaToken={replicaToken} localToken={localToken} replicaCoveredAof={replicaCoveredAof} localCoveredAof={localCoveredAof}",
+                !skipLocalMainStoreCheckpoint, reason, replicaCheckpointEntry.metadata.storePrimaryReplId, localEntry.metadata.storePrimaryReplId, replicaCheckpointEntry.metadata.storeVersion, localEntry.metadata.storeVersion, replicaCheckpointEntry.metadata.storeHlogToken, localEntry.metadata.storeHlogToken, replicaCheckpointEntry.metadata.storeCheckpointCoveredAofAddress, localEntry.metadata.storeCheckpointCoveredAofAddress);
             // Acquire metadata for main store
             // If failed then this checkpoint is not usable because it is corrupted
             if (!skipLocalMainStoreCheckpoint && !clusterProvider.replicationManager.TryAcquireSettledMetadataForMainStore(localEntry, out hlog_size, out index_size))
@@ -175,7 +180,7 @@ namespace Garnet.cluster
                 var recoverFromRemote = !skipLocalMainStoreCheckpoint;
                 var checkpointAofBeginAddress = localEntry.GetMinAofCoveredAddress();
                 var beginAddress = checkpointAofBeginAddress;
-                var sameHistory2 = string.IsNullOrEmpty(clusterProvider.replicationManager.PrimaryReplId2) && clusterProvider.replicationManager.PrimaryReplId2.Equals(replicaAssignedPrimaryId);
+                var sameHistory2 = !string.IsNullOrEmpty(clusterProvider.replicationManager.PrimaryReplId2) && clusterProvider.replicationManager.PrimaryReplId2.Equals(replicaAssignedPrimaryId);
 
                 // Calculate replay AOF range
                 var sameMainStoreCheckpointHistory = !string.IsNullOrEmpty(replicaCheckpointEntry.metadata.storePrimaryReplId) && replicaCheckpointEntry.metadata.storePrimaryReplId.Equals(localEntry.metadata.storePrimaryReplId);

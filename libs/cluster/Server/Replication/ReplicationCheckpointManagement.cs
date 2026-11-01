@@ -83,7 +83,7 @@ namespace Garnet.cluster
 
         /// <summary>
         /// Update replicationId for both stores to use for signing future checkpoints
-        /// Should be called only at initialization of replication manager and during a failover
+        /// Called at initialization of replication manager, when a replica attaches to a primary, and during a failover
         /// </summary>
         public void SetPrimaryReplicationId()
         {
