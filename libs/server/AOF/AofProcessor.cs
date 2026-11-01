@@ -3,6 +3,7 @@
 
 using System;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -226,6 +227,22 @@ namespace Garnet.server
             }
         }
 
+        /// <summary>Highest store version stamped on any record processed since the last recovery began.</summary>
+        long maxReplayedStoreVersion;
+
+        void TrackReplayedStoreVersion(long storeVersion)
+        {
+            var current = Volatile.Read(ref maxReplayedStoreVersion);
+            while (storeVersion > current)
+            {
+                var observed = Interlocked.CompareExchange(ref maxReplayedStoreVersion, storeVersion, current);
+                if (observed == current)
+                    return;
+
+                current = observed;
+            }
+        }
+
         /// <summary>
         /// Process AOF record internal
         /// NOTE: This method is shared between recover replay and replication replay
@@ -245,6 +262,7 @@ namespace Garnet.server
             if (header.aofHeaderVersion > AofHeader.MaxSupportedAofHeaderVersion)
                 throw new GarnetException($"Unsupported AOF header version {header.aofHeaderVersion}; this build supports up to version {AofHeader.MaxSupportedAofHeaderVersion}. The data may have been written by a newer Garnet version.");
 
+            TrackReplayedStoreVersion(header.storeVersion);
             var replayContext = aofReplayCoordinator.GetReplayContext(virtualSublogIdx);
             isCheckpointStart = false;
 

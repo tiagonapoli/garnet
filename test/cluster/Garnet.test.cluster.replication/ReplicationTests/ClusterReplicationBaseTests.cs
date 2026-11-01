@@ -575,6 +575,82 @@ namespace Garnet.test.cluster
             context.ValidateKVCollectionAgainstReplica(ref kvPairs, 1);
         }
 
+        [Test]
+        [Category("REPLICATION")]
+        public async Task ClusterSRReplicaKeepsWritesAfterPrimaryFallbackRecovery()
+        {
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+            const ExceptionInjectionType CheckpointPause = ExceptionInjectionType.Checkpoint_Pause_At_Flush_Begin;
+
+            context.CreateInstances(2, tryRecover: true, enableAOF: true, useTLS: useTLS, asyncReplay: asyncReplay, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(0, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.BumpEpoch(0, logger: context.logger);
+
+            Dictionary<string, int> kvPairs = [];
+            context.PopulatePrimary(ref kvPairs, keyLength: 32, kvpairCount: keyCount, primaryIndex: 0);
+            context.clusterTestUtils.Checkpoint(0, logger: context.logger);
+
+            // Park the next checkpoint after its commit markers reach the AOF but before its metadata is written,
+            // then snapshot the node's files: this is the on-disk state of a primary killed mid-checkpoint.
+            var nodeDir = context.nodeOptions[0].CheckpointDir;
+            var crashDir = nodeDir.TrimEnd(Path.DirectorySeparatorChar) + "-crash";
+            Task<RedisResult> bgsave;
+            ExceptionInjectionHelper.EnableException(CheckpointPause);
+            try
+            {
+                bgsave = context.clusterTestUtils.GetServer(0).ExecuteAsync("BGSAVE");
+                await ExceptionInjectionHelper.WaitOnClearAsync(CheckpointPause).WaitAsync(TimeSpan.FromSeconds(30));
+                _ = await context.nodes[0].Store.CommitAOFAsync(CancellationToken.None);
+                CopyDirectory(nodeDir, crashDir);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(CheckpointPause);
+            }
+
+            context.nodes[0].Dispose(false);
+            context.nodes[0] = null;
+
+            // The parked checkpoint is abandoned with the node; only the snapshot above is recovered.
+            _ = await Task.WhenAny(bgsave, Task.Delay(TimeSpan.FromSeconds(30)));
+            _ = bgsave.Exception;
+            Directory.Delete(nodeDir, recursive: true);
+            Directory.Move(crashDir, nodeDir);
+
+            // Recovery falls back to the older checkpoint while the AOF holds the newer checkpoint's markers.
+            context.RestartNode(0);
+            context.CreateConnection(useTLS: useTLS);
+
+            var primaryId = context.clusterTestUtils.GetNodeIdFromNode(0, context.logger);
+            context.clusterTestUtils.Meet(1, 0, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+            _ = context.clusterTestUtils.ClusterReplicate(1, primaryId, async: false, logger: context.logger);
+            context.clusterTestUtils.BumpEpoch(1, logger: context.logger);
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+
+            // The replica replayed the newer checkpoint's markers; writes made after the restart must not be
+            // stamped with an older version, or the replica silently drops them.
+            Dictionary<string, int> newKvPairs = [];
+            context.PopulatePrimary(ref newKvPairs, keyLength: 32, kvpairCount: 16, primaryIndex: 0);
+            context.clusterTestUtils.WaitForReplicaAofSync(0, 1, context.logger);
+            context.ValidateKVCollectionAgainstReplica(ref newKvPairs, 1);
+
+            static void CopyDirectory(string source, string destination)
+            {
+                _ = Directory.CreateDirectory(destination);
+                foreach (var file in Directory.GetFiles(source))
+                {
+                    using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var output = File.Create(Path.Combine(destination, Path.GetFileName(file)));
+                    input.CopyTo(output);
+                }
+
+                foreach (var directory in Directory.GetDirectories(source))
+                    CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+            }
+        }
+
         [Test, Order(9)]
         [Category("REPLICATION")]
         public void ClusterSRRedirectWrites()
