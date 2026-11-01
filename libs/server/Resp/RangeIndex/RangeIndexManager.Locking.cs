@@ -345,12 +345,13 @@ namespace Garnet.server
                     }
 
                     var restoreStart = Stopwatch.GetTimestamp();
+                    var baselineSnapshot = existing?.StagedFrom is { } staged && staged.Matches(workingPath) ? staged.Source : null;
                     var bfTree = BfTreeService.RecoverFromCprSnapshot(
                         workingPath,
                         enableSnapshots: true,
                         (StorageBackendType)stub.StorageBackend);
 
-                    RegisterIndex(bfTree, keyHash, keySpan);
+                    RegisterIndex(bfTree, keyHash, keySpan, baselineSnapshot);
 
                     // Re-look-up to use the WINNER's pointer (handles concurrent restorer race).
                     if (!liveIndexes.TryGetValue(keyId, out var winner) || winner?.Tree == null)
@@ -362,7 +363,7 @@ namespace Garnet.server
                         return false;
                     }
                     nativePtr = winner.Tree.NativePtr;
-                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} openMs={OpenMs:F0}", hashPrefix, nativePtr, workingPath, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds);
+                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} openMs={OpenMs:F0} baseline={Baseline}", hashPrefix, nativePtr, workingPath, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds, baselineSnapshot != null);
                 }
             }
             catch (Exception ex)

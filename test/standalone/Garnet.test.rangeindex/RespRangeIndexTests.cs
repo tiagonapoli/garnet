@@ -2695,6 +2695,41 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Verifies that a tree evicted and restored from its flush snapshot, then flushed again without being mutated,
+        /// hard-links the snapshot it was restored from instead of rewriting the whole tree.
+        /// </summary>
+        [Test]
+        public void RIFlushOfRestoredUnmodifiedTreeLinksRestoreSourceTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var store = server.Provider.StoreWrapper.store;
+            var dir = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
+            string[] FlushFiles() => Directory.GetFiles(dir, "*.flush.bftree").Order().ToArray();
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+            db.Execute("RI.CREATE", "restorelink", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "restorelink", "field-x", "value-v1");
+            store.Log.FlushAndEvict(wait: true);
+            var first = FlushFiles().Single();
+            ClassicAssert.AreEqual(0, server.Provider.StoreWrapper.rangeIndexManager.LiveIndexCount, "eviction must dispose the tree");
+
+            // The read restores the tree from the first flush file and promotes its stub to the tail without mutating it.
+            ClassicAssert.AreEqual("value-v1", (string)db.Execute("RI.GET", "restorelink", "field-x"));
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            var second = FlushFiles().Except([first]).Single();
+
+            var secondLength = new FileInfo(second).Length;
+            using (var stream = new FileStream(first, FileMode.Append, FileAccess.Write))
+                stream.WriteByte(0);
+            ClassicAssert.AreEqual(secondLength + 1, new FileInfo(second).Length, "the restored, unmodified tree's flush must link the file it was restored from");
+        }
+
+        /// <summary>
         /// Verifies that <c>DisposeTreeUnderLock</c> with <c>deleteFiles: false</c> (eviction
         /// path) NO-OPS when the source stub has <c>IsTransferred=true</c>, even when its
         /// <c>TreeHandle</c> is zero. After <c>PostCopyToTail</c> (compaction) or RIPROMOTE

@@ -148,6 +148,35 @@ namespace Garnet.server
             /// <summary>Immutable checkpoint snapshot holding a pending entry's contents until <c>data.bftree</c> is staged from it; null once staged.</summary>
             public string StagingSource;
 
+            /// <summary>Immutable snapshot that <c>data.bftree</c> was last staged from for this pending entry; null when unknown.</summary>
+            public StagedCopy StagedFrom;
+
+            /// <summary>
+            /// Activates a pending entry with <paramref name="tree"/>, opened from an unmodified copy of
+            /// <paramref name="baselineSnapshot"/> when it is non-null, so an unchanged tree's next snapshot can link that file.
+            /// </summary>
+            /// <returns><c>false</c> if the entry already has a tree.</returns>
+            public bool TryActivate(BfTreeService tree, string baselineSnapshot)
+            {
+                while (!TryClaimSnapshot())
+                    Thread.Yield();
+                try
+                {
+                    if (Volatile.Read(ref Tree) != null)
+                        return false;
+
+                    lastSnapshotPath = baselineSnapshot;
+                    lastSnapshotMutations = Volatile.Read(ref MutationCount);
+                    StagedFrom = null;
+                    Volatile.Write(ref Tree, tree);
+                    return true;
+                }
+                finally
+                {
+                    ReleaseSnapshot();
+                }
+            }
+
             /// <summary>
             /// 1 while this tree is being snapshotted for checkpoint, 0 otherwise.
             /// Set at <see cref="CheckpointTrigger.VersionShift"/> time, cleared after snapshot completes.
@@ -255,6 +284,23 @@ namespace Garnet.server
                 Tree = tree;
                 KeyHash = keyHash;
                 HashPrefix = hashPrefix;
+            }
+        }
+
+        /// <summary>A copy of an immutable snapshot into <c>data.bftree</c>, identified by the copy's length and write time.</summary>
+        internal sealed record StagedCopy(string Source, long Length, DateTime LastWriteTimeUtc)
+        {
+            public static StagedCopy Describe(string source, string dataPath)
+            {
+                var info = new FileInfo(dataPath);
+                return new StagedCopy(source, info.Length, info.LastWriteTimeUtc);
+            }
+
+            /// <summary>Whether <paramref name="dataPath"/> is still this copy, unwritten since staging.</summary>
+            public bool Matches(string dataPath)
+            {
+                var info = new FileInfo(dataPath);
+                return info.Exists && info.Length == Length && info.LastWriteTimeUtc == LastWriteTimeUtc;
             }
         }
 
@@ -452,7 +498,7 @@ namespace Garnet.server
         /// Register a BfTreeService in the live index dictionary after successful creation or restore.
         /// Cold path — called once per RI.CREATE or activation (RestoreTree).
         /// </summary>
-        internal void RegisterIndex(BfTreeService bfTree, long keyHash, ReadOnlySpan<byte> keyBytes)
+        internal void RegisterIndex(BfTreeService bfTree, long keyHash, ReadOnlySpan<byte> keyBytes, string baselineSnapshot = null)
         {
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var keyId = KeyId(keyBytes);
@@ -476,7 +522,7 @@ namespace Garnet.server
             if (liveIndexes.TryGetValue(keyId, out var existing))
             {
                 entriesByTree[bfTree.NativePtr] = existing;
-                if (Interlocked.CompareExchange(ref existing.Tree, bfTree, null) is null)
+                if (existing.TryActivate(bfTree, baselineSnapshot))
                     return; // We activated the pending entry.
             }
 
@@ -671,8 +717,12 @@ namespace Garnet.server
                 logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
 
                 var keyId = KeyId(keyBytes);
-                if (!liveIndexes.TryAdd(keyId, new TreeEntry(tree: null, keyHash, hashPrefix)) && liveIndexes.TryGetValue(keyId, out var existing))
-                    Volatile.Write(ref existing.StagingSource, null);
+                var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
+                if (entry.Tree == null)
+                {
+                    Volatile.Write(ref entry.StagingSource, null);
+                    entry.StagedFrom = StagedCopy.Describe(snapshotPath, dataPath);
+                }
             }
             catch (Exception ex)
             {
@@ -750,6 +800,7 @@ namespace Garnet.server
                 }
 
                 Volatile.Write(ref entry.StagingSource, null);
+                entry.StagedFrom = StagedCopy.Describe(source, dataPath);
                 logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
             }
         }
