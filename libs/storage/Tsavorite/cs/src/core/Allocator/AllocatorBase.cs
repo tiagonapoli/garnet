@@ -2100,6 +2100,16 @@ namespace Tsavorite.core
             if (pageHeaderSize > 0 && TailPageOffset.Offset == 0)
                 TailPageOffset.Offset = pageHeaderSize;
 
+            // Recovery may replay pages below headAddress (e.g. from an older index checkpoint) through the circular buffer, leaving them allocated in
+            // slots outside the resident [headPage, tailPage] range. Free them so later pages, starting with the allocate-ahead page, never reuse a
+            // slot with stale record bytes that a partial overwrite would leave behind for scans of the flushed page.
+            var headPage = GetPage(headAddress);
+            for (var page = tailPage + 1; page < headPage + BufferSize; page++)
+            {
+                if (IsAllocated(GetPageIndexForPage(page)))
+                    _wrapper.FreePage(page);
+            }
+
             // Allocate the current page and the next page (the allocate-ahead invariant) if necessary.
             AllocateCurrentAndNextPage(TailPageOffset.Page);
 
