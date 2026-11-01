@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -104,6 +105,38 @@ namespace Garnet.server
             }
         }
 
+        /// <summary>
+        /// Starts the replica checkpoint for a primary checkpoint end marker and returns once the store has shifted to the
+        /// next version, so the fuzzy region replays at that version while the checkpoint persists in the background. The
+        /// checkpoint's covered AOF address was captured when it started, so records replayed meanwhile are recovered from AOF.
+        /// </summary>
+        void TakeReplicaCheckpoint(long targetVersion)
+        {
+            var start = Stopwatch.GetTimestamp();
+            double priorWaitMs = 0;
+            if (!replicaCheckpoint.IsCompleted)
+            {
+                _ = AsyncUtils.BlockingWait(replicaCheckpoint);
+                priorWaitMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            }
+
+            var shiftStart = Stopwatch.GetTimestamp();
+            var oldVersion = storeWrapper.store.CurrentVersion;
+            var checkpoint = storeWrapper.TakeCheckpointAsync(background: false, logger: logger);
+            replicaCheckpoint = checkpoint;
+
+            var spinner = new SpinWait();
+            while (!checkpoint.IsCompleted && storeWrapper.store.CurrentVersion <= oldVersion)
+                spinner.SpinOnce(sleep1Threshold: -1);
+
+            var shiftMs = Stopwatch.GetElapsedTime(shiftStart).TotalMilliseconds;
+            logger?.LogInformation("[ReplicaCheckpoint] started targetVersion={TargetVersion} oldVersion={OldVersion} newVersion={NewVersion} priorWaitMs={PriorWaitMs:F0} versionShiftMs={ShiftMs:F0} completed={Completed}",
+                targetVersion, oldVersion, storeWrapper.store.CurrentVersion, priorWaitMs, shiftMs, checkpoint.IsCompleted);
+
+            _ = checkpoint.ContinueWith(t => logger?.LogInformation("[ReplicaCheckpoint] finished targetVersion={TargetVersion} status={Status} totalMs={TotalMs:F0}",
+                targetVersion, t.IsCompletedSuccessfully ? t.Result.ToString() : t.Exception?.GetBaseException().Message, Stopwatch.GetElapsedTime(shiftStart).TotalMilliseconds), TaskScheduler.Default);
+        }
+
         readonly StoreWrapper replayAofStoreWrapper;
         readonly IClusterProvider clusterProvider;
 
@@ -111,6 +144,9 @@ namespace Garnet.server
 
         readonly ILogger logger;
         readonly bool usingShardedLog;
+
+        /// <summary>The replica checkpoint started at the last checkpoint end marker; it may still be persisting.</summary>
+        Task<CheckpointStatus> replicaCheckpoint = Task.FromResult(CheckpointStatus.Success);
         readonly bool usingSinglePhysicalLogMultiReplay;
         SingleLogPreprocessKey singleLogPreprocessKey;
         SinglePhysicalLogPreprocessKey singlePhysicalLogPreprocessKey;
@@ -336,8 +372,7 @@ namespace Garnet.server
                             {
                                 if (!usingShardedLog)
                                 {
-                                    // Must block here, cannot move off the thread
-                                    _ = AsyncUtils.BlockingWait(storeWrapper.TakeCheckpointAsync(background: false, logger: logger));
+                                    TakeReplicaCheckpoint(header.storeVersion);
                                 }
                                 else
                                 {

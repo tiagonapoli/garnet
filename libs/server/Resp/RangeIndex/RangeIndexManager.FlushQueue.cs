@@ -56,6 +56,23 @@ namespace Garnet.server
         /// <summary>Test hook run by a flush worker before it snapshots; null in production.</summary>
         internal Action<string> BeforeFlushSnapshotForTest;
 
+        /// <summary>
+        /// Whether checkpoint snapshots of live trees are written in the background rather than at
+        /// <see cref="CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
+        /// after the version shift, and replaying the AOF from the checkpoint over it converges for the same reason as a
+        /// late flush snapshot.
+        /// </summary>
+        public bool BackgroundCheckpointSnapshots { get; init; }
+
+        /// <summary>Checkpoint snapshots queued or being written, by checkpoint token.</summary>
+        private readonly ConcurrentDictionary<Guid, PendingCheckpointSnapshots> pendingCheckpointSnapshots = new();
+
+        private sealed class PendingCheckpointSnapshots
+        {
+            public readonly ConcurrentBag<Task> Snapshots = [];
+            public int Failed;
+        }
+
         private sealed class PendingFlushSnapshot(long address)
         {
             public readonly long Address = address;
@@ -190,15 +207,102 @@ namespace Garnet.server
         /// <summary>
         /// Called before Tsavorite persists checkpoint metadata. Records below the checkpoint's flushed address may be
         /// flushed stubs whose recovery reads their flush files, and their OnFlush calls all preceded the page writes the
-        /// checkpoint waited for, so every such snapshot is already queued.
+        /// checkpoint waited for, so every such snapshot is already queued. The checkpoint's own tree snapshots were queued
+        /// at FlushBegin; if any failed, the checkpoint fails rather than persisting without them.
         /// </summary>
-        internal void WaitForFlushSnapshotsBeforeCheckpointPersist(Guid checkpointToken) => WaitForPendingFlushSnapshots($"checkpoint:{checkpointToken}");
+        internal void WaitForFlushSnapshotsBeforeCheckpointPersist(Guid checkpointToken)
+        {
+            WaitForPendingFlushSnapshots($"checkpoint:{checkpointToken}");
+
+            if (!pendingCheckpointSnapshots.TryRemove(checkpointToken, out var pending))
+                return;
+
+            var start = Stopwatch.GetTimestamp();
+            var waited = 0;
+            foreach (var snapshot in pending.Snapshots)
+            {
+                if (snapshot.IsCompleted)
+                    continue;
+                waited++;
+                AsyncUtils.BlockingWait(snapshot);
+            }
+
+            if (waited > 0)
+            {
+                logger?.LogInformation("[RangeIndexCheckpointSnapshotWait] token={Token} snapshots={Waited} ms={Ms:F0}",
+                    checkpointToken, waited, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
+
+            if (Volatile.Read(ref pending.Failed) != 0)
+                throw new GarnetException($"RangeIndex: {pending.Failed} checkpoint tree snapshot(s) failed for checkpoint {checkpointToken}");
+        }
+
+        /// <summary>Stops tracking the background snapshots of a failed checkpoint; they finish on their own.</summary>
+        internal void ForgetCheckpointSnapshots(Guid checkpointToken) => _ = pendingCheckpointSnapshots.TryRemove(checkpointToken, out _);
+
+        /// <summary>
+        /// Queues a checkpoint snapshot of <paramref name="entry"/>'s live tree to <paramref name="checkpointPath"/>, after the
+        /// tree's earlier flush snapshots.
+        /// </summary>
+        /// <returns><c>false</c> if the entry no longer accepts snapshots because its tree is being released.</returns>
+        private bool TryEnqueueCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath)
+        {
+            var enqueuedAt = Stopwatch.GetTimestamp();
+            var pending = pendingCheckpointSnapshots.GetOrAdd(checkpointToken, static _ => new PendingCheckpointSnapshots());
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            // Registered first so the persistence wait never misses a snapshot that is already running.
+            pending.Snapshots.Add(done.Task);
+            if (entry.TryAppendFlush(() => RunCheckpointSnapshot(entry, checkpointToken, checkpointPath, pending, done, enqueuedAt), FlushScheduler))
+                return true;
+
+            _ = done.TrySetResult();
+            return false;
+        }
+
+        private void RunCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath, PendingCheckpointSnapshots pending, TaskCompletionSource done, long enqueuedAt)
+        {
+            var start = Stopwatch.GetTimestamp();
+            string mode = null;
+            try
+            {
+                BeforeFlushSnapshotForTest?.Invoke(checkpointPath);
+
+                if (flushSnapshotsStopped)
+                    mode = "skipped-stopped";
+                else if (entry.TrySnapshotUnderClaim(checkpointPath, allowLink: true, atomic: true, out var kind))
+                    mode = SnapshotMode("live", kind);
+                else
+                    mode = "skipped-retired";
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "[RangeIndexCheckpointSnapshotFailed] token={Token} hash={Hash}", checkpointToken, entry.HashPrefix);
+            }
+            finally
+            {
+                // A tree retired after the version shift was evicted (its flush file covers the stub) or deleted, so skipping it is
+                // not a failure; anything else leaves the checkpoint without the tree.
+                if (mode is null or "skipped-stopped")
+                    _ = Interlocked.Increment(ref pending.Failed);
+
+                _ = done.TrySetResult();
+                logger?.LogInformation("[RangeIndexCheckpointSnapshot] token={Token} hash={Hash} mode={Mode} async=true bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0}",
+                    checkpointToken, entry.HashPrefix, mode ?? "failed", mode is null ? -1 : TryGetFileLength(checkpointPath),
+                    Stopwatch.GetElapsedTime(start).TotalMilliseconds, Stopwatch.GetElapsedTime(enqueuedAt, start).TotalMilliseconds);
+            }
+        }
 
         /// <summary>Stops writing queued flush snapshots and waits for those in flight; used before trees are discarded.</summary>
         private void StopFlushSnapshots(string reason)
         {
             flushSnapshotsStopped = true;
             WaitForPendingFlushSnapshots(reason);
+            foreach (var kvp in pendingCheckpointSnapshots)
+            {
+                foreach (var snapshot in kvp.Value.Snapshots)
+                    AsyncUtils.BlockingWait(snapshot);
+            }
             foreach (var kvp in pendingTreeReleases)
                 AsyncUtils.BlockingWait(kvp.Value);
         }

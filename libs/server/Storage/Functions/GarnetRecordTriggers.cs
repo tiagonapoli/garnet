@@ -198,6 +198,7 @@ namespace Garnet.server
                     // is only safe once a checkpoint has made them recoverable. A failed checkpoint has not, so they
                     // must stay queued for the next successful one.
                     rangeIndexManager?.ClearCheckpointBarrier();
+                    rangeIndexManager?.ForgetCheckpointSnapshots(checkpointToken);
                     break;
             }
         }

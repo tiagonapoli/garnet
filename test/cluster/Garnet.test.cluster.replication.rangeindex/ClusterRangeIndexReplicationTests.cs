@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -80,6 +81,67 @@ namespace Garnet.test.cluster
 
         /// <summary>Waits for the flush snapshots a node queued for completed page flushes; flush files are written in the background.</summary>
         void WaitForFlushSnapshots(int nodeIndex) => context.nodes[nodeIndex].Provider.StoreWrapper.rangeIndexManager.WaitForPendingFlushSnapshots("test");
+
+        /// <summary>
+        /// A replica checkpoint driven by the primary's checkpoint marker persists in the background: while its tree snapshot
+        /// is pending, the replica keeps replaying new primary writes, and the checkpoint completes once the snapshot does.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexReplicaCheckpointDoesNotStallReplay()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+            var (_, _) = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            replicaRim.BeforeFlushSnapshotForTest = path =>
+            {
+                if (path.Contains(".flush.", StringComparison.Ordinal))
+                    return;
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                var replicaLastSave = (long)context.clusterTestUtils.Execute(replicaEndpoint, "LASTSAVE", [], logger: context.logger);
+                ClassicAssert.AreEqual("Background saving started", (string)context.clusterTestUtils.Execute(primaryEndpoint, "BGSAVE", [], logger: context.logger));
+                ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30)), "the replica checkpoint must queue a tree snapshot");
+
+                // Replay continues past the checkpoint marker while the replica checkpoint is still persisting.
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field-new", "value-new"], logger: context.logger));
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                string replicated = null;
+                while (DateTime.UtcNow < deadline && (replicated = (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", "field-new"], logger: context.logger)) != "value-new")
+                    await Task.Delay(50);
+                ClassicAssert.AreEqual("value-new", replicated, "replica replay must not wait for its checkpoint to persist");
+                ClassicAssert.AreEqual(replicaLastSave, (long)context.clusterTestUtils.Execute(replicaEndpoint, "LASTSAVE", [], logger: context.logger), "the replica checkpoint must not persist before its tree snapshot");
+
+                gate.Set();
+                deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && (long)context.clusterTestUtils.Execute(replicaEndpoint, "LASTSAVE", [], logger: context.logger) == replicaLastSave)
+                    await Task.Delay(50);
+                ClassicAssert.AreNotEqual(replicaLastSave, (long)context.clusterTestUtils.Execute(replicaEndpoint, "LASTSAVE", [], logger: context.logger), "the replica checkpoint must complete");
+            }
+            finally
+            {
+                gate.Set();
+                replicaRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
 
         /// <summary>
         /// Create RI keys on primary and allow them to flow to the replica through AOF.
