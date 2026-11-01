@@ -457,11 +457,11 @@ namespace Garnet.server
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var keyId = KeyId(keyBytes);
             var newEntry = new TreeEntry(bfTree, keyHash, hashPrefix);
+
+            // Map the pointer before snapshots can see the entry, so every write after its first snapshot is counted.
+            entriesByTree[bfTree.NativePtr] = newEntry;
             if (liveIndexes.TryAdd(keyId, newEntry))
-            {
-                entriesByTree[bfTree.NativePtr] = newEntry;
                 return; // First registration for this key — done.
-            }
 
             // A prior entry exists. Per caller invariants:
             //   - RICREATE: invoked only when the underlying RMW reports Record.Created=true,
@@ -475,13 +475,12 @@ namespace Garnet.server
             // (one would observe a non-null prior in CompareExchange and dispose its duplicate).
             if (liveIndexes.TryGetValue(keyId, out var existing))
             {
-                var prior = Interlocked.CompareExchange(ref existing.Tree, bfTree, null);
-                if (prior is null)
-                {
-                    entriesByTree[bfTree.NativePtr] = existing;
+                entriesByTree[bfTree.NativePtr] = existing;
+                if (Interlocked.CompareExchange(ref existing.Tree, bfTree, null) is null)
                     return; // We activated the pending entry.
-                }
             }
+
+            _ = entriesByTree.TryRemove(bfTree.NativePtr, out _);
 
             logger?.LogError(
                 "RegisterIndex: liveIndexes entry for {Hash} is unexpectedly already activated. " +
