@@ -597,6 +597,76 @@ namespace Tsavorite.test.recovery
                 ClassicAssert.AreEqual(key, output, $"key = {key}");
             }
         }
+
+        /// <summary>
+        /// Recovering from an index checkpoint that starts below the hybrid-log checkpoint's HeadAddress replays pages below the head
+        /// through the circular buffer. The page allocated ahead of the recovered tail must not inherit the bytes of such a page that
+        /// last occupied its buffer slot; otherwise new records leave a stale tail on it that a later scan of the page parses as records.
+        /// </summary>
+        [Test]
+        [Category("TsavoriteKV"), Category("CheckpointRestore")]
+        public async Task RecoverFromOlderIndexCheckpointClearsPageAfterTail([Values(CheckpointType.FoldOver, CheckpointType.Snapshot)] CheckpointType checkpointType)
+        {
+            const int bufferPages = 4;
+            KVSettings CreateSettings() => new()
+            {
+                IndexSize = 1L << 13,
+                LogDevice = log,
+                MutableFraction = 0.5,
+                PageSize = MinKvLogPageSize,
+                LogMemorySize = MinKvLogPageSize * bufferPages,
+                SegmentSize = 1L << LogSettings.kMinMainLogSegmentSizeBits,
+                CheckpointDir = MethodTestDir
+            };
+
+            Guid indexToken, logToken;
+            long tailPage, headPage;
+            var keyArray = new byte[sizeof(long)];
+            using (var store1 = new TsavoriteKV<LongStoreFunctions, LongAllocator>(CreateSettings(), StoreFunctions.Create(LongKeyComparer.Instance, SpanByteRecordTriggers.Instance), (allocatorSettings, storeFunctions) => new(allocatorSettings, storeFunctions)))
+            {
+                using var session = store1.NewSession<TestSpanByteKey, long, long, Empty, SimpleLongSimpleFunctions>(new SimpleLongSimpleFunctions());
+                var bc = session.BasicContext;
+
+                bool success;
+                (success, indexToken) = await store1.TakeIndexCheckpointAsync().ConfigureAwait(false);
+                ClassicAssert.IsTrue(success);
+
+                // Keys and values are nonzero so every page written below the recovered HeadAddress has nonzero record bytes.
+                for (long key = 1; store1.hlogBase.GetPage(store1.Log.HeadAddress) < 4 * bufferPages; key++)
+                {
+                    var keySpan = new Span<byte>(keyArray);
+                    keySpan.AsRef<long>() = key;
+                    _ = bc.Upsert(TestSpanByteKey.FromArray(keyArray), keySpan);
+                }
+
+                // Leave fewer resident pages than the buffer holds so the slot after the tail page last held a page below the head.
+                store1.Log.ShiftHeadAddress(store1.hlogBase.GetLogicalAddressOfStartOfPage(store1.hlogBase.GetPage(store1.Log.TailAddress) - 1), wait: true);
+
+                (success, logToken) = await store1.TakeHybridLogCheckpointAsync(checkpointType).ConfigureAwait(false);
+                ClassicAssert.IsTrue(success);
+                tailPage = store1.hlogBase.GetPage(store1.Log.TailAddress);
+                headPage = store1.hlogBase.GetPage(store1.Log.HeadAddress);
+            }
+
+            // The page that last occupied the slot after the tail page is one that recovery reads but leaves below the head.
+            Assert.That(tailPage + 1 - bufferPages, Is.LessThan(headPage));
+
+            using var store2 = new TsavoriteKV<LongStoreFunctions, LongAllocator>(CreateSettings(), StoreFunctions.Create(LongKeyComparer.Instance, SpanByteRecordTriggers.Instance), (allocatorSettings, storeFunctions) => new(allocatorSettings, storeFunctions));
+            _ = await store2.RecoverAsync(indexToken, logToken).ConfigureAwait(false);
+
+            var hlog = store2.hlogBase;
+            var recoveredTailPage = hlog.GetPage(hlog.GetTailAddress());
+            Assert.That(recoveredTailPage, Is.EqualTo(tailPage));
+            for (var page = recoveredTailPage + 1; page < hlog.GetPage(hlog.HeadAddress) + hlog.BufferSize; page++)
+            {
+                if (!hlog.IsAllocated(hlog.GetPageIndexForPage(page)))
+                    continue;
+                var pageStart = hlog.GetLogicalAddressOfStartOfPage(page);
+                Assert.That(FirstNonZeroAfterPageHeader(hlog.GetPhysicalAddress(pageStart), (int)hlog.PageSize), Is.EqualTo(-1), $"page {page} after the recovered tail page {recoveredTailPage} retains stale bytes");
+            }
+        }
+
+        private static unsafe int FirstNonZeroAfterPageHeader(long physicalAddress, int pageSize) => new ReadOnlySpan<byte>((byte*)physicalAddress + PageHeader.Size, pageSize - PageHeader.Size).IndexOfAnyExcept((byte)0);
     }
     [TestFixture]
     public class RecoveryCheck3Tests : RecoveryCheckBase
