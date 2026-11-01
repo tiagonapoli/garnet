@@ -1162,7 +1162,8 @@ namespace Garnet.server
         /// <para>For each entry with <see cref="TreeEntry.SnapshotPending"/> set:
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
-        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim"/>); entries retired by a concurrent deferred dispose are skipped.</item>
+        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim"/>); entries retired by a concurrent deferred dispose are skipped.
+        /// With <see cref="BackgroundCheckpointSnapshots"/> the snapshot is queued instead and the tree's barrier is released at once.</item>
         /// <item>Pending entries (Tree == null) → copy the deferred staging source, or <c>data.bftree</c>
         /// once staged (no live tree to snapshot from).</item>
         /// </list></para>
@@ -1187,6 +1188,7 @@ namespace Garnet.server
                 var snapshotDir = CheckpointSnapshotDir(checkpointToken);
                 var allStart = Stopwatch.GetTimestamp();
                 var trees = 0;
+                var queued = 0;
                 long totalBytes = 0;
 
                 foreach (var kvp in liveIndexes)
@@ -1203,7 +1205,14 @@ namespace Garnet.server
                         var treeStart = Stopwatch.GetTimestamp();
                         string mode = null;
 
-                        if (entry.Tree is not null)
+                        if (BackgroundCheckpointSnapshots && entry.Tree is not null)
+                        {
+                            if (!TryEnqueueCheckpointSnapshot(entry, checkpointToken, checkpointPath))
+                                logger?.LogWarning("SnapshotAllTreesForCheckpoint: skipped {Hash}; tree is being released", entry.HashPrefix);
+                            else
+                                queued++;
+                        }
+                        else if (entry.Tree is not null)
                         {
                             // Snapshot straight to the token-tagged checkpoint destination under
                             // the per-tree claim (serializes against concurrent OnFlush / migration
@@ -1247,8 +1256,8 @@ namespace Garnet.server
                     }
                 }
 
-                logger?.LogInformation("[RangeIndexCheckpointSnapshotSummary] token={Token} trees={Trees} bytes={Bytes} ms={Ms:F0}",
-                    checkpointToken, trees, totalBytes, Stopwatch.GetElapsedTime(allStart).TotalMilliseconds);
+                logger?.LogInformation("[RangeIndexCheckpointSnapshotSummary] token={Token} trees={Trees} queued={Queued} bytes={Bytes} ms={Ms:F0}",
+                    checkpointToken, trees, queued, totalBytes, Stopwatch.GetElapsedTime(allStart).TotalMilliseconds);
             }
             finally
             {

@@ -3089,6 +3089,75 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// With the AOF enabled, a checkpoint's tree snapshot is written in the background: operations on the tree proceed
+        /// while it is pending, the checkpoint does not persist until it completes, and recovery converges by replaying the AOF.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public async Task RICheckpointSnapshotRunsInBackgroundWithAofAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            ClassicAssert.IsTrue(rim.BackgroundCheckpointSnapshots);
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            rim.BeforeFlushSnapshotForTest = path =>
+            {
+                if (path.Contains(".flush.", StringComparison.Ordinal))
+                    return;
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "ckptasync", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "ckptasync", "field-1", "value-1");
+                var lastSave = (long)db.Execute("LASTSAVE");
+
+                db.Execute("BGSAVE");
+                ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the checkpoint must queue a tree snapshot");
+
+                // Under the synchronous path the tree's checkpoint barrier holds this write until the snapshot is written.
+                var set = Task.Run(() => db.Execute("RI.SET", "ckptasync", "field-2", "value-2"), cancellationToken);
+                _ = await set.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+                ClassicAssert.AreEqual("value-2", (string)db.Execute("RI.GET", "ckptasync", "field-2"));
+
+                await Task.Delay(500, cancellationToken);
+                ClassicAssert.AreEqual(lastSave, (long)db.Execute("LASTSAVE"), "the checkpoint must not persist before its tree snapshot");
+
+                gate.Set();
+                while ((long)db.Execute("LASTSAVE") == lastSave)
+                    await Task.Delay(50, cancellationToken);
+
+                db.Execute("RI.SET", "ckptasync", "field-3", "value-3");
+                db.Execute("COMMITAOF");
+            }
+            finally
+            {
+                gate.Set();
+                rim.BeforeFlushSnapshotForTest = null;
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                for (var i = 1; i <= 3; i++)
+                    ClassicAssert.AreEqual($"value-{i}", (string)db.Execute("RI.GET", "ckptasync", $"field-{i}"), $"field-{i}");
+            }
+        }
+
+        /// <summary>
         /// Snapshot files left half-written by a crash carry the in-progress suffix and must be removed on startup.
         /// </summary>
         [Test]

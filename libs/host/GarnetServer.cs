@@ -427,7 +427,10 @@ namespace Garnet
                 rangeIndexManager = new RangeIndexManager(
                     riLogRoot: riLogRoot, cprDir: cprDir,
                     storeEpoch: storeEpoch,
-                    logger: loggerFactory?.CreateLogger("RangeIndexManager"));
+                    logger: loggerFactory?.CreateLogger("RangeIndexManager"))
+                {
+                    BackgroundCheckpointSnapshots = serverOptions.EnableAOF,
+                };
             }
             var vectorManager = new VectorManager(
                 dbId,
