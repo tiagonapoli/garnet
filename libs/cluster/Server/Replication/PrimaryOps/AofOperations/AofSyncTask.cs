@@ -342,6 +342,8 @@ namespace Garnet.cluster
 
                     iter = clusterProvider.storeWrapper.appendOnlyFile.Log.ScanSingle(physicalSublogIdx, startAddress, long.MaxValue, scanUncommitted: true, recover: false, logger: logger);
 
+                    await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.Replication_Wait_Primary_Before_Aof_Stream_Init).ConfigureAwait(false);
+
                     // Send ping to initialize replication stream
                     var resp = await garnetClient.ExecuteClusterAppendLogInit(localNodeId, physicalSublogIdx, -1, -1, -1);
                     if (!resp.Equals("OK"))
