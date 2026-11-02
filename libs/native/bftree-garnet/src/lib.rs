@@ -467,6 +467,17 @@ pub unsafe extern "C" fn bftree_new_from_cpr_snapshot(
     }
 }
 
+/// Copies the phase timings of the most recent `bftree_new_from_cpr_snapshot` on the calling thread into `out`.
+///
+/// # Safety
+/// `out` must point to a writable `RecoveryStats`.
+#[no_mangle]
+pub unsafe extern "C" fn bftree_last_recovery_stats(out: *mut bf_tree::RecoveryStats) {
+    if !out.is_null() {
+        *out = bf_tree::last_recovery_stats();
+    }
+}
+
 /// Returns 1 if all threads have moved past the snapshot's version barrier,
 /// 0 otherwise. Useful for assertions/diagnostics; not strictly required for
 /// correctness because `cpr_snapshot` is synchronous.

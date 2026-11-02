@@ -11,6 +11,33 @@ using Tsavorite.core;
 namespace Garnet.server.BfTreeInterop
 {
     /// <summary>
+    /// Phase timings (microseconds) and counts of a BfTree snapshot recovery.
+    /// </summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public struct BfTreeRecoveryStats
+    {
+        /// <summary>Total recovery time.</summary>
+        public ulong TotalUs;
+        /// <summary>Time to read and link inner nodes.</summary>
+        public ulong InnerUs;
+        /// <summary>Inner nodes read.</summary>
+        public ulong InnerNodes;
+        /// <summary>Time to read the base-page mapping and build the page table.</summary>
+        public ulong BaseMapUs;
+        /// <summary>Base pages in the page table.</summary>
+        public ulong BasePages;
+        /// <summary>Time to read and install mini-pages.</summary>
+        public ulong MiniUs;
+        /// <summary>Mini-pages read.</summary>
+        public ulong MiniPages;
+        /// <summary>Mini-page bytes read.</summary>
+        public ulong MiniBytes;
+
+        /// <inheritdoc/>
+        public override readonly string ToString() => $"totalMs={TotalUs / 1000.0:F1} innerMs={InnerUs / 1000.0:F1} innerNodes={InnerNodes} baseMapMs={BaseMapUs / 1000.0:F1} basePages={BasePages} miniMs={MiniUs / 1000.0:F1} miniPages={MiniPages} miniBytes={MiniBytes}";
+    }
+
+    /// <summary>
     /// Result codes for BfTree read operations.
     /// </summary>
     public enum BfTreeReadResult
@@ -551,7 +578,16 @@ namespace Garnet.server.BfTreeInterop
         public static BfTreeService RecoverFromCprSnapshot(
             string recoveryPath,
             bool enableSnapshots,
-            StorageBackendType storageBackend)
+            StorageBackendType storageBackend) => RecoverFromCprSnapshot(recoveryPath, enableSnapshots, storageBackend, out _);
+
+        /// <summary>
+        /// Recover a BfTree from a CPR snapshot file and report the native recovery phase timings.
+        /// </summary>
+        /// <param name="recoveryPath">Source CPR snapshot file path.</param>
+        /// <param name="enableSnapshots">Enable CPR snapshot support on the recovered tree.</param>
+        /// <param name="storageBackend">Storage backend of the recovered tree (for managed tracking).</param>
+        /// <param name="stats">Native recovery phase timings and counts.</param>
+        public static BfTreeService RecoverFromCprSnapshot(string recoveryPath, bool enableSnapshots, StorageBackendType storageBackend, out BfTreeRecoveryStats stats)
         {
             if (string.IsNullOrEmpty(recoveryPath))
                 throw new ArgumentException("recoveryPath is required.", nameof(recoveryPath));
@@ -566,6 +602,9 @@ namespace Garnet.server.BfTreeInterop
                     useSnapshot,
                     null, 0);
             }
+            BfTreeRecoveryStats nativeStats = default;
+            NativeBfTreeMethods.bftree_last_recovery_stats(&nativeStats);
+            stats = nativeStats;
             if (treePtr == 0)
                 throw new InvalidOperationException($"Failed to recover BfTree from CPR snapshot '{recoveryPath}'.");
             return new BfTreeService(treePtr, storageBackend, filePath: null);

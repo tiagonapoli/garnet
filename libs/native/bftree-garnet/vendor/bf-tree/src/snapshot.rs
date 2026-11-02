@@ -53,6 +53,33 @@ const SNAPSHOT_STATE_PHASE_NUM: u64 = 4; // There are 4 snapshot phases
 const SNAPSHOT_STATE_PHASE_ID_MASK: u64 = 0b111 << SNAPSHOT_STATE_PHASE_ID_SHIFT; // Most significant 3 bits for phase id (allowing up to 8 phases)
 const SNAPSHOT_STATE_VERSION_MASK: u64 = (1 << SNAPSHOT_STATE_PHASE_ID_SHIFT) - 1; // Least significant 61 bits for version number
 
+/// Phase timings and counts of the most recent snapshot recovery on the calling thread.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RecoveryStats {
+    pub total_us: u64,
+    pub inner_us: u64,
+    pub inner_nodes: u64,
+    pub base_map_us: u64,
+    pub base_pages: u64,
+    pub mini_us: u64,
+    pub mini_pages: u64,
+    pub mini_bytes: u64,
+}
+
+std::thread_local! {
+    static LAST_RECOVERY_STATS: std::cell::Cell<RecoveryStats> = std::cell::Cell::new(RecoveryStats::default());
+}
+
+/// Returns the stats of the most recent snapshot recovery on the calling thread.
+pub fn last_recovery_stats() -> RecoveryStats {
+    LAST_RECOVERY_STATS.with(|s| s.get())
+}
+
+fn elapsed_us(start: std::time::Instant) -> u64 {
+    start.elapsed().as_micros() as u64
+}
+
 /// Snapshot phase identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhaseId {
@@ -1092,6 +1119,22 @@ impl CPRSnapShotMgr {
         buffer_size: Option<usize>, // buffer size of the newly created Bf-tree
         wal_config: Option<Arc<WalConfig>>,
     ) -> Result<BfTree, ConfigError> {
+        let start = std::time::Instant::now();
+        let mut stats = RecoveryStats::default();
+        let result = Self::new_from_snapshot_timed(recovery_snapshot_file_path, use_snapshot, buffer_ptr, buffer_size, wal_config, &mut stats);
+        stats.total_us = elapsed_us(start);
+        LAST_RECOVERY_STATS.with(|s| s.set(stats));
+        result
+    }
+
+    fn new_from_snapshot_timed(
+        recovery_snapshot_file_path: impl AsRef<Path>,
+        use_snapshot: bool,
+        buffer_ptr: Option<*mut u8>,
+        buffer_size: Option<usize>,
+        wal_config: Option<Arc<WalConfig>>,
+        stats: &mut RecoveryStats,
+    ) -> Result<BfTree, ConfigError> {
         // Check the recovery file is valid
         if !recovery_snapshot_file_path.as_ref().exists() {
             // if not already exist, we just create a new empty file at the location.
@@ -1165,40 +1208,36 @@ impl CPRSnapShotMgr {
         );
 
         // Step 1: reconstruct inner nodes.
+        let inner_start = std::time::Instant::now();
         let mut root_page_id = bf_meta.root_id;
         let mut inner_node_page_buffer = SectorAlignedVector::new_zeroed(INNER_NODE_SIZE);
         if root_page_id.is_inner_node_pointer() {
-            let inner_mapping: Vec<(*const InnerNode, usize)> = read_vec_from_offset(
+            let mut inner_mapping: Vec<(*const InnerNode, usize)> = read_vec_from_offset(
                 bf_meta.inner_offset,
                 bf_meta.inner_size,
                 &recovery_snapshot_vfs,
             );
 
-            // Sanity check on root nodes
+            // Read every inner node exactly once, in file order, so the reads are sequential.
+            inner_mapping.sort_unstable_by_key(|(_, offset)| *offset);
             let mut root_cnt = 0;
-            for (_ptr, offset) in &inner_mapping {
+            let mut inner_map: HashMap<*const InnerNode, *mut InnerNode> = HashMap::with_capacity(inner_mapping.len());
+            for (ptr, offset) in &inner_mapping {
                 recovery_snapshot_vfs.read(*offset, &mut inner_node_page_buffer);
                 let inner_node = InnerNodeBuilder::new().build_from_slice(&inner_node_page_buffer);
                 if unsafe { (*inner_node).is_root() } {
                     root_cnt += 1;
                 }
-                InnerNode::free_node(inner_node);
+                // No need for disk offset of a inner node.
+                unsafe {
+                    (*inner_node).set_disk_offset(INVALID_DISK_OFFSET as u64);
+                }
+                inner_map.insert(*ptr, inner_node);
             }
             assert_eq!(root_cnt, 1, "Root count in inner mapping: {}", root_cnt);
+            stats.inner_nodes = inner_mapping.len() as u64;
 
-            let mut inner_map = HashMap::new();
-
-            for m in inner_mapping {
-                inner_map.insert(m.0, m.1);
-            }
-            let offset = inner_map.get(&root_page_id.as_inner_node()).unwrap();
-            recovery_snapshot_vfs.read(*offset, &mut inner_node_page_buffer);
-            let root_page = InnerNodeBuilder::new().build_from_slice(&inner_node_page_buffer);
-
-            // No need for disk offset of a inner node.
-            unsafe {
-                (*root_page).set_disk_offset(INVALID_DISK_OFFSET as u64);
-            }
+            let root_page = inner_map.remove(&root_page_id.as_inner_node()).unwrap();
             // Mark the root node
             unsafe {
                 (*root_page).set_root(true);
@@ -1213,19 +1252,19 @@ impl CPRSnapShotMgr {
                     continue;
                 }
                 for (idx, c) in inner.as_ref().get_child_iter().enumerate() {
-                    let offset = inner_map.get(&c.as_inner_node()).unwrap();
-                    recovery_snapshot_vfs.read(*offset, &mut inner_node_page_buffer);
-                    let inner_page =
-                        InnerNodeBuilder::new().build_from_slice(&inner_node_page_buffer);
-                    unsafe {
-                        (*inner_page).set_disk_offset(INVALID_DISK_OFFSET as u64);
-                    }
+                    let inner_page = inner_map.remove(&c.as_inner_node()).unwrap();
                     let inner_id = PageID::from_pointer(inner_page);
                     inner.as_mut().update_at_pos(idx, inner_id);
                     inner_resolve_queue.push_back(inner_page);
                 }
             }
+
+            // Nodes not reachable from the root are stale snapshot entries.
+            for (_, unreachable) in inner_map {
+                InnerNode::free_node(unreachable);
+            }
         }
+        stats.inner_us = elapsed_us(inner_start);
 
         let raw_root_id = if root_page_id.is_id() {
             root_page_id.raw() | BfTree::ROOT_IS_LEAF_MASK
@@ -1237,6 +1276,7 @@ impl CPRSnapShotMgr {
         // Here we differentiate cache-only from disk-backed Bf-trees as their recovery process differs.
         if !bf_meta.cache_only {
             // For disk backed bf-tree, we reconstruct the page table using base pages.
+            let base_start = std::time::Instant::now();
             let base_mapping: Vec<(PageID, usize)> = if bf_meta.base_size > 0 {
                 read_vec_from_offset(
                     bf_meta.base_offset,
@@ -1246,6 +1286,7 @@ impl CPRSnapShotMgr {
             } else {
                 Vec::new()
             };
+            stats.base_pages = base_mapping.len() as u64;
 
             let base_page_loc_mapping = base_mapping.into_iter().map(|(pid, offset)| {
                 let loc = PageLocation::Base(offset);
@@ -1259,6 +1300,7 @@ impl CPRSnapShotMgr {
                 config.clone(),
                 snapshot_mgr.clone(),
             );
+            stats.base_map_us = elapsed_us(base_start);
 
             let circular_buffer = CircularBuffer::new(
                 config.cb_size_byte,
@@ -1272,7 +1314,8 @@ impl CPRSnapShotMgr {
             );
 
             // Next, we restore the mini-pages and wire them to the corresponding base pages and update the page table.
-            let mini_mapping: Vec<(PageID, usize)> = if bf_meta.mini_size > 0 {
+            let mini_start = std::time::Instant::now();
+            let mut mini_mapping: Vec<(PageID, usize)> = if bf_meta.mini_size > 0 {
                 read_vec_from_offset(
                     bf_meta.mini_offset,
                     bf_meta.mini_size,
@@ -1301,6 +1344,10 @@ impl CPRSnapShotMgr {
             let storage =
                 LeafStorage::new_inner(config.clone(), pt, circular_buffer, recovery_snapshot_vfs);
 
+            // Mini-page order in the snapshot is arbitrary; reading in file order makes the reads sequential.
+            mini_mapping.sort_unstable_by_key(|(_, offset)| *offset);
+            let max_mini_size = mini_mapping.iter().map(|(pid, _)| *mini_size_mapping_unique.get(pid).unwrap()).max().unwrap_or(0);
+            let mut page_buffer = SectorAlignedVector::new_zeroed(align_to_sector_size(max_mini_size.max(1)));
             for (pid, offset) in &mini_mapping {
                 let mini_size = *mini_size_mapping_unique.get(pid).unwrap();
 
@@ -1313,8 +1360,8 @@ impl CPRSnapShotMgr {
                 };
 
                 // Copy mini-page from snapshot file to the newly allocated mini-page
-                let mut page_buffer = SectorAlignedVector::new_zeroed(mini_size);
-                storage.vfs.read(*offset, &mut page_buffer);
+                storage.vfs.read(*offset, &mut page_buffer[..mini_size]);
+                stats.mini_bytes += mini_size as u64;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
                         page_buffer.as_ptr(),
@@ -1342,6 +1389,8 @@ impl CPRSnapShotMgr {
                 // Replace the base page with the mini-page in the page table
                 base_page.create_cache_page_loc(mini_loc);
             }
+            stats.mini_pages = mini_mapping.len() as u64;
+            stats.mini_us = elapsed_us(mini_start);
 
             Ok(BfTree {
                 storage,
