@@ -2984,6 +2984,75 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Waiting for pending flush snapshots must not also wait for snapshots queued during the wait: under sustained page
+        /// flushes the queue is never empty, so such a wait never ends and starves the checkpoints that call it.
+        /// </summary>
+        [Test]
+        public void RIFlushSnapshotWaitIgnoresSnapshotsQueuedDuringWaitTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var store = server.Provider.StoreWrapper.store;
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+
+            const int laterTrees = 16;
+            db.Execute("RI.CREATE", "first", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "first", "field-x", "value-1");
+            for (var i = 0; i < laterTrees; i++)
+                db.Execute("RI.CREATE", $"later{i}", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            WaitForFlushSnapshots();
+
+            using var releaseFirst = new ManualResetEventSlim();
+            using var releaseLater = new ManualResetEventSlim();
+            using var firstEntered = new ManualResetEventSlim();
+            var queuedLater = 0;
+            rangeIndexManager.BeforeFlushSnapshotForTest = path =>
+            {
+                if (Volatile.Read(ref queuedLater) == 0)
+                {
+                    firstEntered.Set();
+                    _ = releaseFirst.Wait(TimeSpan.FromMinutes(2));
+                }
+                else
+                {
+                    _ = releaseLater.Wait(TimeSpan.FromMinutes(2));
+                }
+            };
+
+            try
+            {
+                db.Execute("RI.SET", "first", "field-x", "value-2");
+                store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+                ClassicAssert.IsTrue(firstEntered.Wait(TimeSpan.FromSeconds(60)), "the first flush snapshot must start");
+
+                var waiter = Task.Run(() => rangeIndexManager.WaitForPendingFlushSnapshots("test"));
+
+                // Give the waiter time to start; if it has not, the test only loses its ability to catch the bug.
+                Thread.Sleep(500);
+                Volatile.Write(ref queuedLater, 1);
+                for (var i = 0; i < laterTrees; i++)
+                    db.Execute("RI.SET", $"later{i}", "field-x", "value-1");
+                store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+
+                releaseFirst.Set();
+                ClassicAssert.IsTrue(waiter.Wait(TimeSpan.FromSeconds(60)), "the wait must not include snapshots queued after it started");
+            }
+            finally
+            {
+                releaseFirst.Set();
+                releaseLater.Set();
+                rangeIndexManager.BeforeFlushSnapshotForTest = null;
+                WaitForFlushSnapshots();
+            }
+        }
+
+        /// <summary>
         /// Re-flushing a tree that was not mutated since its last snapshot must hard-link that immutable snapshot instead
         /// of writing a new copy, while a mutation must force a fresh, independent snapshot.
         /// </summary>
