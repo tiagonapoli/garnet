@@ -78,6 +78,7 @@ namespace Garnet.server
                         storeVersion = !recoverFromToken
                             ? await Store.RecoverAsync().ConfigureAwait(false)
                             : await Store.RecoverAsync(metadata.storeIndexToken, metadata.storeHlogToken).ConfigureAwait(false);
+                        defaultDatabase.RangeIndexManager?.DeleteFlushFilesAboveRecoveredTail(Store.Log.TailAddress);
                     }
 
                     if (storeVersion > 0)

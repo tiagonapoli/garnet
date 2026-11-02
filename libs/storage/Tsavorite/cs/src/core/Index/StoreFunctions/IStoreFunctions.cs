@@ -77,6 +77,9 @@ namespace Tsavorite.core
         /// <inheritdoc cref="IRecordTriggers.OnRecoverySnapshotRead"/>
         void OnRecoverySnapshotRead(ref LogRecord logRecord);
 
+        /// <inheritdoc cref="IRecordTriggers.OnRecoveryDiscard"/>
+        void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress);
+
         /// <inheritdoc cref="IRecordTriggers.OnCheckpoint"/>
         void OnCheckpoint(CheckpointTrigger trigger, System.Guid checkpointToken);
 
