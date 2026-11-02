@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -436,7 +436,7 @@ namespace Garnet
                 };
 
                 // The native limiter is process-wide; every database's trees share the disk.
-                BfTreeService.SetSnapshotWriteRate((long)serverOptions.RangeIndexSnapshotWriteMBps << 20);
+                BfTreeService.SetSnapshotIORate((long)serverOptions.RangeIndexSnapshotIOMBps << 20);
             }
             var vectorManager = new VectorManager(
                 dbId,

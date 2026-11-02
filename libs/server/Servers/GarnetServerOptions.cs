@@ -946,9 +946,9 @@ namespace Garnet.server
         public int RangeIndexParkedTreeMemoryMB = 1024;
 
         /// <summary>
-        /// Most MiB per second written by Range Index tree snapshots across the process; 0 is unlimited.
+        /// Most MiB per second read or written by Range Index tree snapshot sweeps across the process; 0 is unlimited.
         /// </summary>
-        public int RangeIndexSnapshotWriteMBps = 0;
+        public int RangeIndexSnapshotIOMBps = 0;
 
         /// <summary>
         /// Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count).

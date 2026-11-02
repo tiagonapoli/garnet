@@ -119,7 +119,7 @@ pub struct CPRSnapShotMgr {
     snapshot_in_progress: AtomicBool,
     // Bytes written to the current snapshot file since the sweep last synced it.
     unsynced_bytes: AtomicUsize,
-    // Bytes written to the current snapshot file not yet charged to the process-wide write rate limit.
+    // Bytes the sweep has read or written and not yet charged to the process-wide I/O rate limit.
     unpaced_bytes: AtomicUsize,
 }
 
@@ -130,60 +130,82 @@ const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 64 << 20;
 #[cfg(test)]
 const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 4096;
 
-/// Bytes the sweep writes between charges to the snapshot write rate limit; small enough to keep bursts short.
+/// Bytes the sweep reads or writes between charges to the snapshot I/O rate limit; small enough to keep bursts short.
 #[cfg(not(test))]
 const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4 << 20;
 #[cfg(test)]
 const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4096;
 
-/// Process-wide cap on snapshot write bandwidth in bytes per second, shared by all trees; 0 disables it.
-static SNAPSHOT_WRITE_BYTES_PER_SEC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Process-wide cap on snapshot sweep I/O (base pages read plus snapshot bytes written) in bytes per second,
+/// shared by all trees; 0 disables it.
+static SNAPSHOT_IO_BYTES_PER_SEC: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
-/// Nanoseconds since `SNAPSHOT_PACING_EPOCH` at which the write rate limit's reserved budget ends.
-static SNAPSHOT_WRITE_BUDGET_END_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Nanoseconds since `SNAPSHOT_PACING_EPOCH` at which the I/O rate limit's reserved budget ends.
+static SNAPSHOT_IO_BUDGET_END_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 static SNAPSHOT_PACING_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
-/// Total time snapshot sweeps have slept on the write rate limit, for observability.
-static SNAPSHOT_WRITE_THROTTLED_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Total time snapshot sweeps have slept on the I/O rate limit, for observability.
+static SNAPSHOT_IO_THROTTLED_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
-/// Caps the bandwidth of all snapshot sweeps in the process, so snapshots cannot saturate a disk shared with
+/// Total base-page bytes snapshot sweeps have read from tree files, for observability.
+static SNAPSHOT_READ_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Caps the I/O of all snapshot sweeps in the process, so snapshots cannot saturate a disk shared with
 /// latency-sensitive I/O such as replication replay; 0 removes the cap.
-pub fn set_snapshot_write_rate(bytes_per_sec: u64) {
-    SNAPSHOT_WRITE_BYTES_PER_SEC.store(bytes_per_sec, std::sync::atomic::Ordering::Relaxed);
+pub fn set_snapshot_io_rate(bytes_per_sec: u64) {
+    SNAPSHOT_IO_BYTES_PER_SEC.store(bytes_per_sec, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Total nanoseconds snapshot sweeps have slept on the process-wide write rate limit.
-pub fn snapshot_write_throttled_nanos() -> u64 {
-    SNAPSHOT_WRITE_THROTTLED_NANOS.load(std::sync::atomic::Ordering::Relaxed)
+/// Total nanoseconds snapshot sweeps have slept on the process-wide I/O rate limit.
+pub fn snapshot_io_throttled_nanos() -> u64 {
+    SNAPSHOT_IO_THROTTLED_NANOS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Reserves `bytes` of the process-wide write budget and sleeps until the reservation starts.
-fn charge_snapshot_write_rate(bytes: usize) {
-    let rate = SNAPSHOT_WRITE_BYTES_PER_SEC.load(std::sync::atomic::Ordering::Relaxed);
+/// Total base-page bytes snapshot sweeps have read from tree files.
+pub fn snapshot_read_bytes() -> u64 {
+    SNAPSHOT_READ_BYTES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reserves `bytes` of the process-wide I/O budget and sleeps until the reservation starts.
+fn charge_snapshot_io_rate(bytes: usize) {
+    let rate = SNAPSHOT_IO_BYTES_PER_SEC.load(std::sync::atomic::Ordering::Relaxed);
     if rate == 0 || bytes == 0 {
         return;
     }
 
     let epoch = *SNAPSHOT_PACING_EPOCH.get_or_init(std::time::Instant::now);
     let now = epoch.elapsed().as_nanos() as u64;
-    let wait = reserve_snapshot_write_budget(&SNAPSHOT_WRITE_BUDGET_END_NANOS, now, bytes, rate);
+    let wait = reserve_snapshot_io_budget(&SNAPSHOT_IO_BUDGET_END_NANOS, now, bytes, rate);
     if wait > 0 {
-        SNAPSHOT_WRITE_THROTTLED_NANOS.fetch_add(wait, std::sync::atomic::Ordering::Relaxed);
+        SNAPSHOT_IO_THROTTLED_NANOS.fetch_add(wait, std::sync::atomic::Ordering::Relaxed);
         std::thread::sleep(std::time::Duration::from_nanos(wait));
     }
 }
 
 /// Appends a reservation of `bytes` at `rate` bytes per second to `budget_end` and returns the nanoseconds from `now`
 /// until it starts. An idle limiter does not bank unused budget: reservations start no earlier than `now`.
-fn reserve_snapshot_write_budget(budget_end: &std::sync::atomic::AtomicU64, now: u64, bytes: usize, rate: u64) -> u64 {
+fn reserve_snapshot_io_budget(
+    budget_end: &std::sync::atomic::AtomicU64,
+    now: u64,
+    bytes: usize,
+    rate: u64,
+) -> u64 {
     use std::sync::atomic::Ordering as StdOrdering;
 
     let cost = ((bytes as u128 * 1_000_000_000) / rate as u128) as u64;
     let mut end = budget_end.load(StdOrdering::Relaxed);
     loop {
         let start = end.max(now);
-        match budget_end.compare_exchange_weak(end, start + cost, StdOrdering::AcqRel, StdOrdering::Relaxed) {
+        match budget_end.compare_exchange_weak(
+            end,
+            start + cost,
+            StdOrdering::AcqRel,
+            StdOrdering::Relaxed,
+        ) {
             Ok(_) => return start - now,
             Err(current) => end = current,
         }
@@ -499,11 +521,17 @@ impl CPRSnapShotMgr {
         offset
     }
 
-    /// Charges written bytes to the process-wide write rate limit and syncs the snapshot file once enough
+    /// Records a base page the sweep read from the tree file, so reads count toward the I/O rate limit.
+    fn record_snapshot_read(&self, bytes: usize) {
+        self.unpaced_bytes.fetch_add(bytes, Ordering::Relaxed);
+        SNAPSHOT_READ_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Charges read and written bytes to the process-wide I/O rate limit and syncs the snapshot file once enough
     /// unsynced bytes accumulate. Call only while holding no page locks, since it may sleep.
-    fn pace_snapshot_writes(&self) {
+    fn pace_snapshot_io(&self) {
         if self.unpaced_bytes.load(Ordering::Relaxed) >= SNAPSHOT_PACE_INTERVAL_BYTES {
-            charge_snapshot_write_rate(self.unpaced_bytes.swap(0, Ordering::Relaxed));
+            charge_snapshot_io_rate(self.unpaced_bytes.swap(0, Ordering::Relaxed));
         }
 
         if self.unsynced_bytes.load(Ordering::Relaxed) < SNAPSHOT_SYNC_INTERVAL_BYTES {
@@ -700,7 +728,7 @@ impl CPRSnapShotMgr {
 
         for (_, pid) in page_table_iter {
             assert!(pid.is_id());
-            self.pace_snapshot_writes();
+            self.pace_snapshot_io();
 
             // A reader lock is enough
             let mut leaf = tree.mapping_table().get(&pid);
@@ -710,6 +738,7 @@ impl CPRSnapShotMgr {
             match page_loc {
                 PageLocation::Base(offset) => {
                     let base_ref = leaf.load_base_page(offset);
+                    self.record_snapshot_read(base_ref.meta.node_size as usize);
                     if base_ref.get_clean_snapshot_version() < version {
                         let base_ptr = unsafe {
                             std::slice::from_raw_parts(
@@ -727,8 +756,8 @@ impl CPRSnapShotMgr {
                     let full_ref = leaf.load_cache_page(ptr);
                     if full_ref.get_clean_snapshot_version() < version {
                         let image = full_page_snapshot_image(full_ref);
-                        let offset =
-                            self.snapshot_page(image.as_u8_slice(), full_ref.meta.node_size as usize);
+                        let offset = self
+                            .snapshot_page(image.as_u8_slice(), full_ref.meta.node_size as usize);
                         base_mapping.push((pid, offset));
                     }
                 }
@@ -748,6 +777,7 @@ impl CPRSnapShotMgr {
                         if !tree.cache_only {
                             // In disk-mode, the base page of mini-page is part of the snapshot as well.
                             let base_ref = leaf.load_base_page(mini_ref.next_level.as_offset());
+                            self.record_snapshot_read(base_ref.meta.node_size as usize);
                             assert!(base_ref.get_clean_snapshot_version() < version); // disk page's version should never be greater than its mini-page's.
 
                             let base_ptr = unsafe {
@@ -1801,18 +1831,66 @@ mod tests {
     use std::sync::{atomic::AtomicBool, Arc};
 
     #[test]
-    fn snapshot_write_budget_queues_reservations_without_banking_idle_time() {
-        use super::reserve_snapshot_write_budget;
+    fn snapshot_io_budget_queues_reservations_without_banking_idle_time() {
+        use super::reserve_snapshot_io_budget;
 
         // One byte per nanosecond.
         let rate = 1_000_000_000;
         let budget_end = std::sync::atomic::AtomicU64::new(0);
-        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_000, 500, rate), 0);
-        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_000, 500, rate), 500, "a reservation queues behind the outstanding budget");
-        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_200, 100, rate), 800);
+        assert_eq!(reserve_snapshot_io_budget(&budget_end, 1_000, 500, rate), 0);
+        assert_eq!(
+            reserve_snapshot_io_budget(&budget_end, 1_000, 500, rate),
+            500,
+            "a reservation queues behind the outstanding budget"
+        );
+        assert_eq!(
+            reserve_snapshot_io_budget(&budget_end, 1_200, 100, rate),
+            800
+        );
         assert_eq!(budget_end.load(std::sync::atomic::Ordering::Relaxed), 2_100);
-        assert_eq!(reserve_snapshot_write_budget(&budget_end, 10_000, 100, rate), 0, "idle time must not become a burst allowance");
-        assert_eq!(reserve_snapshot_write_budget(&budget_end, 10_000, 100, rate), 100);
+        assert_eq!(
+            reserve_snapshot_io_budget(&budget_end, 10_000, 100, rate),
+            0,
+            "idle time must not become a burst allowance"
+        );
+        assert_eq!(
+            reserve_snapshot_io_budget(&budget_end, 10_000, 100, rate),
+            100
+        );
+    }
+
+    #[test]
+    fn snapshot_sweep_counts_base_page_reads() {
+        let file_path = std::path::PathBuf::from_str("target/test_sweep_reads.bftree").unwrap();
+        let snapshot_path =
+            std::path::PathBuf::from_str("target/test_sweep_reads_snapshot.bftree").unwrap();
+        let _ = std::fs::remove_file(&file_path);
+        let _ = std::fs::remove_file(&snapshot_path);
+
+        // A 128 KB buffer pool forces most leaves to base pages on disk.
+        let mut config = Config::new(&file_path, 128 * 1024);
+        config.storage_backend(crate::StorageBackend::Std);
+        config.use_snapshot(true);
+        let bftree = BfTree::with_config(config, None).unwrap();
+        for i in 0u64..20_000 {
+            let key = i.to_be_bytes();
+            assert!(matches!(
+                bftree.insert(&key, &[7u8; 64]),
+                crate::LeafInsertResult::Success
+            ));
+        }
+
+        let before = super::snapshot_read_bytes();
+        bftree.cpr_snapshot(&snapshot_path);
+        let read = super::snapshot_read_bytes() - before;
+        assert!(
+            read >= 1024 * 1024,
+            "the sweep read only {read} bytes of base pages"
+        );
+
+        drop(bftree);
+        std::fs::remove_file(file_path).unwrap();
+        std::fs::remove_file(snapshot_path).unwrap();
     }
 
     /// Multiple writer threads write to a BfTree in parallel while a separate thread taking multiple snapshots
