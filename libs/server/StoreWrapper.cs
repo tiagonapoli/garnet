@@ -156,6 +156,9 @@ namespace Garnet.server
 
         readonly SemaphoreSlim checkpointFrequencyChanged = new(0, 1);
 
+        /// <summary>Test hook invoked before a checkpoint compacts the log.</summary>
+        internal Action BeforeCheckpointCompactionForTest;
+
         private IDatabaseManager databaseManager;
         SingleWriterMultiReaderLock databaseManagerLock;
 
