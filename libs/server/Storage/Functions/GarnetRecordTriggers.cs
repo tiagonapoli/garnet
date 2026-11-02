@@ -168,6 +168,17 @@ namespace Garnet.server
         }
 
         /// <inheritdoc/>
+        public readonly void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress)
+        {
+            if (rangeIndexManager is null
+                || logRecord.DataHeader.ValueIsObject
+                || logRecord.DataHeader.RecordType != RangeIndexManager.RangeIndexRecordType)
+                return;
+
+            rangeIndexManager.DeleteDiscardedFlushFile(logRecord.Key, logicalAddress);
+        }
+
+        /// <inheritdoc/>
         public readonly void OnCheckpoint(CheckpointTrigger trigger, Guid checkpointToken)
         {
             if (rangeIndexManager == null && vectorManager == null)

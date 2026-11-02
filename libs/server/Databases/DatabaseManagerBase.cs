@@ -172,6 +172,7 @@ namespace Garnet.server
         {
             var storeVersion = await db.Store.RecoverAsync().ConfigureAwait(false);
             Logger?.LogInformation("Recovered store to version {storeVersion}", storeVersion);
+            db.RangeIndexManager?.DeleteFlushFilesAboveRecoveredTail(db.Store.Log.TailAddress);
 
             db.CheckpointRecovery = new CheckpointRecoveryOutcome { StoreVersion = storeVersion };
 
