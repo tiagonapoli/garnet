@@ -144,7 +144,54 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
-        /// Create RI keys on primary and allow them to flow to the replica through AOF.
+        /// A replica compacts its log for the checkpoint it takes at the primary's checkpoint marker; replay must keep
+        /// applying new primary writes while that compaction runs.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterReplicaCheckpointCompactionDoesNotStallReplay()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+            var (_, _) = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 10);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var replicaStoreWrapper = context.nodes[replicaIndex].Provider.StoreWrapper;
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            replicaStoreWrapper.BeforeCheckpointCompactionForTest = () =>
+            {
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                ClassicAssert.AreEqual("Background saving started", (string)context.clusterTestUtils.Execute(primaryEndpoint, "BGSAVE", [], logger: context.logger));
+                ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30)), "the replica checkpoint must compact its log");
+
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field-new", "value-new"], logger: context.logger));
+                var deadline = DateTime.UtcNow.AddSeconds(15);
+                string replicated = null;
+                while (DateTime.UtcNow < deadline && (replicated = (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", "field-new"], logger: context.logger)) != "value-new")
+                    await Task.Delay(50);
+                ClassicAssert.AreEqual("value-new", replicated, "replica replay must not wait for checkpoint compaction");
+            }
+            finally
+            {
+                gate.Set();
+                replicaStoreWrapper.BeforeCheckpointCompactionForTest = null;
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
         /// Verify RI.GET returns correct values on replica.
         /// </summary>
         [Test, Order(1)]
