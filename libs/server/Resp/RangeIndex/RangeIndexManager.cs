@@ -1226,7 +1226,7 @@ namespace Garnet.server
         /// <para>For each entry with <see cref="TreeEntry.SnapshotPending"/> set:
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
-        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim"/>); entries retired by a concurrent deferred dispose are skipped.
+        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim(string)"/>); entries retired by a concurrent deferred dispose are skipped.
         /// With <see cref="BackgroundCheckpointSnapshots"/> the snapshot is queued instead and the tree's barrier is released at once.</item>
         /// <item>Pending entries (Tree == null) → copy the deferred staging source, or <c>data.bftree</c>
         /// once staged (no live tree to snapshot from).</item>

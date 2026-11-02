@@ -150,7 +150,7 @@ namespace Garnet.cluster
             }
             finally
             {
-                producerCts.Cancel();
+                await producerCts.CancelAsync().ConfigureAwait(false);
                 try { await producer.ConfigureAwait(false); }
                 catch { }
 
