@@ -5,6 +5,7 @@ using System;
 using System.Threading;
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -194,6 +195,7 @@ namespace Garnet.server
             inputCopy.arg1 = default;
             Span<byte> stubSpan = stackalloc byte[IndexSizeBytes];
 
+            var start = Stopwatch.GetTimestamp();
             using (ReadRangeIndex(session, pinnedKey, ref inputCopy, stubSpan, out var status))
             {
                 if (status != GarnetStatus.OK)
@@ -209,7 +211,9 @@ namespace Garnet.server
                     return;
                 }
 
+                var nativeStart = Stopwatch.GetTimestamp();
                 var insertResult = BfTreeService.InsertByPtr(treePtr, field, value);
+                RecordReplayOp(nativeStart - start, Stopwatch.GetTimestamp() - nativeStart);
                 NoteTreeMutated(treePtr);
                 if (insertResult != BfTreeInsertResult.Success)
                 {
@@ -250,6 +254,7 @@ namespace Garnet.server
             inputCopy.arg1 = default;
             Span<byte> stubSpan = stackalloc byte[IndexSizeBytes];
 
+            var start = Stopwatch.GetTimestamp();
             using (ReadRangeIndex(session, pinnedKey, ref inputCopy, stubSpan, out var status))
             {
                 if (status != GarnetStatus.OK)
@@ -265,7 +270,9 @@ namespace Garnet.server
                     return;
                 }
 
+                var nativeStart = Stopwatch.GetTimestamp();
                 var deleteResult = BfTreeService.DeleteByPtr(treePtr, field);
+                RecordReplayOp(nativeStart - start, Stopwatch.GetTimestamp() - nativeStart);
                 NoteTreeMutated(treePtr);
                 if (deleteResult != BfTreeDeleteResult.Success)
                 {

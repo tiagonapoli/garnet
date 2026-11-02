@@ -869,7 +869,12 @@ namespace Garnet.server
                 DiscardParkedTreeLocked(KeyId(keyBytes), "staged");
                 var copyStart = Stopwatch.GetTimestamp();
                 RangeIndexFileLinks.Copy(snapshotPath, dataPath, overwrite: true);
-                logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
+                var copyTicks = Stopwatch.GetTimestamp() - copyStart;
+                var copyBytes = new FileInfo(dataPath).Length;
+                _ = Interlocked.Increment(ref phaseStats.PreStageCopies);
+                _ = Interlocked.Add(ref phaseStats.PreStageCopyTicks, copyTicks);
+                _ = Interlocked.Add(ref phaseStats.PreStageCopyBytes, copyBytes);
+                logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, copyBytes, copyTicks * 1000.0 / Stopwatch.Frequency);
 
                 var keyId = KeyId(keyBytes);
                 var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
@@ -978,7 +983,10 @@ namespace Garnet.server
                 {
                     Volatile.Write(ref entry.StagingSource, null);
                     entry.StagedFrom = StagedCopy.Describe(source, dataPath);
-                    logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} prefetched=true waitMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
+                    var waitTicks = Stopwatch.GetTimestamp() - copyStart;
+                    _ = Interlocked.Increment(ref phaseStats.PrefetchTakes);
+                    _ = Interlocked.Add(ref phaseStats.PrefetchWaitTicks, waitTicks);
+                    logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} prefetched=true waitMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, waitTicks * 1000.0 / Stopwatch.Frequency);
                     continue;
                 }
 
@@ -994,7 +1002,12 @@ namespace Garnet.server
 
                 Volatile.Write(ref entry.StagingSource, null);
                 entry.StagedFrom = StagedCopy.Describe(source, dataPath);
-                logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
+                var stageTicks = Stopwatch.GetTimestamp() - copyStart;
+                var stageBytes = new FileInfo(dataPath).Length;
+                _ = Interlocked.Increment(ref phaseStats.StageCopies);
+                _ = Interlocked.Add(ref phaseStats.StageCopyTicks, stageTicks);
+                _ = Interlocked.Add(ref phaseStats.StageCopyBytes, stageBytes);
+                logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", entry.HashPrefix, stageBytes, stageTicks * 1000.0 / Stopwatch.Frequency);
             }
         }
 
