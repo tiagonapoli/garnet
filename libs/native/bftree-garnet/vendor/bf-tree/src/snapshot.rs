@@ -31,7 +31,7 @@ use crate::{
     nodes::{leaf_node::MiniPageNextLevel, LeafNode, INVALID_DISK_OFFSET},
     nodes::{InnerNode, InnerNodeBuilder, PageID, DISK_PAGE_SIZE, INNER_NODE_SIZE},
     storage::{make_vfs, LeafStorage, PageLocation, PageTable},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     sync::thread,
     sync::RwLock,
     utils::{get_rng, inner_lock::ReadGuard, BfsVisitor, NodeInfo},
@@ -144,7 +144,16 @@ pub struct CPRSnapShotMgr {
     vfs: RwLock<Arc<dyn VfsImpl>>,
     // Ensuring only one snapshot is in progress at a time.
     snapshot_in_progress: AtomicBool,
+    // Bytes written to the current snapshot file since the sweep last synced it.
+    unsynced_bytes: AtomicUsize,
 }
+
+/// Bytes the sweep lets accumulate in the page cache before syncing the snapshot file, so a large snapshot
+/// cannot push the process past the dirty-page limit, where the kernel throttles all of its writing threads.
+#[cfg(not(test))]
+const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 64 << 20;
+#[cfg(test)]
+const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 4096;
 
 unsafe impl Sync for CPRSnapShotMgr {}
 
@@ -266,6 +275,7 @@ impl CPRSnapShotMgr {
             pause_snapshot: AtomicBool::new(false),
             vfs: RwLock::new(vfs),
             snapshot_in_progress: AtomicBool::new(false),
+            unsynced_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -446,9 +456,21 @@ impl CPRSnapShotMgr {
 
         // Copy the page (ptr) to the new space
         vfs.write(offset, ptr);
+        self.unsynced_bytes.fetch_add(ptr.len(), Ordering::Relaxed);
 
         // Return the offset
         offset
+    }
+
+    /// Syncs the snapshot file once enough unsynced bytes accumulate. Call only while holding no page locks.
+    fn pace_snapshot_writes(&self) {
+        if self.unsynced_bytes.load(Ordering::Relaxed) < SNAPSHOT_SYNC_INTERVAL_BYTES {
+            return;
+        }
+
+        self.unsynced_bytes.store(0, Ordering::Relaxed);
+        let vfs = self.vfs.read().unwrap().clone();
+        vfs.flush();
     }
 
     pub fn snapshot_inner_node(&self, ptr: *const InnerNode, thread_slot_id: usize) {
@@ -636,6 +658,7 @@ impl CPRSnapShotMgr {
 
         for (_, pid) in page_table_iter {
             assert!(pid.is_id());
+            self.pace_snapshot_writes();
 
             // A reader lock is enough
             let mut leaf = tree.mapping_table().get(&pid);
@@ -987,6 +1010,7 @@ impl CPRSnapShotMgr {
 
         // Reset the snapshot vfs before use
         vfs_guard.reset();
+        self.unsynced_bytes.store(0, Ordering::Relaxed);
 
         // Drop the guard
         drop(vfs_guard);
