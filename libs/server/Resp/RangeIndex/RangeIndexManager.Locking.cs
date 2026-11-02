@@ -222,7 +222,10 @@ namespace Garnet.server
         {
             var start = Stopwatch.GetTimestamp();
             session.PromoteRangeIndexToTail(key);
-            var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            var ticks = Stopwatch.GetTimestamp() - start;
+            _ = Interlocked.Increment(ref phaseStats.Promotes);
+            _ = Interlocked.Add(ref phaseStats.PromoteTicks, ticks);
+            var ms = ticks * 1000.0 / Stopwatch.Frequency;
             if (ms >= 100)
                 logger?.LogInformation("RangeIndexSoakPromoted hash={Hash} elapsedMs={Ms:F0}", HashKeyToPrefix(key.ReadOnlySpan), ms);
         }
@@ -252,8 +255,12 @@ namespace Garnet.server
                 return false;
 
             rangeIndexLocks.ReleaseLock(sharedLockToken);
+            var start = Stopwatch.GetTimestamp();
             while (Volatile.Read(ref treeEntry.SnapshotPending) != 0)
                 Thread.Yield();
+
+            _ = Interlocked.Increment(ref phaseStats.CheckpointWaits);
+            _ = Interlocked.Add(ref phaseStats.CheckpointWaitTicks, Stopwatch.GetTimestamp() - start);
             return true;
         }
 
@@ -291,6 +298,25 @@ namespace Garnet.server
         /// </list></para>
         /// </remarks>
         private bool RestoreTree(
+            StorageSession session,
+            PinnedSpanByte key,
+            long keyHash,
+            ref StringInput input,
+            Span<byte> indexSpan)
+        {
+            var start = Stopwatch.GetTimestamp();
+            _ = Interlocked.Increment(ref phaseStats.Restores);
+            try
+            {
+                return RestoreTreeCore(session, key, keyHash, ref input, indexSpan);
+            }
+            finally
+            {
+                _ = Interlocked.Add(ref phaseStats.RestoreTicks, Stopwatch.GetTimestamp() - start);
+            }
+        }
+
+        private bool RestoreTreeCore(
             StorageSession session,
             PinnedSpanByte key,
             long keyHash,
@@ -353,6 +379,7 @@ namespace Garnet.server
                         (StorageBackendType)stub.StorageBackend);
 
                     RegisterIndex(bfTree, keyHash, keySpan, baselineSnapshot);
+                    _ = Interlocked.Add(ref phaseStats.OpenTicks, Stopwatch.GetTimestamp() - restoreStart);
 
                     // Re-look-up to use the WINNER's pointer (handles concurrent restorer race).
                     if (!liveIndexes.TryGetValue(keyId, out var winner) || winner?.Tree == null)
@@ -384,7 +411,9 @@ namespace Garnet.server
             try
             {
                 ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.RangeIndex_Restore_Pause_Before_Stub_Update);
+                var updateStart = Stopwatch.GetTimestamp();
                 session.RestoreRangeIndexStub(key, nativePtr);
+                _ = Interlocked.Add(ref phaseStats.StubUpdateTicks, Stopwatch.GetTimestamp() - updateStart);
                 return true;
             }
             catch (Exception ex)
