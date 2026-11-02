@@ -315,7 +315,7 @@ namespace Garnet.server
         /// record, and readers of the evicted record now restore from disk, so no reader can still use the tree.
         /// </summary>
         /// <returns><c>false</c> if no snapshot is pending, so the caller disposes the tree itself.</returns>
-        private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree)
+        private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
         {
             var chain = entry.CloseFlushChainAsync();
             if (chain.IsCompleted)
@@ -328,7 +328,7 @@ namespace Garnet.server
             {
                 try
                 {
-                    if (TryParkReleasedTree(keyId, entry, tree))
+                    if (TryParkReleasedTree(keyId, entry, tree, cacheBytes))
                         logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0} parked=true", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
                     else
                     {

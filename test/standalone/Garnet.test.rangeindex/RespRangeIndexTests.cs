@@ -1156,7 +1156,53 @@ namespace Garnet.test
 
             // A tree whose flush snapshot was still queued at eviction is parked once that snapshot completes.
             ClassicAssert.IsTrue(SpinWait.SpinUntil(() => rangeIndexManager.ParkedTreeCount == 1, TimeSpan.FromMinutes(1)), "Evicted tree should be parked");
+            ClassicAssert.AreEqual(65536, rangeIndexManager.ParkedTreeBytes);
             return (rangeIndexManager, redis, value);
+        }
+
+        /// <summary>
+        /// Verifies parked trees are bounded by circular-buffer memory: parking a tree beyond the budget disposes the oldest,
+        /// and both indexes still read back from the parked tree or the flush file.
+        /// </summary>
+        [Test]
+        public void RIParkedTreesBeyondMemoryBudgetDisposeOldestTest()
+        {
+            const int recordCount = 128;
+            const int cacheBytes = 1 << 20;
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, rangeIndexParkedTreeMemoryMB: 1);
+            server.Start();
+
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            string[] indexes = ["index-a", "index-b"];
+            foreach (var index in indexes)
+            {
+                db.Execute("RI.CREATE", index, "DISK", "CACHESIZE", cacheBytes.ToString(), "MINRECORD", "8");
+                for (var i = 0; i < recordCount; i++)
+                    db.Execute("RI.SET", index, $"key{i:D5}", $"{index}-{i:D5}");
+            }
+
+            for (var i = 0; i < 2000; i++)
+                db.StringSet($"filler{i:D4}", $"data{i:D4}");
+
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "Both trees should have been evicted");
+            ClassicAssert.IsTrue(SpinWait.SpinUntil(() => rangeIndexManager.ParkedTreeCount == 1 && rangeIndexManager.ParkedTreesDisposedCount == 1, TimeSpan.FromMinutes(1)),
+                $"Only one tree fits the budget: parked={rangeIndexManager.ParkedTreeCount} disposed={rangeIndexManager.ParkedTreesDisposedCount}");
+            ClassicAssert.AreEqual(cacheBytes, rangeIndexManager.ParkedTreeBytes);
+
+            foreach (var index in indexes)
+            {
+                for (var i = 0; i < recordCount; i++)
+                    ClassicAssert.AreEqual($"{index}-{i:D5}", (string)db.Execute("RI.GET", index, $"key{i:D5}"));
+            }
+
+            ClassicAssert.AreEqual(1, rangeIndexManager.ParkedTreesReusedCount, "The tree within the budget should be reused");
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreeBytes);
+            ClassicAssert.AreEqual(2, rangeIndexManager.LiveIndexCount);
         }
 
         /// <summary>

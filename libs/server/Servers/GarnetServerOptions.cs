@@ -938,7 +938,12 @@ namespace Garnet.server
         /// <summary>
         /// Seconds an evicted Range Index tree stays open so a promote of its flushed record reuses it instead of restoring it from disk (0 disables).
         /// </summary>
-        public int RangeIndexEvictedTreeGraceSeconds = 60;
+        public int RangeIndexEvictedTreeGraceSeconds = 600;
+
+        /// <summary>
+        /// Most circular-buffer memory, in MiB, held by evicted Range Index trees kept open for reuse; the oldest beyond it are disposed.
+        /// </summary>
+        public int RangeIndexParkedTreeMemoryMB = 1024;
 
         /// <summary>
         /// Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count).

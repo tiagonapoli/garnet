@@ -27,8 +27,15 @@ namespace Garnet.server
     /// </summary>
     public sealed partial class RangeIndexManager
     {
-        /// <summary>How long an evicted tree stays open for reuse; <see cref="TimeSpan.Zero"/> disposes evicted trees at once.</summary>
-        public TimeSpan EvictedTreeGrace { get; init; } = TimeSpan.FromSeconds(60);
+        /// <summary>
+        /// How long an evicted tree stays open for reuse; <see cref="TimeSpan.Zero"/> disposes evicted trees at once. It must
+        /// outlast the time from parking to the next touch of the record, which spans queued flush snapshots and checkpoints
+        /// when a log flush evicts many trees at once; memory is bounded by <see cref="MaxParkedTreeBytes"/> instead.
+        /// </summary>
+        public TimeSpan EvictedTreeGrace { get; init; } = TimeSpan.FromMinutes(10);
+
+        /// <summary>Most circular-buffer bytes held by parked trees; the oldest beyond it are disposed.</summary>
+        public long MaxParkedTreeBytes { get; init; } = 1L << 30;
 
         /// <summary>Most evicted trees kept open at once; the oldest beyond it are disposed.</summary>
         internal const int MaxParkedTrees = 16;
@@ -38,9 +45,13 @@ namespace Garnet.server
         private int parkedTreeSweeping;
         private int parkedTreesReused;
         private int parkedTreesDisposed;
+        private long parkedTreeBytes;
 
         /// <summary>Gets the number of evicted trees currently parked.</summary>
         internal int ParkedTreeCount => parkedTrees.Count;
+
+        /// <summary>Gets the circular-buffer bytes held by parked trees.</summary>
+        internal long ParkedTreeBytes => Interlocked.Read(ref parkedTreeBytes);
 
         /// <summary>Gets the number of promotes that reused a parked tree.</summary>
         internal int ParkedTreesReusedCount => Volatile.Read(ref parkedTreesReused);
@@ -48,12 +59,13 @@ namespace Garnet.server
         /// <summary>Gets the number of parked trees disposed without reuse.</summary>
         internal int ParkedTreesDisposedCount => Volatile.Read(ref parkedTreesDisposed);
 
-        private sealed class ParkedTree(BfTreeService tree, long keyHash, string hashPrefix, long flushAddress)
+        private sealed class ParkedTree(BfTreeService tree, long keyHash, string hashPrefix, long flushAddress, long cacheBytes)
         {
             public readonly BfTreeService Tree = tree;
             public readonly long KeyHash = keyHash;
             public readonly string HashPrefix = hashPrefix;
             public readonly long FlushAddress = flushAddress;
+            public readonly long CacheBytes = cacheBytes;
             public readonly long ParkedAt = Stopwatch.GetTimestamp();
         }
 
@@ -61,26 +73,26 @@ namespace Garnet.server
         /// Parks <paramref name="tree"/>, evicted from <paramref name="entry"/>, for reuse by a promote of its last flushed record.
         /// The caller holds the key's exclusive lock and has removed <paramref name="entry"/> from <see cref="liveIndexes"/>.
         /// </summary>
+        /// <param name="cacheBytes">Circular-buffer size of the tree, counted against <see cref="MaxParkedTreeBytes"/>.</param>
         /// <returns><c>false</c> if the tree cannot be parked and must be disposed.</returns>
-        private bool TryParkEvictedTreeLocked(Guid keyId, TreeEntry entry, BfTreeService tree)
+        private bool TryParkEvictedTreeLocked(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
         {
             var flushAddress = Volatile.Read(ref entry.LastFlushAddress);
-            if (EvictedTreeGrace <= TimeSpan.Zero || flushSnapshotsStopped || flushAddress == 0)
+            if (EvictedTreeGrace <= TimeSpan.Zero || flushSnapshotsStopped || flushAddress == 0 || cacheBytes > (ulong)MaxParkedTreeBytes)
                 return false;
 
             DiscardParkedTreeLocked(keyId, "replaced");
             entry.Retire();
             ForgetTree(tree);
-            parkedTrees[keyId] = new ParkedTree(tree, entry.KeyHash, entry.HashPrefix, flushAddress);
-            logger?.LogInformation("[RangeIndexTreeParked] hash={Hash} addr=0x{Addr:x16} parked={Parked}", entry.HashPrefix, flushAddress, parkedTrees.Count);
+            parkedTrees[keyId] = new ParkedTree(tree, entry.KeyHash, entry.HashPrefix, flushAddress, (long)cacheBytes);
+            var totalBytes = Interlocked.Add(ref parkedTreeBytes, (long)cacheBytes);
+            logger?.LogInformation("[RangeIndexTreeParked] hash={Hash} addr=0x{Addr:x16} cacheBytes={CacheBytes} parked={Parked} parkedBytes={ParkedBytes}",
+                entry.HashPrefix, flushAddress, cacheBytes, parkedTrees.Count, totalBytes);
 
-            var sweeper = LazyInitializer.EnsureInitialized(ref parkedTreeSweeper, () =>
-            {
-                var period = TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerSecond, EvictedTreeGrace.Ticks / 4));
-                return new Timer(_ => SweepParkedTrees(), null, period, period);
-            });
-            if (parkedTrees.Count > MaxParkedTrees)
-                _ = sweeper.Change(TimeSpan.Zero, TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerSecond, EvictedTreeGrace.Ticks / 4)));
+            var period = TimeSpan.FromTicks(Math.Max(TimeSpan.TicksPerSecond, EvictedTreeGrace.Ticks / 4));
+            var sweeper = LazyInitializer.EnsureInitialized(ref parkedTreeSweeper, () => new Timer(_ => SweepParkedTrees(), null, period, period));
+            if (parkedTrees.Count > MaxParkedTrees || totalBytes > MaxParkedTreeBytes)
+                _ = sweeper.Change(TimeSpan.Zero, period);
             return true;
         }
 
@@ -88,7 +100,7 @@ namespace Garnet.server
         /// Parks a tree whose disposal waited for its flush snapshots, unless the key was registered again meanwhile.
         /// </summary>
         /// <returns><c>false</c> if the tree was not parked and must be disposed.</returns>
-        private bool TryParkReleasedTree(Guid keyId, TreeEntry entry, BfTreeService tree)
+        private bool TryParkReleasedTree(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
         {
             if (EvictedTreeGrace <= TimeSpan.Zero)
                 return false;
@@ -97,7 +109,7 @@ namespace Garnet.server
             try
             {
                 // A registration since the eviction may have staged data.bftree over the evicted tree's file.
-                return !liveIndexes.ContainsKey(keyId) && TryParkEvictedTreeLocked(keyId, entry, tree);
+                return !liveIndexes.ContainsKey(keyId) && TryParkEvictedTreeLocked(keyId, entry, tree, cacheBytes);
             }
             finally
             {
@@ -121,6 +133,7 @@ namespace Garnet.server
                 if (!parkedTrees.TryRemove(keyId, out var parked))
                     return false;
 
+                _ = Interlocked.Add(ref parkedTreeBytes, -parked.CacheBytes);
                 if (parked.FlushAddress != flushAddress || liveIndexes.ContainsKey(keyId))
                 {
                     DisposeParkedTree(parked, parked.FlushAddress != flushAddress ? "address-mismatch" : "registered");
@@ -145,7 +158,10 @@ namespace Garnet.server
         private void DiscardParkedTreeLocked(Guid keyId, string reason)
         {
             if (!parkedTrees.IsEmpty && parkedTrees.TryRemove(keyId, out var parked))
+            {
+                _ = Interlocked.Add(ref parkedTreeBytes, -parked.CacheBytes);
                 DisposeParkedTree(parked, reason);
+            }
         }
 
         /// <summary>Disposes the key's parked tree, if any, before its <c>data.bftree</c> is rewritten.</summary>
@@ -166,7 +182,10 @@ namespace Garnet.server
             }
         }
 
-        /// <summary>Disposes parked trees older than <see cref="EvictedTreeGrace"/>, and the oldest beyond <see cref="MaxParkedTrees"/>.</summary>
+        /// <summary>
+        /// Disposes parked trees older than <see cref="EvictedTreeGrace"/>, and the oldest beyond <see cref="MaxParkedTrees"/>
+        /// or <see cref="MaxParkedTreeBytes"/>.
+        /// </summary>
         internal void SweepParkedTrees(bool all = false)
         {
             if (parkedTrees.IsEmpty || Interlocked.Exchange(ref parkedTreeSweeping, 1) != 0)
@@ -176,10 +195,12 @@ namespace Garnet.server
             {
                 var ordered = parkedTrees.ToArray().OrderBy(static kvp => kvp.Value.ParkedAt).ToArray();
                 var excess = ordered.Length - MaxParkedTrees;
+                var excessBytes = ParkedTreeBytes - MaxParkedTreeBytes;
                 foreach (var kvp in ordered)
                 {
                     var expired = all || Stopwatch.GetElapsedTime(kvp.Value.ParkedAt) >= EvictedTreeGrace;
-                    if (!expired && excess <= 0)
+                    var overCapacity = excess > 0 || excessBytes > 0;
+                    if (!expired && !overCapacity)
                         break;
 
                     rangeIndexLocks.AcquireExclusiveLock(kvp.Value.KeyHash, out var lockToken);
@@ -188,7 +209,9 @@ namespace Garnet.server
                         if (parkedTrees.TryRemove(kvp))
                         {
                             excess--;
-                            DisposeParkedTree(kvp.Value, all ? "discard-all" : expired ? "expired" : "over-capacity");
+                            excessBytes -= kvp.Value.CacheBytes;
+                            _ = Interlocked.Add(ref parkedTreeBytes, -kvp.Value.CacheBytes);
+                            DisposeParkedTree(kvp.Value, all ? "discard-all" : expired ? "expired" : excess >= 0 ? "over-capacity" : "over-memory");
                         }
                     }
                     finally
@@ -224,9 +247,9 @@ namespace Garnet.server
             try { parked.Tree.Dispose(); }
             catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose parked BfTree {Hash}", parked.HashPrefix); }
             _ = Interlocked.Increment(ref parkedTreesDisposed);
-            logger?.LogInformation("[RangeIndexParkedTreeDisposed] hash={Hash} addr=0x{Addr:x16} reason={Reason} parkedMs={ParkedMs:F0} disposeMs={DisposeMs:F0} parked={Parked}",
+            logger?.LogInformation("[RangeIndexParkedTreeDisposed] hash={Hash} addr=0x{Addr:x16} reason={Reason} parkedMs={ParkedMs:F0} disposeMs={DisposeMs:F0} parked={Parked} parkedBytes={ParkedBytes}",
                 parked.HashPrefix, parked.FlushAddress, reason, Stopwatch.GetElapsedTime(parked.ParkedAt, start).TotalMilliseconds,
-                Stopwatch.GetElapsedTime(start).TotalMilliseconds, parkedTrees.Count);
+                Stopwatch.GetElapsedTime(start).TotalMilliseconds, parkedTrees.Count, ParkedTreeBytes);
         }
 
         private void DisposeParkedTreeSweeper()
