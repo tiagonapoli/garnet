@@ -74,6 +74,11 @@ namespace Garnet.server
         /// <summary>Gets the number of flush snapshots queued or being written.</summary>
         internal int PendingFlushSnapshotCount => pendingFlushSnapshots.Count;
 
+        /// <summary>Gets the number of flush files linked to a snapshot written for a later flush of the same tree.</summary>
+        internal long CoalescedFlushSnapshotCount => Interlocked.Read(ref coalescedFlushSnapshots);
+
+        private long coalescedFlushSnapshots;
+
         /// <summary>Test hook run by a flush worker before it snapshots; null in production.</summary>
         internal Action<string> BeforeFlushSnapshotForTest;
 
@@ -94,7 +99,7 @@ namespace Garnet.server
             public int Failed;
         }
 
-        private sealed class PendingFlushSnapshot(long address)
+        internal sealed class PendingFlushSnapshot(long address)
         {
             public readonly long Address = address;
             private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -133,7 +138,7 @@ namespace Garnet.server
 
             // Registered first so a waiter never misses a snapshot that is already running.
             pendingFlushSnapshots[flushPath] = pending;
-            if (entry.TryAppendFlush(() => RunFlushSnapshot(entry, pending, flushPath, enqueuedAt), FlushScheduler))
+            if (entry.TryAppendFlushSnapshot(new QueuedFlushSnapshot(flushPath, pending, enqueuedAt), () => RunFlushSnapshot(entry, flushPath), FlushScheduler))
                 return true;
 
             _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
@@ -141,43 +146,102 @@ namespace Garnet.server
             return false;
         }
 
-        private void RunFlushSnapshot(TreeEntry entry, PendingFlushSnapshot pending, string flushPath, long enqueuedAt)
+        /// <summary>A flush snapshot queued on its tree and not yet taken by a worker.</summary>
+        internal sealed class QueuedFlushSnapshot(string path, PendingFlushSnapshot pending, long enqueuedAt)
         {
-            var logicalAddress = pending.Address;
+            public readonly string Path = path;
+            public readonly PendingFlushSnapshot Pending = pending;
+            public readonly long EnqueuedAt = enqueuedAt;
+
+            /// <summary>Log mode once handled; null while unhandled or if it failed.</summary>
+            public string Mode;
+        }
+
+        /// <summary>
+        /// Writes one snapshot for every flush of <paramref name="entry"/> queued so far: the tree is snapshotted once, into the
+        /// highest-address flush file, and the other files are hard links to it. A snapshot taken after a flush is valid for that
+        /// flush (AOF replay converges over a late snapshot), so one written after the last queued flush serves all of them, and a
+        /// backlog of one tree's flushes costs one snapshot instead of one each. Runs that find the queue empty were coalesced.
+        /// </summary>
+        private void RunFlushSnapshot(TreeEntry entry, string flushPath)
+        {
+            BeforeFlushSnapshotForTest?.Invoke(flushPath);
+
+            var batch = entry.TakeQueuedFlushSnapshots();
+            if (batch.Count == 0)
+                return;
+
             var start = Stopwatch.GetTimestamp();
-            string mode = null;
+            QueuedFlushSnapshot written = null;
             try
             {
-                BeforeFlushSnapshotForTest?.Invoke(flushPath);
-
-                if (flushSnapshotsStopped)
-                    mode = "skipped-stopped";
-                else if (logicalAddress < Volatile.Read(ref flushFilesTruncatedBelow))
-                    mode = "skipped-truncated";
-                else if (entry.TrySnapshotUnderClaim(flushPath, allowLink: true, atomic: true, out var kind))
+                var truncatedBelow = Volatile.Read(ref flushFilesTruncatedBelow);
+                foreach (var item in batch)
                 {
-                    mode = SnapshotMode("live", kind);
-
-                    // A truncation that enumerated the directory before the rename cannot have seen this file.
-                    if (logicalAddress < Volatile.Read(ref flushFilesTruncatedBelow))
-                        _ = TryDeleteFlushFile(flushPath, out _);
+                    if (flushSnapshotsStopped)
+                        item.Mode = "skipped-stopped";
+                    else if (item.Pending.Address < truncatedBelow)
+                        item.Mode = "skipped-truncated";
+                    else if (written is null || item.Pending.Address > written.Pending.Address)
+                        written = item;
                 }
-                else
+
+                if (written is null)
+                    return;
+
+                if (!entry.TrySnapshotUnderClaim(written.Path, allowLink: true, atomic: true, out var kind))
                 {
-                    logger?.LogCritical("[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16} reason=retired; the flushed stub has no flush file",
-                        entry.HashPrefix, logicalAddress);
+                    logger?.LogCritical("[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16} files={Files} reason=retired; the flushed stubs have no flush file",
+                        entry.HashPrefix, written.Pending.Address, batch.Count);
+                    return;
+                }
+
+                written.Mode = SnapshotMode("live", kind);
+                foreach (var item in batch)
+                {
+                    if (item.Mode != null)
+                        continue;
+                    item.Mode = LinkFlushFile(entry, written.Path, item.Path);
+                    if (item.Mode == "coalesced")
+                        _ = Interlocked.Increment(ref coalescedFlushSnapshots);
+                }
+
+                // A truncation that enumerated the directory before the renames cannot have seen these files.
+                truncatedBelow = Volatile.Read(ref flushFilesTruncatedBelow);
+                foreach (var item in batch)
+                {
+                    if (item.Mode != null && !item.Mode.StartsWith("skipped", StringComparison.Ordinal) && item.Pending.Address < truncatedBelow)
+                        _ = TryDeleteFlushFile(item.Path, out _);
                 }
             }
             catch (Exception ex)
             {
-                logger?.LogCritical(ex, "[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16}; the flushed stub has no flush file", entry.HashPrefix, logicalAddress);
+                logger?.LogCritical(ex, "[RangeIndexFlushSnapshotFailed] hash={Hash} files={Files}; flushed stubs may have no flush file", entry.HashPrefix, batch.Count);
             }
             finally
             {
-                _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
-                pending.Complete();
-                LogFlushSnapshot(entry.HashPrefix, logicalAddress, flushPath, mode, start, Stopwatch.GetElapsedTime(enqueuedAt, start).TotalMilliseconds);
+                foreach (var item in batch)
+                {
+                    _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(item.Path, item.Pending));
+                    item.Pending.Complete();
+                    LogFlushSnapshot(entry.HashPrefix, item.Pending.Address, item.Path, item.Mode, start, Stopwatch.GetElapsedTime(item.EnqueuedAt, start).TotalMilliseconds, batch.Count);
+                }
             }
+        }
+
+        /// <summary>Atomically gives <paramref name="flushPath"/> the contents of the just-written flush file <paramref name="sourcePath"/>.</summary>
+        /// <returns>The log mode, or <c>null</c> if the file could not be produced.</returns>
+        private string LinkFlushFile(TreeEntry entry, string sourcePath, string flushPath)
+        {
+            var target = flushPath + InProgressSuffix;
+            if (RangeIndexFileLinks.TryReplaceWithHardLink(sourcePath, target))
+            {
+                File.Move(target, flushPath, overwrite: true);
+                return "coalesced";
+            }
+
+            // The source may already have been truncated; snapshot the tree again rather than leave the stub without a file.
+            return entry.TrySnapshotUnderClaim(flushPath, allowLink: true, atomic: true, out var kind) ? SnapshotMode("live", kind) : null;
         }
 
         /// <summary>

@@ -3490,6 +3490,75 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Flush snapshots of one tree queued behind a running one are written once: the next worker snapshots the tree into
+        /// the newest flush file and hard-links the others, and every flushed stub still recovers.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public async Task RIQueuedFlushSnapshotsOfOneTreeAreCoalescedAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            var store = server.Provider.StoreWrapper.store;
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            rim.BeforeFlushSnapshotForTest = path =>
+            {
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "coalesce", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+
+                // Each write copies the read-only record to the tail, and shifting the read-only address flushes that copy.
+                for (var i = 0; i < 3; i++)
+                {
+                    db.Execute("RI.SET", "coalesce", $"field-{i}", $"value-{i}");
+                    await Task.Run(() => store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true)).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                    ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the flush must queue a snapshot");
+                }
+
+                ClassicAssert.AreEqual(3, rim.PendingFlushSnapshotCount, "the blocked worker has not taken the queued snapshots yet");
+
+                gate.Set();
+                while (rim.PendingFlushSnapshotCount > 0)
+                    await Task.Delay(20, cancellationToken);
+
+                ClassicAssert.AreEqual(2, rim.CoalescedFlushSnapshotCount, "one snapshot must serve all three flushes");
+                var files = Directory.GetFiles(rim.RiLogRoot, "*.flush.bftree");
+                ClassicAssert.AreEqual(3, files.Length);
+                ClassicAssert.AreEqual(1, files.Select(f => new FileInfo(f).Length).Distinct().Count(), "the coalesced files must hold the same snapshot");
+                ClassicAssert.IsEmpty(Directory.GetFiles(rim.RiLogRoot, "*" + RangeIndexManager.InProgressSuffix));
+
+                db.Execute("SAVE");
+            }
+            finally
+            {
+                gate.Set();
+                rim.BeforeFlushSnapshotForTest = null;
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                for (var i = 0; i < 3; i++)
+                    ClassicAssert.AreEqual($"value-{i}", (string)db.Execute("RI.GET", "coalesce", $"field-{i}"), $"field-{i}");
+            }
+        }
+
+        /// <summary>
         /// With the AOF enabled, a checkpoint's tree snapshot is written in the background: operations on the tree proceed
         /// while it is pending, the checkpoint does not persist until it completes, and recovery converges by replaying the AOF.
         /// </summary>
