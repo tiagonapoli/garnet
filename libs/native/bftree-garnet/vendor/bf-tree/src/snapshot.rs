@@ -1210,7 +1210,6 @@ impl CPRSnapShotMgr {
         // Step 1: reconstruct inner nodes.
         let inner_start = std::time::Instant::now();
         let mut root_page_id = bf_meta.root_id;
-        let mut inner_node_page_buffer = SectorAlignedVector::new_zeroed(INNER_NODE_SIZE);
         if root_page_id.is_inner_node_pointer() {
             let mut inner_mapping: Vec<(*const InnerNode, usize)> = read_vec_from_offset(
                 bf_meta.inner_offset,
@@ -1218,21 +1217,26 @@ impl CPRSnapShotMgr {
                 &recovery_snapshot_vfs,
             );
 
-            // Read every inner node exactly once, in file order, so the reads are sequential.
+            // Read every inner node exactly once, in file order, in parallel batches.
             inner_mapping.sort_unstable_by_key(|(_, offset)| *offset);
             let mut root_cnt = 0;
             let mut inner_map: HashMap<*const InnerNode, *mut InnerNode> = HashMap::with_capacity(inner_mapping.len());
-            for (ptr, offset) in &inner_mapping {
-                recovery_snapshot_vfs.read(*offset, &mut inner_node_page_buffer);
-                let inner_node = InnerNodeBuilder::new().build_from_slice(&inner_node_page_buffer);
-                if unsafe { (*inner_node).is_root() } {
-                    root_cnt += 1;
+            let batch_len = recovery_read_batch_len(INNER_NODE_SIZE);
+            let mut inner_node_page_buffer = SectorAlignedVector::new_zeroed(batch_len.min(inner_mapping.len()).max(1) * INNER_NODE_SIZE);
+            for batch in inner_mapping.chunks(batch_len) {
+                let reads: Vec<(usize, usize)> = batch.iter().map(|(_, offset)| (*offset, INNER_NODE_SIZE)).collect();
+                read_pages_parallel(recovery_snapshot_vfs.as_ref(), &reads, INNER_NODE_SIZE, &mut inner_node_page_buffer);
+                for (i, (ptr, _)) in batch.iter().enumerate() {
+                    let inner_node = InnerNodeBuilder::new().build_from_slice(&inner_node_page_buffer[i * INNER_NODE_SIZE..(i + 1) * INNER_NODE_SIZE]);
+                    if unsafe { (*inner_node).is_root() } {
+                        root_cnt += 1;
+                    }
+                    // No need for disk offset of a inner node.
+                    unsafe {
+                        (*inner_node).set_disk_offset(INVALID_DISK_OFFSET as u64);
+                    }
+                    inner_map.insert(*ptr, inner_node);
                 }
-                // No need for disk offset of a inner node.
-                unsafe {
-                    (*inner_node).set_disk_offset(INVALID_DISK_OFFSET as u64);
-                }
-                inner_map.insert(*ptr, inner_node);
             }
             assert_eq!(root_cnt, 1, "Root count in inner mapping: {}", root_cnt);
             stats.inner_nodes = inner_mapping.len() as u64;
@@ -1344,50 +1348,55 @@ impl CPRSnapShotMgr {
             let storage =
                 LeafStorage::new_inner(config.clone(), pt, circular_buffer, recovery_snapshot_vfs);
 
-            // Mini-page order in the snapshot is arbitrary; reading in file order makes the reads sequential.
+            // Mini-page order in the snapshot is arbitrary; read in file order, in parallel batches.
             mini_mapping.sort_unstable_by_key(|(_, offset)| *offset);
             let max_mini_size = mini_mapping.iter().map(|(pid, _)| *mini_size_mapping_unique.get(pid).unwrap()).max().unwrap_or(0);
-            let mut page_buffer = SectorAlignedVector::new_zeroed(align_to_sector_size(max_mini_size.max(1)));
-            for (pid, offset) in &mini_mapping {
-                let mini_size = *mini_size_mapping_unique.get(pid).unwrap();
+            let slot = align_to_sector_size(max_mini_size.max(1));
+            let batch_len = recovery_read_batch_len(slot);
+            let mut page_buffer = SectorAlignedVector::new_zeroed(batch_len.min(mini_mapping.len()).max(1) * slot);
+            for batch in mini_mapping.chunks(batch_len) {
+                let reads: Vec<(usize, usize)> = batch.iter().map(|(pid, offset)| (*offset, *mini_size_mapping_unique.get(pid).unwrap())).collect();
+                read_pages_parallel(storage.vfs.as_ref(), &reads, slot, &mut page_buffer);
+                for (i, ((pid, _), (_, mini_size))) in batch.iter().zip(reads.iter()).enumerate() {
+                    let mini_size = *mini_size;
 
-                // Allocate space in memory for new mini-page
-                let mini_page_guard = match storage.alloc_mini_page(mini_size) {
-                    Ok(mini_page_ptr) => mini_page_ptr,
-                    Err(_) => {
-                        return Err(ConfigError::CircularBufferSize("buffer size set too small. Consider increasing it or not specifying at all".to_string()));
+                    // Allocate space in memory for new mini-page
+                    let mini_page_guard = match storage.alloc_mini_page(mini_size) {
+                        Ok(mini_page_ptr) => mini_page_ptr,
+                        Err(_) => {
+                            return Err(ConfigError::CircularBufferSize("buffer size set too small. Consider increasing it or not specifying at all".to_string()));
+                        }
+                    };
+
+                    // Copy mini-page from the read buffer to the newly allocated mini-page
+                    stats.mini_bytes += mini_size as u64;
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            page_buffer.as_ptr().add(i * slot),
+                            mini_page_guard.as_ptr(),
+                            mini_size,
+                        );
                     }
-                };
 
-                // Copy mini-page from snapshot file to the newly allocated mini-page
-                storage.vfs.read(*offset, &mut page_buffer[..mini_size]);
-                stats.mini_bytes += mini_size as u64;
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        page_buffer.as_ptr(),
-                        mini_page_guard.as_ptr(),
-                        mini_size,
-                    );
+                    // Connect the new mini-page to the corresponding base page in page table
+                    let new_mini_ptr = mini_page_guard.as_ptr() as *mut LeafNode;
+                    let mini_page = unsafe { &mut *new_mini_ptr };
+
+                    let mut base_page = storage.page_table.get_mut(pid);
+                    let page_loc = base_page.get_page_location().clone();
+                    match page_loc {
+                        PageLocation::Base(off) => {
+                            mini_page.next_level = MiniPageNextLevel::new(off);
+                        }
+                        _ => {
+                            panic!("Unexpected page location for base page");
+                        }
+                    }
+                    let mini_loc = PageLocation::Mini(new_mini_ptr);
+
+                    // Replace the base page with the mini-page in the page table
+                    base_page.create_cache_page_loc(mini_loc);
                 }
-
-                // Connect the new mini-page to the corresponding base page in page table
-                let new_mini_ptr = mini_page_guard.as_ptr() as *mut LeafNode;
-                let mini_page = unsafe { &mut *new_mini_ptr };
-
-                let mut base_page = storage.page_table.get_mut(pid);
-                let page_loc = base_page.get_page_location().clone();
-                match page_loc {
-                    PageLocation::Base(off) => {
-                        mini_page.next_level = MiniPageNextLevel::new(off);
-                    }
-                    _ => {
-                        panic!("Unexpected page location for base page");
-                    }
-                }
-                let mini_loc = PageLocation::Mini(new_mini_ptr);
-
-                // Replace the base page with the mini-page in the page table
-                base_page.create_cache_page_loc(mini_loc);
             }
             stats.mini_pages = mini_mapping.len() as u64;
             stats.mini_us = elapsed_us(mini_start);
@@ -1730,6 +1739,61 @@ fn align_to_sector_size(n: usize) -> usize {
     (n + SECTOR_SIZE - 1) & !(SECTOR_SIZE - 1)
 }
 
+/// Maximum number of threads issuing snapshot page reads during recovery.
+const RECOVERY_READ_THREADS: usize = 16;
+
+/// Minimum number of page reads given to each recovery read thread.
+const RECOVERY_READS_PER_THREAD: usize = 32;
+
+/// Upper bound on the buffer that holds one batch of recovered pages.
+const RECOVERY_READ_BATCH_BYTES: usize = 16 * 1024 * 1024;
+
+/// Pages spanning at most this multiple of their total size are dense enough for kernel readahead.
+const RECOVERY_DENSE_SPAN_FACTOR: usize = 4;
+
+/// Number of pages of `slot` bytes read per batch during recovery.
+fn recovery_read_batch_len(slot: usize) -> usize {
+    (RECOVERY_READ_BATCH_BYTES / slot).max(1)
+}
+
+/// Number of threads used to read `reads`: one when the pages are dense, otherwise enough to keep the device busy.
+fn recovery_read_threads(reads: &[(usize, usize)]) -> usize {
+    let (Some(start), Some(end)) = (reads.iter().map(|(offset, _)| *offset).min(), reads.iter().map(|(offset, len)| offset + len).max()) else {
+        return 1;
+    };
+    let bytes: usize = reads.iter().map(|(_, len)| *len).sum();
+    if end - start <= bytes.saturating_mul(RECOVERY_DENSE_SPAN_FACTOR) {
+        return 1;
+    }
+
+    reads.len().div_ceil(RECOVERY_READS_PER_THREAD).clamp(1, RECOVERY_READ_THREADS)
+}
+
+/// Reads `reads[i] = (offset, len)` into `out[i * slot..]`, issuing scattered reads from several threads.
+/// Copy-on-write snapshots scatter pages through the file, so serial reads leave the device idle between requests.
+fn read_pages_parallel(vfs: &dyn VfsImpl, reads: &[(usize, usize)], slot: usize, out: &mut [u8]) {
+    assert!(out.len() >= reads.len() * slot);
+    let threads = recovery_read_threads(reads);
+    #[cfg(all(feature = "shuttle", test))]
+    let threads = { _ = threads; 1 };
+    let read_chunk = |reads: &[(usize, usize)], out: &mut [u8]| {
+        for (i, (offset, len)) in reads.iter().enumerate() {
+            vfs.read(*offset, &mut out[i * slot..i * slot + len]);
+        }
+    };
+    if threads == 1 {
+        read_chunk(reads, out);
+        return;
+    }
+
+    let per_thread = reads.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        for (reads, out) in reads.chunks(per_thread).zip(out.chunks_mut(per_thread * slot)) {
+            s.spawn(move || read_chunk(reads, out));
+        }
+    });
+}
+
 /// Write a slice to disk and return the start offset and page count.
 /// TODO: we should not just return offset and count, because the offset is not necessarily continuos.
 ///     We should return a Vec of offsets. But let's keep it simple for fast prototype.
@@ -1755,6 +1819,30 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::sync::{atomic::AtomicBool, Arc};
 
+    #[test]
+    fn read_pages_parallel_fills_each_slot() {
+        use super::{read_pages_parallel, recovery_read_threads, RECOVERY_READS_PER_THREAD, RECOVERY_READ_THREADS};
+        use crate::fs::MemoryVfs;
+
+        let slot = 64;
+        let stride = slot * 16;
+        let count = RECOVERY_READ_THREADS * RECOVERY_READS_PER_THREAD + 7;
+        let source: Vec<u8> = (0..count * stride).map(|i| (i * 31 % 251) as u8).collect();
+        let base = source.as_ptr() as usize;
+        let reads: Vec<(usize, usize)> = (0..count).map(|i| (base + ((i * 37) % count) * stride + i % 5, 1 + i % slot)).collect();
+        assert_eq!(recovery_read_threads(&reads), RECOVERY_READ_THREADS);
+        let dense: Vec<(usize, usize)> = (0..count).map(|i| (base + i * slot, slot)).collect();
+        assert_eq!(recovery_read_threads(&dense), 1);
+        let mut out = vec![0u8; count * slot];
+
+        read_pages_parallel(&MemoryVfs::new(), &reads, slot, &mut out);
+
+        for (i, (offset, len)) in reads.iter().enumerate() {
+            let expected = &source[offset - base..offset - base + len];
+            assert_eq!(&out[i * slot..i * slot + len], expected, "slot {i}");
+            assert!(out[i * slot + len..(i + 1) * slot].iter().all(|b| *b == 0), "slot {i} overrun");
+        }
+    }
     /// Multiple writer threads write to a BfTree in parallel while a separate thread taking multiple snapshots
     /// A new BfTree recovered from the snapshot should contain a prefix of all the inserts from each writer thread.
     /// A snapshot taken later should cover the previous snapshots.
