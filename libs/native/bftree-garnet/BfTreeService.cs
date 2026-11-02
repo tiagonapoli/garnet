@@ -539,11 +539,52 @@ namespace Garnet.server.BfTreeInterop
                 throw new InvalidOperationException("Failed to take CPR snapshot of BfTree.");
         }
 
+        private static readonly object snapshotIORateLock = new();
+        private static long configuredSnapshotIORate;
+        private static int snapshotIORateSuspensions;
+
         /// <summary>Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.</summary>
         public static void SetSnapshotIORate(long bytesPerSecond)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(bytesPerSecond);
-            NativeBfTreeMethods.bftree_set_snapshot_io_rate((ulong)bytesPerSecond);
+            lock (snapshotIORateLock)
+            {
+                configuredSnapshotIORate = bytesPerSecond;
+                if (snapshotIORateSuspensions == 0)
+                    NativeBfTreeMethods.bftree_set_snapshot_io_rate((ulong)bytesPerSecond);
+            }
+        }
+
+        /// <summary>Lifts the snapshot I/O cap until the returned handle is disposed; suspensions nest and the configured cap then returns.</summary>
+        public static IDisposable SuspendSnapshotIORate()
+        {
+            lock (snapshotIORateLock)
+            {
+                if (snapshotIORateSuspensions++ == 0)
+                    NativeBfTreeMethods.bftree_set_snapshot_io_rate(0);
+            }
+
+            return new SnapshotIORateSuspension();
+        }
+
+        private static void ResumeSnapshotIORate()
+        {
+            lock (snapshotIORateLock)
+            {
+                if (--snapshotIORateSuspensions == 0)
+                    NativeBfTreeMethods.bftree_set_snapshot_io_rate((ulong)configuredSnapshotIORate);
+            }
+        }
+
+        private sealed class SnapshotIORateSuspension : IDisposable
+        {
+            private int disposed;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref disposed, 1) == 0)
+                    ResumeSnapshotIORate();
+            }
         }
 
         /// <summary>Gets the total time CPR snapshots in the process have slept on the snapshot I/O rate limit.</summary>
