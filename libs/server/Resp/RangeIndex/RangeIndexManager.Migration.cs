@@ -168,7 +168,10 @@ namespace Garnet.server
                 // Handled in follow-up work (claim the key atomically before moving the file).
 
                 if (File.Exists(bftreeDataPath))
+                {
+                    DiscardParkedTree(keyBytes, "migrate");
                     File.Delete(bftreeDataPath);
+                }
 
                 File.Move(tempPath, bftreeDataPath);
 

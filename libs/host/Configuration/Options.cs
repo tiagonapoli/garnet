@@ -743,6 +743,10 @@ namespace Garnet
         public bool EnableRangeIndexPreview { get; set; }
 
         [IntRangeValidation(0, int.MaxValue, isRequired: false)]
+        [Option("range-index-evicted-tree-grace-seconds", Required = false, HelpText = "Seconds an evicted Range Index tree stays open so a promote of its flushed record reuses it instead of restoring it from disk (0 disables)")]
+        public int RangeIndexEvictedTreeGraceSeconds { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue, isRequired: false)]
         [Option("vector-set-quantization-task-count", Required = false, HelpText = "Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count; maximum: the machine CPU count)")]
         public int VectorSetQuantizationTaskCount { get; set; }
 
@@ -1074,6 +1078,7 @@ namespace Garnet
                 VectorSetReplayTaskCount = VectorSetReplayTaskCount,
                 VectorSetQuantizationTaskCount = VectorSetQuantizationTaskCount,
                 EnableRangeIndexPreview = EnableRangeIndexPreview,
+                RangeIndexEvictedTreeGraceSeconds = RangeIndexEvictedTreeGraceSeconds,
             };
         }
 
