@@ -936,6 +936,11 @@ namespace Garnet.server
         public bool EnableRangeIndexPreview = false;
 
         /// <summary>
+        /// Seconds an evicted Range Index tree stays open so a promote of its flushed record reuses it instead of restoring it from disk (0 disables).
+        /// </summary>
+        public int RangeIndexEvictedTreeGraceSeconds = 60;
+
+        /// <summary>
         /// Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count).
         /// </summary>
         public int VectorSetQuantizationTaskCount = 0;

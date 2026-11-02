@@ -1587,7 +1587,7 @@ namespace Garnet.server
                     if (functionsState.storeWrapper?.rangeIndexManager is { } rim
                         && rmwInfo.SourceAddress != Tsavorite.core.LogAddress.kInvalidAddress)
                     {
-                        rim.PreStageAndRegisterPending(dstLogRecord.Key, rmwInfo.SourceAddress);
+                        rim.PreStageAndRegisterPending(dstLogRecord.Key, rmwInfo.SourceAddress, reuseParkedTree: true);
                     }
                 }
 

@@ -155,6 +155,9 @@ namespace Garnet.server
             /// <summary>Background copy of <see cref="StagingSource"/>; owned by whoever clears this field.</summary>
             public StagingPrefetch Prefetch;
 
+            /// <summary>Address of the record whose flush last snapshotted <see cref="Tree"/>; 0 when none.</summary>
+            public long LastFlushAddress;
+
             /// <summary>Gets whether the entry was removed from <see cref="liveIndexes"/>.</summary>
             public bool IsRetired => Volatile.Read(ref retired) != 0;
 
@@ -509,6 +512,7 @@ namespace Garnet.server
             if (storageBackend == StorageBackendType.Disk)
             {
                 filePath = LogDataPath(hashPrefix);
+                DiscardParkedTree(keyBytes, "create");
             }
 
             // Enable CPR snapshots whenever a log root is configured. The destination path is
@@ -655,6 +659,7 @@ namespace Garnet.server
         internal bool UnregisterIndex(ReadOnlySpan<byte> keyBytes)
         {
             var keyId = KeyId(keyBytes);
+            DiscardParkedTreeLocked(keyId, "unregister");
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
                 DrainEntryFlushSnapshots(entry, "unregister");
@@ -677,6 +682,7 @@ namespace Garnet.server
             // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
             StopFlushSnapshots("store-reset");
             StopStagingPrefetch("store-reset");
+            DiscardAllParkedTrees();
             try
             {
                 DiscardTrees();
@@ -725,6 +731,8 @@ namespace Garnet.server
 
             StopFlushSnapshots("dispose");
             StopStagingPrefetch("dispose");
+            DisposeParkedTreeSweeper();
+            DiscardAllParkedTrees();
             DisposeFlushScheduler();
 
             foreach (var kvp in liveIndexes)
@@ -775,7 +783,7 @@ namespace Garnet.server
         /// (above-FUA stub) or the next RIPROMOTE-cold (IsFlushed=true stub) re-pre-stages and
         /// overwrites any partial file before <c>RestoreTree</c> can observe it.</para>
         /// </summary>
-        internal void PreStageAndRegisterPending(ReadOnlySpan<byte> keyBytes, long srcFlushAddress)
+        internal void PreStageAndRegisterPending(ReadOnlySpan<byte> keyBytes, long srcFlushAddress, bool reuseParkedTree = false)
         {
             if (string.IsNullOrEmpty(riLogRoot))
                 return;
@@ -783,6 +791,13 @@ namespace Garnet.server
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var snapshotPath = LogFlushPath(hashPrefix, srcFlushAddress);
             WaitForFlushFile(KeyId(keyBytes), snapshotPath, "prestage");
+            var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
+
+            // The tree evicted from this record may still be open, holding the flush file's contents without a copy. Only a
+            // promote reuses it: its retrying read publishes the tree into the new record at once.
+            if (reuseParkedTree && TryReuseParkedTree(keyBytes, keyHash, KeyId(keyBytes), srcFlushAddress, snapshotPath))
+                return;
+
             if (!File.Exists(snapshotPath))
             {
                 // Per Invariant 2 (Per-flush snapshot invariant), the per-flush file must exist
@@ -801,7 +816,6 @@ namespace Garnet.server
             }
 
             var dataPath = LogDataPath(hashPrefix);
-            var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
 
             // Acquire the per-key exclusive lock for the duration of the file copy AND the
             // pending-entry registration. This blocks any concurrent RestoreTree (which also
@@ -810,6 +824,7 @@ namespace Garnet.server
             rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
             try
             {
+                DiscardParkedTreeLocked(KeyId(keyBytes), "staged");
                 var copyStart = Stopwatch.GetTimestamp();
                 File.Copy(snapshotPath, dataPath, overwrite: true);
                 logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
@@ -1025,6 +1040,7 @@ namespace Garnet.server
                 else if (TryEnqueueFlushSnapshot(entry, logicalAddress, flushPath))
                 {
                     // The worker logs the snapshot; only the time this flush thread spent is logged here.
+                    Volatile.Write(ref entry.LastFlushAddress, logicalAddress);
                     SetFlushedFlag(valueSpan);
                     var enqueueMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                     if (enqueueMs >= 10)
@@ -1037,6 +1053,7 @@ namespace Garnet.server
                 }
                 else
                 {
+                    Volatile.Write(ref entry.LastFlushAddress, logicalAddress);
                     SetFlushedFlag(valueSpan);
                     mode = SnapshotMode("live", kind);
                 }
@@ -1127,6 +1144,7 @@ namespace Garnet.server
                 // (RestoreTree completed before we acquired the shared lock).
                 if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
                 {
+                    Volatile.Write(ref entry.LastFlushAddress, logicalAddress);
                     SetFlushedFlag(valueSpan);
                     return SnapshotMode("cold-live", kind);
                 }

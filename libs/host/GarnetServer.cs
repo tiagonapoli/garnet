@@ -430,6 +430,7 @@ namespace Garnet
                     logger: loggerFactory?.CreateLogger("RangeIndexManager"))
                 {
                     BackgroundCheckpointSnapshots = serverOptions.EnableAOF,
+                    EvictedTreeGrace = TimeSpan.FromSeconds(serverOptions.RangeIndexEvictedTreeGraceSeconds),
                 };
             }
             var vectorManager = new VectorManager(

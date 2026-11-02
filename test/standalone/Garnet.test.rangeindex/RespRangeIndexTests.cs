@@ -1131,6 +1131,106 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Creates a low-memory server, fills a disk-backed index and evicts its stub, returning the manager and the expected values.
+        /// </summary>
+        private (RangeIndexManager Manager, ConnectionMultiplexer Redis, string Value) CreateEvictedDiskIndex(int recordCount)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+
+            var value = new string('v', 64);
+            db.Execute("RI.CREATE", "myindex", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            for (var i = 0; i < recordCount; i++)
+                db.Execute("RI.SET", "myindex", $"key{i:D5}", $"{value}{i:D5}");
+
+            for (var i = 0; i < 2000; i++)
+                db.StringSet($"filler{i:D4}", $"data{i:D4}");
+
+            ClassicAssert.AreEqual(0, rangeIndexManager.LiveIndexCount, "BfTree should have been evicted");
+
+            // A tree whose flush snapshot was still queued at eviction is parked once that snapshot completes.
+            ClassicAssert.IsTrue(SpinWait.SpinUntil(() => rangeIndexManager.ParkedTreeCount == 1, TimeSpan.FromMinutes(1)), "Evicted tree should be parked");
+            return (rangeIndexManager, redis, value);
+        }
+
+        /// <summary>
+        /// Verifies promoting an evicted index reuses its parked tree instead of copying the flush file and reopening it.
+        /// </summary>
+        [Test]
+        public void RIPromoteOfEvictedIndexReusesParkedTreeTest()
+        {
+            const int recordCount = 512;
+            var (rangeIndexManager, redis, value) = CreateEvictedDiskIndex(recordCount);
+            using var _ = redis;
+            var db = redis.GetDatabase(0);
+
+            for (var i = 0; i < recordCount; i++)
+                ClassicAssert.AreEqual($"{value}{i:D5}", (string)db.Execute("RI.GET", "myindex", $"key{i:D5}"));
+
+            ClassicAssert.AreEqual(1, rangeIndexManager.ParkedTreesReusedCount, "Promote should reuse the parked tree");
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreesDisposedCount);
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreeCount);
+            ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount);
+
+            var extraKey = $"key{recordCount:D5}";
+            db.Execute("RI.SET", "myindex", extraKey, "value-extra");
+            ClassicAssert.AreEqual("value-extra", (string)db.Execute("RI.GET", "myindex", extraKey));
+            var scanned = (RedisResult[])db.Execute("RI.SCAN", "myindex", "key00000", "COUNT", (recordCount + 1).ToString(), "FIELDS", "KEY");
+            ClassicAssert.AreEqual(recordCount + 1, scanned.Length);
+        }
+
+        /// <summary>
+        /// Verifies an evicted index whose parked tree was disposed is restored from its flush file.
+        /// </summary>
+        [Test]
+        public void RIPromoteAfterParkedTreeDisposedRestoresFromFlushFileTest()
+        {
+            const int recordCount = 512;
+            var (rangeIndexManager, redis, value) = CreateEvictedDiskIndex(recordCount);
+            using var _ = redis;
+            var db = redis.GetDatabase(0);
+
+            rangeIndexManager.SweepParkedTrees(all: true);
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreeCount);
+            ClassicAssert.AreEqual(1, rangeIndexManager.ParkedTreesDisposedCount);
+
+            for (var i = 0; i < recordCount; i++)
+                ClassicAssert.AreEqual($"{value}{i:D5}", (string)db.Execute("RI.GET", "myindex", $"key{i:D5}"));
+
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreesReusedCount);
+            ClassicAssert.AreEqual(1, rangeIndexManager.LiveIndexCount);
+            db.Execute("RI.SET", "myindex", "extra", "value-extra");
+            ClassicAssert.AreEqual("value-extra", (string)db.Execute("RI.GET", "myindex", "extra"));
+        }
+
+        /// <summary>
+        /// Verifies deleting an evicted index disposes its parked tree, so a recreated index starts empty.
+        /// </summary>
+        [Test]
+        public void RIDeleteOfEvictedIndexDisposesParkedTreeTest()
+        {
+            var (rangeIndexManager, redis, _) = CreateEvictedDiskIndex(recordCount: 64);
+            using var __ = redis;
+            var db = redis.GetDatabase(0);
+
+            // DEL of a disk-resident record writes a tombstone without reporting it as found.
+            _ = db.KeyDelete("myindex");
+            ClassicAssert.AreEqual("OK", (string)db.Execute("RI.CREATE", "myindex", "DISK", "CACHESIZE", "65536", "MINRECORD", "8"));
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreeCount);
+            ClassicAssert.AreEqual(0, rangeIndexManager.ParkedTreesReusedCount);
+
+            ClassicAssert.IsTrue(db.Execute("RI.GET", "myindex", "key00000").IsNull);
+            db.Execute("RI.SET", "myindex", "fresh", "value-fresh");
+            ClassicAssert.AreEqual("value-fresh", (string)db.Execute("RI.GET", "myindex", "fresh"));
+        }
+
+        /// <summary>
         /// Verifies a scan succeeds over disk-backed leaves whose mini pages hold only records cached by point reads.
         /// </summary>
         [Test]
