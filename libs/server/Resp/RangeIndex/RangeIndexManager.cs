@@ -1520,11 +1520,12 @@ namespace Garnet.server
         /// <param name="reason">Why the files are discarded; logged.</param>
         public void DeleteAllFlushFiles(string reason)
         {
-            // The discarded log's queued snapshots are skipped; waiting lets those in flight finish before their files are deleted.
+            // The discarded log's queued snapshots are skipped; those in flight finish uncapped before their files are deleted.
             flushSnapshotsStopped = true;
             try
             {
-                WaitForPendingFlushSnapshots("delete-all:" + reason);
+                using (BfTreeService.SuspendSnapshotIORate())
+                    WaitForPendingFlushSnapshots("delete-all:" + reason);
             }
             finally
             {

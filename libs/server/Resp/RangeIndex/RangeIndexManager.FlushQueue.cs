@@ -384,14 +384,29 @@ namespace Garnet.server
         private void StopFlushSnapshots(string reason)
         {
             flushSnapshotsStopped = true;
-            WaitForPendingFlushSnapshots(reason);
-            foreach (var kvp in pendingCheckpointSnapshots)
+            var start = Stopwatch.GetTimestamp();
+            var flushPending = pendingFlushSnapshots.Count;
+            var checkpointPending = 0;
+            var releasesPending = pendingTreeReleases.Count;
+
+            // The caller blocks on the snapshots still in flight and discards their trees next, so the I/O cap would only delay it.
+            using (BfTreeService.SuspendSnapshotIORate())
             {
-                foreach (var snapshot in kvp.Value.Snapshots)
-                    AsyncUtils.BlockingWait(snapshot);
+                WaitForPendingFlushSnapshots(reason);
+                foreach (var kvp in pendingCheckpointSnapshots)
+                {
+                    foreach (var snapshot in kvp.Value.Snapshots)
+                    {
+                        checkpointPending++;
+                        AsyncUtils.BlockingWait(snapshot);
+                    }
+                }
+                foreach (var kvp in pendingTreeReleases)
+                    AsyncUtils.BlockingWait(kvp.Value.Completion);
             }
-            foreach (var kvp in pendingTreeReleases)
-                AsyncUtils.BlockingWait(kvp.Value.Completion);
+
+            logger?.LogInformation("[RangeIndexStopFlushSnapshots] reason={Reason} flushPending={Flush} checkpointPending={Checkpoint} releasesPending={Releases} ms={Ms:F0}",
+                reason, flushPending, checkpointPending, releasesPending, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
 
         /// <summary>

@@ -3559,6 +3559,58 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A store reset waits for the flush snapshots in flight, whose output it then discards, so they run without the
+        /// snapshot I/O cap rather than holding the reset for the whole capped sweep.
+        /// </summary>
+        [Test]
+        [CancelAfter(300_000)]
+        public async Task RIStoreResetLiftsSnapshotIOCapForInFlightSnapshotsAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            var store = server.Provider.StoreWrapper.store;
+            try
+            {
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "uncapped", "DISK", "CACHESIZE", "1048576", "MINRECORD", "8", "MAXRECORD", "1024", "MAXKEYLEN", "64");
+
+                // About 64 MiB of records: the capped sweep needs well over 100 s, the uncapped one a few seconds.
+                var value = new string('v', 900);
+                for (var batch = 0; batch < 72; batch++)
+                {
+                    var writes = new Task[1000];
+                    for (var i = 0; i < writes.Length; i++)
+                        writes[i] = db.ExecuteAsync("RI.SET", "uncapped", $"field-{batch:D3}-{i:D4}", value);
+                    await Task.WhenAll(writes).WaitAsync(cancellationToken);
+                }
+
+                // Each pacing charge of 4 MiB sleeps 8 s at this rate, which bounds how long a lifted cap can still hold the sweep.
+                BfTreeService.SetSnapshotIORate(512 << 10);
+                var throttledBefore = BfTreeService.SnapshotIOThrottledTime;
+                await Task.Run(() => store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true)).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                ClassicAssert.AreEqual(1, rim.PendingFlushSnapshotCount, "the flush must queue a snapshot of the tree");
+                while (BfTreeService.SnapshotIOThrottledTime == throttledBefore)
+                    await Task.Delay(20, cancellationToken);
+
+                var reset = System.Diagnostics.Stopwatch.StartNew();
+                await Task.Run(() => server.Provider.StoreWrapper.Reset()).WaitAsync(cancellationToken);
+                reset.Stop();
+
+                ClassicAssert.AreEqual(0, rim.PendingFlushSnapshotCount);
+                ClassicAssert.Less(reset.Elapsed, TimeSpan.FromSeconds(40), "the reset must not wait for the capped snapshot sweep");
+            }
+            finally
+            {
+                BfTreeService.SetSnapshotIORate(0);
+            }
+        }
+
+        /// <summary>
         /// With the AOF enabled, a checkpoint's tree snapshot is written in the background: operations on the tree proceed
         /// while it is pending, the checkpoint does not persist until it completes, and recovery converges by replaying the AOF.
         /// </summary>
