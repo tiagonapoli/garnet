@@ -1251,7 +1251,7 @@ impl CPRSnapShotMgr {
         result
     }
 
-    /// Recovers a disk-backed tree that reads the immutable snapshot at `base_path` in place and writes to a new`r
+    /// Recovers a disk-backed tree that reads the immutable snapshot at `base_path` in place and writes to a new
     /// private file at `work_path` (which must not exist), so opening the tree never copies the snapshot.
     pub fn new_from_snapshot_overlay(
         base_path: impl AsRef<Path>,
