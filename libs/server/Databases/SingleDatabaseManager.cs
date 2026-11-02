@@ -440,7 +440,11 @@ namespace Garnet.server
             // Guarantee initialize has happened before we attempt to recover
             defaultDatabase.VectorManager?.Initialize();
 
-            defaultDatabase.VectorManager?.ReconcileRecoveredState();
+            // Cluster recovery with AOF reconciles after replay, and no store recovery follows it during startup,
+            // so reconciling again would rescan the whole log to find nothing new.
+            if (defaultDatabase.VectorManager?.HasReconciledRecoveredState != true)
+                defaultDatabase.VectorManager?.ReconcileRecoveredState();
+
             defaultDatabase.VectorManager?.WaitForQuiescence();
         }
 
