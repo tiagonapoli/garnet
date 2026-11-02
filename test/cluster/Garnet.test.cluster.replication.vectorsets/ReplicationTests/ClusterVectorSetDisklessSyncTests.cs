@@ -123,6 +123,28 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
+        /// Cluster startup with AOF reconciles Vector Sets after replay; the database manager must not repeat
+        /// the full-log scan, which delays the listener on stores with a large on-disk log.
+        /// </summary>
+        [Test]
+        public void ClusterStartupRecoveryScansLogForVectorSetsOnce()
+        {
+            const string Key = "vs-startup-single-scan";
+            const int Elements = 20;
+
+            SetupDisklessCluster(1);
+            PopulateVectorSet(PrimaryIndex, Key, Elements);
+
+            context.nodeOptions[PrimaryIndex].Recover = true;
+            context.RestartNode(PrimaryIndex, ensureAofFlush: true);
+
+            var vectorManager = GetStoreWrapper(context.nodes[PrimaryIndex]).DefaultDatabase.VectorManager;
+            ClassicAssert.IsTrue(vectorManager.HasReconciledRecoveredState);
+            ClassicAssert.AreEqual(1, vectorManager.RecoveredStateScanCount, "startup must scan the log for Vector Set indexes once");
+            ClassicAssert.AreEqual(Elements, VectorSetSize(PrimaryIndex, Key));
+        }
+
+        /// <summary>
         /// Every replica takes its own diskless full sync from the same populated primary.
         /// Each must rebuild its own index, not share per-primary state.
         /// </summary>
