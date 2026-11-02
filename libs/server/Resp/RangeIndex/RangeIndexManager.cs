@@ -731,6 +731,7 @@ namespace Garnet.server
         {
             // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
             StopFlushSnapshots("store-reset");
+            ForgetAllReplayedWrites();
             DiscardAllParkedTrees();
             try
             {

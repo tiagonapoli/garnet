@@ -139,6 +139,8 @@ namespace Garnet.server
             if (stubSpan.Length != IndexSizeBytes)
                 throw new GarnetException($"Corrupt RI.CREATE AOF entry: stub size {stubSpan.Length}, expected {IndexSizeBytes}");
 
+            ForgetReplayedWrites(key);
+
             ref var stub = ref Unsafe.As<byte, RangeIndexStub>(ref MemoryMarshal.GetReference(stubSpan));
 
             // Create a fresh BfTree from the config in the stub
@@ -225,6 +227,8 @@ namespace Garnet.server
                 var readResult = BfTreeService.ReadByPtr(treePtr, field, out var readValue);
                 if (readResult != BfTreeReadResult.Found || !readValue.AsSpan().SequenceEqual(value.ReadOnlySpan))
                     logger?.LogCritical("[RangeIndexReplayReadBackMismatch] op=RISET key={key} treePtr={treePtr} readResult={readResult} readLen={readLen} valueLen={valueLen}", Convert.ToHexString(key), treePtr, readResult, readValue.Length, value.Length);
+
+                TrackReplayedWrite(key, treePtr, field.ReadOnlySpan, value.ReadOnlySpan, isDelete: false);
             }
         }
 
@@ -279,6 +283,8 @@ namespace Garnet.server
                     logger?.LogError("RI.DEL AOF replay: native delete rejected ({result}) for a {keyLen}-byte key with field {fieldLen}B; primary/replica divergence.", deleteResult, key.Length, field.Length);
                     throw new GarnetException($"RI.DEL AOF replay failed: native delete returned {deleteResult}");
                 }
+
+                TrackReplayedWrite(key, treePtr, field.ReadOnlySpan, default, isDelete: true);
             }
         }
 

@@ -997,6 +997,8 @@ namespace Garnet.test.cluster
             }
 
             ClassicAssert.IsEmpty(missing, $"replica diverged on {missing.Count} fields: {string.Join(",", missing.Take(40))}");
+            ClassicAssert.Greater(replicaRim.ReplayWriteCheckCount, 0, "the replica must re-read its replayed writes");
+            ClassicAssert.AreEqual(0, replicaRim.ReplayWriteLossCount, "the replica must not lose a replayed write");
         }
 
         /// <summary>
