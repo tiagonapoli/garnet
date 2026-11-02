@@ -290,7 +290,7 @@ namespace Garnet.server
                     disposedTree = entry?.Tree;
 
                     // Registered under the lock so a restore of the evicted record waits for the tree to be released.
-                    if (!deleteFiles && disposedTree != null && TryDeferReleaseToFlushSnapshots(keyId, entry, disposedTree))
+                    if (!deleteFiles && disposedTree != null && TryDeferReleaseToFlushSnapshots(keyId, entry, disposedTree, stub.CacheSize))
                     {
                         logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} releaseDeferred=true", entry.HashPrefix, disposedTree.NativePtr);
                         return;
@@ -298,7 +298,7 @@ namespace Garnet.server
 
                     // Every reader of the evicted record was drained by this lock and a parked tree is not disposed, so no
                     // epoch deferral is needed.
-                    if (!deleteFiles && disposedTree != null && TryParkEvictedTreeLocked(keyId, entry, disposedTree))
+                    if (!deleteFiles && disposedTree != null && TryParkEvictedTreeLocked(keyId, entry, disposedTree, stub.CacheSize))
                     {
                         logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} parked=true", entry.HashPrefix, disposedTree.NativePtr);
                         return;
