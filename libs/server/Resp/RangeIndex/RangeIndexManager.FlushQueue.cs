@@ -328,8 +328,13 @@ namespace Garnet.server
             {
                 try
                 {
-                    DisposeAndDeleteFilesDeferred(entry, tree, hashPrefix: null);
-                    logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0}", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
+                    if (TryParkReleasedTree(keyId, entry, tree))
+                        logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0} parked=true", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
+                    else
+                    {
+                        DisposeAndDeleteFilesDeferred(entry, tree, hashPrefix: null);
+                        logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0}", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
+                    }
                 }
                 finally
                 {

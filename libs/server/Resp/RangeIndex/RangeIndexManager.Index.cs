@@ -281,6 +281,9 @@ namespace Garnet.server
                 // Remove entry from liveIndexes synchronously so concurrent restorers see no
                 // tree for this key. Stash the BfTree wrapper (if any) for deferred disposal.
                 var keyId = KeyId(key);
+                if (deleteFiles)
+                    DiscardParkedTreeLocked(keyId, "delete");
+
                 if (liveIndexes.TryRemove(keyId, out var entry))
                 {
                     disposedEntry = entry;
@@ -290,6 +293,14 @@ namespace Garnet.server
                     if (!deleteFiles && disposedTree != null && TryDeferReleaseToFlushSnapshots(keyId, entry, disposedTree))
                     {
                         logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} releaseDeferred=true", entry.HashPrefix, disposedTree.NativePtr);
+                        return;
+                    }
+
+                    // Every reader of the evicted record was drained by this lock and a parked tree is not disposed, so no
+                    // epoch deferral is needed.
+                    if (!deleteFiles && disposedTree != null && TryParkEvictedTreeLocked(keyId, entry, disposedTree))
+                    {
+                        logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} parked=true", entry.HashPrefix, disposedTree.NativePtr);
                         return;
                     }
                 }

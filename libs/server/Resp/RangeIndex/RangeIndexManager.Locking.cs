@@ -330,6 +330,7 @@ namespace Garnet.server
                 {
                     var hashPrefix = HashKeyToPrefix(keySpan);
                     var workingPath = LogDataPath(hashPrefix);
+                    DiscardParkedTreeLocked(keyId, "restore");
                     if (existing != null)
                         StageDeferredData(existing, workingPath);
 
