@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -31,6 +32,9 @@ namespace Garnet.cluster
 
         readonly ActiveWorkerMonitor activeWorkerMonitor;
         internal readonly ReplayBatchContext replayBatchContext;
+        /// <summary>Replay chunks slower than this are logged to attribute replica replay lag.</summary>
+        const double SlowReplayChunkThresholdMs = 1000;
+
         readonly ReplicaReplayTask[] replayTasks;
         readonly TsavoriteLog physicalSublog;
 
@@ -163,7 +167,8 @@ namespace Garnet.cluster
             ValidateSublogIndex(physicalSublogIdx);
             replicationManager.SetSublogReplicationOffset(physicalSublogIdx, currentAddress);
             var replicationOffset = currentAddress;
-            // logger?.LogError("[{physicalSublogIdx}] = {currentAddress} -> {nextAddress}", physicalSublogIdx, currentAddress, nextAddress);
+            var chunkStart = Stopwatch.GetTimestamp();
+            var recordCount = 0;
 
             try
             {
@@ -176,6 +181,7 @@ namespace Garnet.cluster
                     if (payloadLength > 0)
                     {
                         var logAddressSequenceNumber = currentAddress + (ptr - record);
+                        recordCount++;
                         replicationManager.AofProcessor.ProcessAofRecordInternal(physicalSublogIdx, ptr + entryLength, payloadLength, true, out var isCheckpointStart, logAddressSequenceNumber);
                         // Encountered checkpoint start marker, log the ReplicationCheckpointStartOffset so we know the correct AOF truncation
                         // point when we take a checkpoint at the checkpoint end marker
@@ -206,9 +212,15 @@ namespace Garnet.cluster
             }
 
             // Before updating replication offset, we must wait for any pending Vector Set ops to complete
+            var vectorWaitStart = Stopwatch.GetTimestamp();
             replicationManager.AofProcessor.WaitForVectorOperationsToComplete();
+            var vectorWaitMs = Stopwatch.GetElapsedTime(vectorWaitStart).TotalMilliseconds;
 
             replicationManager.SetSublogReplicationOffset(physicalSublogIdx, replicationOffset);
+
+            var chunkMs = Stopwatch.GetElapsedTime(chunkStart).TotalMilliseconds;
+            if (chunkMs >= SlowReplayChunkThresholdMs)
+                logger?.LogWarning("[ReplicaReplaySlowChunk] ms={Ms:F0} records={Records} bytes={Bytes} vectorWaitMs={VectorWaitMs:F0} address={Address} backlogBytes={Backlog}", chunkMs, recordCount, recordLength, vectorWaitMs, currentAddress, physicalSublog.TailAddress - nextAddress);
 
             if (replicationOffset != nextAddress)
             {
