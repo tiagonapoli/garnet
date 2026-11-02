@@ -1118,8 +1118,8 @@ namespace Garnet.server
             var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             var bytes = mode is null ? 0 : TryGetFileLength(flushPath);
             var (retained, retainedBytes) = MeasureFlushFiles();
-            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} async={Async} bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0} pending={Pending} retainedFiles={Retained} retainedBytes={RetainedBytes}",
-                hashPrefix, logicalAddress, mode ?? "failed", queueMs.HasValue, bytes, ms, queueMs ?? 0, pendingFlushSnapshots.Count, retained, retainedBytes);
+            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} async={Async} bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0} pending={Pending} retainedFiles={Retained} retainedBytes={RetainedBytes} throttledTotalMs={ThrottledMs:F0}",
+                hashPrefix, logicalAddress, mode ?? "failed", queueMs.HasValue, bytes, ms, queueMs ?? 0, pendingFlushSnapshots.Count, retained, retainedBytes, BfTreeService.SnapshotWriteThrottledTime.TotalMilliseconds);
         }
 
         private static long TryGetFileLength(string path)

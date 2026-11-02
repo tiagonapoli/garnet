@@ -751,6 +751,10 @@ namespace Garnet
         public int RangeIndexParkedTreeMemoryMB { get; set; }
 
         [IntRangeValidation(0, int.MaxValue, isRequired: false)]
+        [Option("range-index-snapshot-write-mbps", Required = false, HelpText = "Most MiB per second written by Range Index tree snapshots across the process, so bursts of flush snapshots do not saturate the disk (0 is unlimited)")]
+        public int RangeIndexSnapshotWriteMBps { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue, isRequired: false)]
         [Option("vector-set-quantization-task-count", Required = false, HelpText = "Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count; maximum: the machine CPU count)")]
         public int VectorSetQuantizationTaskCount { get; set; }
 
@@ -1084,6 +1088,7 @@ namespace Garnet
                 EnableRangeIndexPreview = EnableRangeIndexPreview,
                 RangeIndexEvictedTreeGraceSeconds = RangeIndexEvictedTreeGraceSeconds,
                 RangeIndexParkedTreeMemoryMB = RangeIndexParkedTreeMemoryMB,
+                RangeIndexSnapshotWriteMBps = RangeIndexSnapshotWriteMBps,
             };
         }
 

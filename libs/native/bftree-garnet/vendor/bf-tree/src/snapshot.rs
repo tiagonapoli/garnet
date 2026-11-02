@@ -119,6 +119,8 @@ pub struct CPRSnapShotMgr {
     snapshot_in_progress: AtomicBool,
     // Bytes written to the current snapshot file since the sweep last synced it.
     unsynced_bytes: AtomicUsize,
+    // Bytes written to the current snapshot file not yet charged to the process-wide write rate limit.
+    unpaced_bytes: AtomicUsize,
 }
 
 /// Bytes the sweep lets accumulate in the page cache before syncing the snapshot file, so a large snapshot
@@ -127,6 +129,66 @@ pub struct CPRSnapShotMgr {
 const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 64 << 20;
 #[cfg(test)]
 const SNAPSHOT_SYNC_INTERVAL_BYTES: usize = 4096;
+
+/// Bytes the sweep writes between charges to the snapshot write rate limit; small enough to keep bursts short.
+#[cfg(not(test))]
+const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4 << 20;
+#[cfg(test)]
+const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4096;
+
+/// Process-wide cap on snapshot write bandwidth in bytes per second, shared by all trees; 0 disables it.
+static SNAPSHOT_WRITE_BYTES_PER_SEC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Nanoseconds since `SNAPSHOT_PACING_EPOCH` at which the write rate limit's reserved budget ends.
+static SNAPSHOT_WRITE_BUDGET_END_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+static SNAPSHOT_PACING_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// Total time snapshot sweeps have slept on the write rate limit, for observability.
+static SNAPSHOT_WRITE_THROTTLED_NANOS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Caps the bandwidth of all snapshot sweeps in the process, so snapshots cannot saturate a disk shared with
+/// latency-sensitive I/O such as replication replay; 0 removes the cap.
+pub fn set_snapshot_write_rate(bytes_per_sec: u64) {
+    SNAPSHOT_WRITE_BYTES_PER_SEC.store(bytes_per_sec, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Total nanoseconds snapshot sweeps have slept on the process-wide write rate limit.
+pub fn snapshot_write_throttled_nanos() -> u64 {
+    SNAPSHOT_WRITE_THROTTLED_NANOS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Reserves `bytes` of the process-wide write budget and sleeps until the reservation starts.
+fn charge_snapshot_write_rate(bytes: usize) {
+    let rate = SNAPSHOT_WRITE_BYTES_PER_SEC.load(std::sync::atomic::Ordering::Relaxed);
+    if rate == 0 || bytes == 0 {
+        return;
+    }
+
+    let epoch = *SNAPSHOT_PACING_EPOCH.get_or_init(std::time::Instant::now);
+    let now = epoch.elapsed().as_nanos() as u64;
+    let wait = reserve_snapshot_write_budget(&SNAPSHOT_WRITE_BUDGET_END_NANOS, now, bytes, rate);
+    if wait > 0 {
+        SNAPSHOT_WRITE_THROTTLED_NANOS.fetch_add(wait, std::sync::atomic::Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_nanos(wait));
+    }
+}
+
+/// Appends a reservation of `bytes` at `rate` bytes per second to `budget_end` and returns the nanoseconds from `now`
+/// until it starts. An idle limiter does not bank unused budget: reservations start no earlier than `now`.
+fn reserve_snapshot_write_budget(budget_end: &std::sync::atomic::AtomicU64, now: u64, bytes: usize, rate: u64) -> u64 {
+    use std::sync::atomic::Ordering as StdOrdering;
+
+    let cost = ((bytes as u128 * 1_000_000_000) / rate as u128) as u64;
+    let mut end = budget_end.load(StdOrdering::Relaxed);
+    loop {
+        let start = end.max(now);
+        match budget_end.compare_exchange_weak(end, start + cost, StdOrdering::AcqRel, StdOrdering::Relaxed) {
+            Ok(_) => return start - now,
+            Err(current) => end = current,
+        }
+    }
+}
 
 unsafe impl Sync for CPRSnapShotMgr {}
 
@@ -249,6 +311,7 @@ impl CPRSnapShotMgr {
             vfs: RwLock::new(vfs),
             snapshot_in_progress: AtomicBool::new(false),
             unsynced_bytes: AtomicUsize::new(0),
+            unpaced_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -430,13 +493,19 @@ impl CPRSnapShotMgr {
         // Copy the page (ptr) to the new space
         vfs.write(offset, ptr);
         self.unsynced_bytes.fetch_add(ptr.len(), Ordering::Relaxed);
+        self.unpaced_bytes.fetch_add(ptr.len(), Ordering::Relaxed);
 
         // Return the offset
         offset
     }
 
-    /// Syncs the snapshot file once enough unsynced bytes accumulate. Call only while holding no page locks.
+    /// Charges written bytes to the process-wide write rate limit and syncs the snapshot file once enough
+    /// unsynced bytes accumulate. Call only while holding no page locks, since it may sleep.
     fn pace_snapshot_writes(&self) {
+        if self.unpaced_bytes.load(Ordering::Relaxed) >= SNAPSHOT_PACE_INTERVAL_BYTES {
+            charge_snapshot_write_rate(self.unpaced_bytes.swap(0, Ordering::Relaxed));
+        }
+
         if self.unsynced_bytes.load(Ordering::Relaxed) < SNAPSHOT_SYNC_INTERVAL_BYTES {
             return;
         }
@@ -984,6 +1053,7 @@ impl CPRSnapShotMgr {
         // Reset the snapshot vfs before use
         vfs_guard.reset();
         self.unsynced_bytes.store(0, Ordering::Relaxed);
+        self.unpaced_bytes.store(0, Ordering::Relaxed);
 
         // Drop the guard
         drop(vfs_guard);
@@ -1729,6 +1799,21 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::Ordering;
     use std::sync::{atomic::AtomicBool, Arc};
+
+    #[test]
+    fn snapshot_write_budget_queues_reservations_without_banking_idle_time() {
+        use super::reserve_snapshot_write_budget;
+
+        // One byte per nanosecond.
+        let rate = 1_000_000_000;
+        let budget_end = std::sync::atomic::AtomicU64::new(0);
+        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_000, 500, rate), 0);
+        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_000, 500, rate), 500, "a reservation queues behind the outstanding budget");
+        assert_eq!(reserve_snapshot_write_budget(&budget_end, 1_200, 100, rate), 800);
+        assert_eq!(budget_end.load(std::sync::atomic::Ordering::Relaxed), 2_100);
+        assert_eq!(reserve_snapshot_write_budget(&budget_end, 10_000, 100, rate), 0, "idle time must not become a burst allowance");
+        assert_eq!(reserve_snapshot_write_budget(&budget_end, 10_000, 100, rate), 100);
+    }
 
     /// Multiple writer threads write to a BfTree in parallel while a separate thread taking multiple snapshots
     /// A new BfTree recovered from the snapshot should contain a prefix of all the inserts from each writer thread.

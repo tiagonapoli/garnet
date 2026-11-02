@@ -413,6 +413,18 @@ pub unsafe extern "C" fn bftree_cpr_snapshot(tree: *mut BfTree, snapshot_path: *
     }
 }
 
+/// Caps the bandwidth of all CPR snapshot writes in the process, in bytes per second; 0 removes the cap.
+#[no_mangle]
+pub extern "C" fn bftree_set_snapshot_write_rate(bytes_per_sec: u64) {
+    bf_tree::set_snapshot_write_rate(bytes_per_sec);
+}
+
+/// Total nanoseconds CPR snapshots in the process have slept on the snapshot write rate limit.
+#[no_mangle]
+pub extern "C" fn bftree_snapshot_write_throttled_nanos() -> u64 {
+    bf_tree::snapshot_write_throttled_nanos()
+}
+
 /// Recover a BfTree from a CPR snapshot file. Unified for disk-backed and
 /// memory-backed (cache_only) trees — the storage backend is recorded in the
 /// snapshot.
