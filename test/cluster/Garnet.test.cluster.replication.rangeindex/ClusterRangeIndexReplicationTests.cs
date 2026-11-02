@@ -144,6 +144,109 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
+        /// A replica evicting a tree whose flush snapshots are still queued must keep applying replicated writes to it.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexReplicaAppliesWritesWhileEvictedTreeAwaitsFlushSnapshots()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+            var (_, _) = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.CREATE", ["idx1", "DISK", "CACHESIZE", "65536", "MINRECORD", "8"], logger: context.logger));
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field-0", "value-0"], logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+            var replicaStore = context.nodes[replicaIndex].Provider.StoreWrapper.store;
+            using var gate = new ManualResetEventSlim();
+            replicaRim.BeforeFlushSnapshotForTest = path => _ = gate.Wait(TimeSpan.FromSeconds(60));
+
+            const int cycles = 3;
+            try
+            {
+                for (var cycle = 1; cycle <= cycles; cycle++)
+                {
+                    await Task.Run(() => replicaStore.Log.FlushAndEvict(wait: true)).WaitAsync(TimeSpan.FromSeconds(30));
+                    ClassicAssert.AreEqual(0, replicaRim.LiveIndexCount, $"cycle {cycle}: the replica must evict the tree while its snapshot is queued");
+
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", $"field-{cycle}", $"value-{cycle}"], logger: context.logger));
+                    context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+                    ClassicAssert.AreEqual($"value-{cycle}", (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", $"field-{cycle}"], logger: context.logger), $"cycle {cycle}: the replica must apply the write replayed into the deferred window");
+                }
+
+                ClassicAssert.AreEqual(cycles, replicaRim.DeferredTreesReclaimedCount);
+            }
+            finally
+            {
+                gate.Set();
+                replicaRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            replicaRim.WaitForPendingFlushSnapshots("test");
+            for (var i = 0; i <= cycles; i++)
+                ClassicAssert.AreEqual($"value-{i}", (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", $"field-{i}"], logger: context.logger), $"field-{i}");
+        }
+
+        /// <summary>
+        /// Replicated tree writes interleaved with log writes that flush and evict the tree's record during replay must all be
+        /// applied on the replica, even while its flush snapshots lag behind.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public void ClusterRangeIndexReplicaKeepsWritesInterleavedWithLogPressure([Values(0, 20, 300)] int snapshotDelayMs)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+            var (_, _) = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.CREATE", ["idx1", "DISK", "CACHESIZE", "65536", "MINRECORD", "8"], logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+            if (snapshotDelayMs > 0)
+                replicaRim.BeforeFlushSnapshotForTest = _ => Thread.Sleep(snapshotDelayMs);
+
+            const int writes = 400;
+            var pad = new string('p', 2048);
+            try
+            {
+                for (var i = 0; i < writes; i++)
+                {
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", $"field-{i:D4}", $"value-{i:D4}"], logger: context.logger));
+                    for (var j = 0; j < 4; j++)
+                        ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "SET", [$"pad-{i}-{j}", pad], logger: context.logger));
+                }
+
+                context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            }
+            finally
+            {
+                replicaRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            TestContext.Progress.WriteLine($"reclaimed={replicaRim.DeferredTreesReclaimedCount} parkedReused={replicaRim.ParkedTreesReusedCount} parkedDisposed={replicaRim.ParkedTreesDisposedCount} live={replicaRim.LiveIndexCount}");
+            var missing = new List<int>();
+            for (var i = 0; i < writes; i++)
+            {
+                ClassicAssert.AreEqual($"value-{i:D4}", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.GET", ["idx1", $"field-{i:D4}"], logger: context.logger), $"primary field-{i:D4}");
+                if ((string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", ["idx1", $"field-{i:D4}"], logger: context.logger) != $"value-{i:D4}")
+                    missing.Add(i);
+            }
+
+            ClassicAssert.IsEmpty(missing, $"replica lost {missing.Count} writes: {string.Join(",", missing.Take(40))}; reclaimed={replicaRim.DeferredTreesReclaimedCount} parkedReused={replicaRim.ParkedTreesReusedCount}");
+        }
+
+        /// <summary>
         /// A replica compacts its log for the checkpoint it takes at the primary's checkpoint marker; replay must keep
         /// applying new primary writes while that compaction runs.
         /// </summary>
@@ -682,6 +785,78 @@ namespace Garnet.test.cluster
             string[] expected = [primaryFlushFile];
             Assert.That(Directory.GetFiles(replicaRoot, "*.flush.bftree").Select(Path.GetFileName), Is.EqualTo(expected), "the replica must hold exactly the flush files of the adopted checkpoint");
             ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
+
+        /// <summary>
+        /// A full sync replays the primary's AOF tail after the checkpoint; tree writes in that tail interleaved with log
+        /// writes that flush and evict the tree records during replay must all be applied on the replica.
+        /// </summary>
+        [Test, Order(11)]
+        [Category("REPLICATION")]
+        public void ClusterRangeIndexFullSyncReplaysTailWritesInterleavedWithLogPressure([Values(1, 4)] int treeCount, [Values(0, 50)] int snapshotDelayMs)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            for (var t = 0; t < treeCount; t++)
+            {
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.CREATE", [$"idx{t}", "DISK", "CACHESIZE", "65536", "MINRECORD", "8"], logger: context.logger));
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", [$"idx{t}", "seed", "seed"], logger: context.logger));
+            }
+
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+
+            const int rounds = 300;
+            var pad = new string('p', 2048);
+            for (var i = 0; i < rounds; i++)
+            {
+                for (var t = 0; t < treeCount; t++)
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", [$"idx{t}", $"field-{i:D4}", $"value-{t}-{i:D4}"], logger: context.logger));
+                for (var j = 0; j < 4; j++)
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "SET", [$"pad-{i}-{j}", pad], logger: context.logger));
+            }
+
+            var replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+            if (snapshotDelayMs > 0)
+                replicaRim.BeforeFlushSnapshotForTest = _ => Thread.Sleep(snapshotDelayMs);
+            try
+            {
+                ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+                context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            }
+            finally
+            {
+                replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+                replicaRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            TestContext.Progress.WriteLine($"reclaimed={replicaRim.DeferredTreesReclaimedCount} parkedReused={replicaRim.ParkedTreesReusedCount} parkedDisposed={replicaRim.ParkedTreesDisposedCount} live={replicaRim.LiveIndexCount}");
+            var missing = new List<string>();
+            for (var t = 0; t < treeCount; t++)
+            {
+                for (var i = 0; i < rounds; i++)
+                {
+                    var expected = $"value-{t}-{i:D4}";
+                    ClassicAssert.AreEqual(expected, (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.GET", [$"idx{t}", $"field-{i:D4}"], logger: context.logger), $"primary idx{t} field-{i:D4}");
+                    if ((string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", [$"idx{t}", $"field-{i:D4}"], logger: context.logger) != expected)
+                        missing.Add($"t{t}r{i}");
+                }
+            }
+
+            ClassicAssert.IsEmpty(missing, $"replica lost {missing.Count} writes: {string.Join(",", missing.Take(40))}");
         }
 
         /// <summary>

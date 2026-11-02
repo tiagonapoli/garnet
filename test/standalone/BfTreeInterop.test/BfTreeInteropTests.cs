@@ -536,6 +536,87 @@ namespace BfTreeInterop.test
             }
         }
 
+        /// <summary>Inserts into a larger-than-cache disk tree concurrent with live snapshots must all remain readable.</summary>
+        [Test]
+        public void InsertsConcurrentWithLiveSnapshotsAreKept([Values(1, 4)] int writers, [Values(false, true)] bool recovered, [Values(0, 16 << 20)] int snapshotIORate)
+        {
+            const int keyCount = 100_000;
+            const int updates = 2_000_000;
+            var snapshotPath = Path.Combine(Path.GetTempPath(), $"bftree_snap_{Guid.NewGuid():N}.bftree");
+            var seedPath = Path.Combine(Path.GetTempPath(), $"bftree_seed_{Guid.NewGuid():N}.bftree");
+            tree.Dispose();
+            tree = new BfTreeService(filePath: treePath, enableSnapshots: true, cbSizeByte: 16 * 1024 * 1024, cbMinRecordSize: 8, cbMaxRecordSize: 4096, cbMaxKeyLen: 128, leafPageSize: 16384);
+            static byte[] Key(int i) => Encoding.ASCII.GetBytes($"k{i:D10}");
+            static byte[] Value(int i, int gen) { var v = new byte[512]; Encoding.ASCII.GetBytes($"v{i:D10}/{gen:D8}").CopyTo(v, 0); return v; }
+
+            try
+            {
+                for (var i = 0; i < keyCount; i++)
+                    Assert.That(tree.Insert(Key(i), Value(i, 0)), Is.EqualTo(BfTreeInsertResult.Success));
+
+                if (recovered)
+                {
+                    BfTreeService.CprSnapshotByPtr(tree.NativePtr, seedPath);
+                    tree.Dispose();
+                    tree = BfTreeService.RecoverFromCprSnapshot(seedPath, true, StorageBackendType.Disk);
+                }
+
+                var deadline = DateTime.UtcNow.AddSeconds(20);
+                BfTreeService.SetSnapshotIORate(snapshotIORate);
+
+                var expected = new int[keyCount];
+                var stop = 0;
+                var snapshots = 0;
+                var snapshotter = new System.Threading.Thread(() =>
+                {
+                    while (System.Threading.Volatile.Read(ref stop) == 0)
+                    {
+                        BfTreeService.CprSnapshotByPtr(tree.NativePtr, snapshotPath);
+                        File.Delete(snapshotPath);
+                        snapshots++;
+                    }
+                });
+                snapshotter.Start();
+
+                var threads = Enumerable.Range(0, writers).Select(w => new System.Threading.Thread(() =>
+                {
+                    for (var u = w; u < updates && DateTime.UtcNow < deadline; u += writers)
+                    {
+                        var i = (int)((u * 2654435761L) % keyCount);
+                        if (i % writers != w)
+                            continue;
+                        var gen = u + 1;
+                        Assert.That(tree.Insert(Key(i), Value(i, gen)), Is.EqualTo(BfTreeInsertResult.Success));
+                        expected[i] = gen;
+                    }
+                })).ToArray();
+                foreach (var t in threads) t.Start();
+                foreach (var t in threads) t.Join();
+                System.Threading.Volatile.Write(ref stop, 1);
+                snapshotter.Join();
+                BfTreeService.SetSnapshotIORate(0);
+
+                var lost = new List<int>();
+                for (var i = 0; i < keyCount; i++)
+                {
+                    Assert.That(tree.Read(Key(i), out var value), Is.EqualTo(BfTreeReadResult.Found), $"key {i}");
+                    if (!value.AsSpan().SequenceEqual(Value(i, expected[i])))
+                        lost.Add(i);
+                }
+
+                TestContext.Progress.WriteLine($"snapshots={snapshots} lost={lost.Count}");
+                Assert.That(lost, Is.Empty, $"{lost.Count} updates lost across {snapshots} live snapshots, e.g. {string.Join(",", lost.Take(20))}");
+            }
+            finally
+            {
+                BfTreeService.SetSnapshotIORate(0);
+                if (File.Exists(snapshotPath))
+                    File.Delete(snapshotPath);
+                if (File.Exists(seedPath))
+                    File.Delete(seedPath);
+            }
+        }
+
         [Test]
         public void SnapshotAndRecover_ScanAfterRestore()
         {
