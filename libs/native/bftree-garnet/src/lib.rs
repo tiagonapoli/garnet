@@ -413,6 +413,24 @@ pub unsafe extern "C" fn bftree_cpr_snapshot(tree: *mut BfTree, snapshot_path: *
     }
 }
 
+/// Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.
+#[no_mangle]
+pub extern "C" fn bftree_set_snapshot_io_rate(bytes_per_sec: u64) {
+    bf_tree::set_snapshot_io_rate(bytes_per_sec);
+}
+
+/// Total nanoseconds CPR snapshots in the process have slept on the snapshot I/O rate limit.
+#[no_mangle]
+pub extern "C" fn bftree_snapshot_io_throttled_nanos() -> u64 {
+    bf_tree::snapshot_io_throttled_nanos()
+}
+
+/// Total base-page bytes CPR snapshot sweeps in the process have read from tree files.
+#[no_mangle]
+pub extern "C" fn bftree_snapshot_read_bytes() -> u64 {
+    bf_tree::snapshot_read_bytes()
+}
+
 /// Recover a BfTree from a CPR snapshot file. Unified for disk-backed and
 /// memory-backed (cache_only) trees — the storage backend is recorded in the
 /// snapshot.

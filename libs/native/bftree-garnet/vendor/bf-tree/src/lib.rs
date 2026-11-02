@@ -32,6 +32,7 @@ pub use config::{Config, StorageBackend, WalConfig};
 pub use error::ConfigError;
 pub use nodes::leaf_node::LeafReadResult;
 pub use range_scan::{ScanIter, ScanReturnField};
+pub use snapshot::{set_snapshot_io_rate, snapshot_io_throttled_nanos, snapshot_read_bytes};
 pub use tree::{BfTree, LeafInsertResult, ScanIterError};
 pub use wal::WalReader;
 

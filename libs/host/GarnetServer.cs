@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -16,6 +16,7 @@ using Garnet.common;
 using Garnet.networking;
 using Garnet.server;
 using Garnet.server.Auth.Settings;
+using Garnet.server.BfTreeInterop;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 
@@ -433,6 +434,9 @@ namespace Garnet
                     EvictedTreeGrace = TimeSpan.FromSeconds(serverOptions.RangeIndexEvictedTreeGraceSeconds),
                     MaxParkedTreeBytes = (long)serverOptions.RangeIndexParkedTreeMemoryMB << 20,
                 };
+
+                // The native limiter is process-wide; every database's trees share the disk.
+                BfTreeService.SetSnapshotIORate((long)serverOptions.RangeIndexSnapshotIOMBps << 20);
             }
             var vectorManager = new VectorManager(
                 dbId,

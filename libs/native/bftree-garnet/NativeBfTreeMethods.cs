@@ -142,6 +142,18 @@ namespace Garnet.server.BfTreeInterop
             nint tree,
             byte* snapshot_path, int snapshot_path_len);
 
+        /// <summary>Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.</summary>
+        [LibraryImport(LibName)]
+        internal static partial void bftree_set_snapshot_io_rate(ulong bytes_per_sec);
+
+        /// <summary>Total nanoseconds CPR snapshots in the process have slept on the snapshot I/O rate limit.</summary>
+        [LibraryImport(LibName)]
+        internal static partial ulong bftree_snapshot_io_throttled_nanos();
+
+        /// <summary>Total base-page bytes CPR snapshot sweeps in the process have read from tree files.</summary>
+        [LibraryImport(LibName)]
+        internal static partial ulong bftree_snapshot_read_bytes();
+
         /// <summary>
         /// Recover a BfTree from a CPR snapshot file. Unified for disk-backed and
         /// memory-backed (cache_only) trees — the storage backend is recorded in the
