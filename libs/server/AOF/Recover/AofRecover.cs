@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -62,8 +62,6 @@ namespace Garnet.server
 
                     maxReplayedStoreVersion = 0;
                     db.RangeIndexManager?.BeginReplayStats();
-                    if (untilAddress.AnyGreater(appendOnlyFile.Log.BeginAddress))
-                        _ = db.RangeIndexManager?.BeginStagingPrefetch("aof-replay");
 
                     var recordsReplayed = storeWrapper.serverOptions.MultiLogEnabled ? MultiLogRecover(appendOnlyFile, db.Id, untilAddress) : SingleLogRecover(appendOnlyFile, db.Id, 0, untilAddress);
                     db.RangeIndexManager?.LogReplayStats("aof-recover");

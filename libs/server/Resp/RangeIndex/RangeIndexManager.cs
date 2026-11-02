@@ -146,14 +146,12 @@ namespace Garnet.server
             /// Used to construct file paths under both roots.</summary>
             public readonly string HashPrefix;
 
-            /// <summary>Immutable checkpoint snapshot holding a pending entry's contents until <c>data.bftree</c> is staged from it; null once staged.</summary>
+            /// <summary>Immutable checkpoint snapshot holding a pending entry's contents, which a restore opens in place of <c>data.bftree</c>; null once activated or when <c>data.bftree</c> holds them.</summary>
             public string StagingSource;
 
-            /// <summary>Immutable snapshot that <c>data.bftree</c> was last staged from for this pending entry; null when unknown.</summary>
+            /// <summary>Immutable snapshot that <c>data.bftree</c> was last staged (linked or copied) from for this pending entry; null when unknown.</summary>
             public StagedCopy StagedFrom;
 
-            /// <summary>Background copy of <see cref="StagingSource"/>; owned by whoever clears this field.</summary>
-            public StagingPrefetch Prefetch;
 
             /// <summary>Address of the record whose flush last snapshotted <see cref="Tree"/>; 0 when none.</summary>
             public long LastFlushAddress;
@@ -162,7 +160,7 @@ namespace Garnet.server
             public bool IsRetired => Volatile.Read(ref retired) != 0;
 
             /// <summary>
-            /// Activates a pending entry with <paramref name="tree"/>, opened from an unmodified copy of
+            /// Activates a pending entry with <paramref name="tree"/>, opened over the unmodified contents of
             /// <paramref name="baselineSnapshot"/> when it is non-null, so an unchanged tree's next snapshot can link that file.
             /// </summary>
             /// <returns><c>false</c> if the entry already has a tree.</returns>
@@ -178,6 +176,7 @@ namespace Garnet.server
                     lastSnapshotPath = baselineSnapshot;
                     lastSnapshotMutations = Volatile.Read(ref MutationCount);
                     StagedFrom = null;
+                    Volatile.Write(ref StagingSource, null);
                     Volatile.Write(ref Tree, tree);
                     return true;
                 }
@@ -513,6 +512,15 @@ namespace Garnet.server
         internal string LogDataPath(string hashPrefix)
             => Path.Combine(riLogRoot ?? string.Empty, hashPrefix + ".data.bftree");
 
+        /// <summary>Suffix of the private work file of a tree opened over an immutable snapshot.</summary>
+        internal const string OverlayWorkSuffix = ".overlay.work";
+
+        private long overlayWorkSequence;
+
+        /// <summary>{logRoot}/&lt;hash&gt;.&lt;seq&gt;.overlay.work, unique per open.</summary>
+        internal string LogOverlayWorkPath(string hashPrefix)
+            => Path.Combine(riLogRoot ?? string.Empty, $"{hashPrefix}.{Interlocked.Increment(ref overlayWorkSequence)}{OverlayWorkSuffix}");
+
         /// <summary>{logRoot}/&lt;hash&gt;.&lt;addr:x16&gt;.flush.bftree</summary>
         public string LogFlushPath(string hashPrefix, long logicalAddress)
             => Path.Combine(riLogRoot ?? string.Empty, $"{hashPrefix}.{logicalAddress:x16}{FlushSuffix}");
@@ -548,6 +556,9 @@ namespace Garnet.server
             {
                 filePath = LogDataPath(hashPrefix);
                 DiscardParkedTree(keyBytes, "create");
+
+                // The new tree writes its file in place; a leftover data.bftree may be a hard link to an immutable snapshot.
+                RangeIndexFileLinks.DeleteIfExists(filePath);
             }
 
             // Enable CPR snapshots whenever a log root is configured. The destination path is
@@ -698,7 +709,6 @@ namespace Garnet.server
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
                 DrainEntryFlushSnapshots(entry, "unregister");
-                DiscardStagingPrefetch(entry);
                 entry.Retire();
                 ForgetTree(entry.Tree);
                 try { entry.Tree?.Dispose(); }
@@ -716,7 +726,6 @@ namespace Garnet.server
         {
             // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
             StopFlushSnapshots("store-reset");
-            StopStagingPrefetch("store-reset");
             DiscardAllParkedTrees();
             try
             {
@@ -765,7 +774,6 @@ namespace Garnet.server
             DisposeIncompleteStreamReassembly();
 
             StopFlushSnapshots("dispose");
-            StopStagingPrefetch("dispose");
             DisposeParkedTreeSweeper();
             DiscardAllParkedTrees();
             DisposeFlushScheduler();
@@ -811,12 +819,12 @@ namespace Garnet.server
         /// exclusive lock. Holding the exclusive lock here blocks <c>RestoreTree</c> until the
         /// file is fully written, preventing it from observing a partial <c>data.bftree</c>.</para>
         ///
-        /// <para>A direct copy over <c>data.bftree</c> is sufficient under this lock — the
-        /// exclusive lock serializes against any reader that would open <c>data.bftree</c>, and
-        /// against other concurrent <c>PreStageAndRegisterPending</c> calls for the same key.
-        /// A crash mid-copy is self-healing: post-recovery either <c>OnRecoverySnapshotRead</c>
-        /// (above-FUA stub) or the next RIPROMOTE-cold (IsFlushed=true stub) re-pre-stages and
-        /// overwrites any partial file before <c>RestoreTree</c> can observe it.</para>
+        /// <para><c>data.bftree</c> becomes a hard link to the flush file (a copy only where links are unsupported). That is
+        /// safe because <c>RestoreTree</c> opens it through a copy-on-write overlay and nothing else writes it in place. The
+        /// exclusive lock serializes against any reader that would open <c>data.bftree</c>, and against other concurrent
+        /// <c>PreStageAndRegisterPending</c> calls for the same key. A crash mid-copy is self-healing: post-recovery either
+        /// <c>OnRecoverySnapshotRead</c> (above-FUA stub) or the next RIPROMOTE-cold (IsFlushed=true stub) re-pre-stages and
+        /// replaces any partial file before <c>RestoreTree</c> can observe it.</para>
         /// </summary>
         internal void PreStageAndRegisterPending(ReadOnlySpan<byte> keyBytes, long srcFlushAddress, bool reuseParkedTree = false)
         {
@@ -867,14 +875,24 @@ namespace Garnet.server
             try
             {
                 DiscardParkedTreeLocked(KeyId(keyBytes), "staged");
-                var copyStart = Stopwatch.GetTimestamp();
-                RangeIndexFileLinks.Copy(snapshotPath, dataPath, overwrite: true);
-                var copyTicks = Stopwatch.GetTimestamp() - copyStart;
-                var copyBytes = new FileInfo(dataPath).Length;
-                _ = Interlocked.Increment(ref phaseStats.PreStageCopies);
-                _ = Interlocked.Add(ref phaseStats.PreStageCopyTicks, copyTicks);
-                _ = Interlocked.Add(ref phaseStats.PreStageCopyBytes, copyBytes);
-                logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, copyBytes, copyTicks * 1000.0 / Stopwatch.Frequency);
+                var stageStart = Stopwatch.GetTimestamp();
+
+                // data.bftree is never written in place (restores open it through a copy-on-write overlay), so it can share
+                // the immutable flush file's inode; the flush file may be truncated away while the entry is still pending.
+                var linked = RangeIndexFileLinks.TryReplaceWithHardLink(snapshotPath, dataPath);
+                if (!linked)
+                    RangeIndexFileLinks.Copy(snapshotPath, dataPath, overwrite: true);
+
+                var stageTicks = Stopwatch.GetTimestamp() - stageStart;
+                var bytes = new FileInfo(dataPath).Length;
+                _ = Interlocked.Increment(ref phaseStats.PreStages);
+                _ = Interlocked.Add(ref phaseStats.PreStageTicks, stageTicks);
+                if (linked)
+                    _ = Interlocked.Increment(ref phaseStats.PreStageLinks);
+                else
+                    _ = Interlocked.Add(ref phaseStats.PreStageCopyBytes, bytes);
+
+                logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} linked={Linked} ms={Ms:F0}", hashPrefix, bytes, linked, stageTicks * 1000.0 / Stopwatch.Frequency);
 
                 var keyId = KeyId(keyBytes);
                 var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
@@ -961,8 +979,7 @@ namespace Garnet.server
                 return;
             }
 
-            // Stage data.bftree lazily: a node that is fully resynced, or that never touches this
-            // tree, must not pay a full-tree copy for it during recovery.
+            // No data.bftree is staged: the first restore opens the checkpoint snapshot itself through a copy-on-write overlay.
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
             var keyId = KeyId(keyBytes);
             var entry = liveIndexes.GetOrAdd(keyId, _ => new TreeEntry(tree: null, keyHash, hashPrefix));
@@ -971,56 +988,32 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Stage <c>data.bftree</c> from a pending entry's deferred <see cref="TreeEntry.StagingSource"/>, if any.
-        /// The caller must hold the per-key exclusive lock.
-        /// </summary>
-        internal void StageDeferredData(TreeEntry entry, string dataPath)
-        {
-            while (Volatile.Read(ref entry.StagingSource) is { } source)
-            {
-                var copyStart = Stopwatch.GetTimestamp();
-                if (TryTakeStagingPrefetch(entry, source, dataPath))
-                {
-                    Volatile.Write(ref entry.StagingSource, null);
-                    entry.StagedFrom = StagedCopy.Describe(source, dataPath);
-                    var waitTicks = Stopwatch.GetTimestamp() - copyStart;
-                    _ = Interlocked.Increment(ref phaseStats.PrefetchTakes);
-                    _ = Interlocked.Add(ref phaseStats.PrefetchWaitTicks, waitTicks);
-                    logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} prefetched=true waitMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, waitTicks * 1000.0 / Stopwatch.Frequency);
-                    continue;
-                }
-
-                try
-                {
-                    RangeIndexFileLinks.Copy(source, dataPath, overwrite: true);
-                }
-                catch (FileNotFoundException) when (!ReferenceEquals(source, Volatile.Read(ref entry.StagingSource)))
-                {
-                    // A checkpoint moved the source to its own snapshot before deleting the old one.
-                    continue;
-                }
-
-                Volatile.Write(ref entry.StagingSource, null);
-                entry.StagedFrom = StagedCopy.Describe(source, dataPath);
-                var stageTicks = Stopwatch.GetTimestamp() - copyStart;
-                var stageBytes = new FileInfo(dataPath).Length;
-                _ = Interlocked.Increment(ref phaseStats.StageCopies);
-                _ = Interlocked.Add(ref phaseStats.StageCopyTicks, stageTicks);
-                _ = Interlocked.Add(ref phaseStats.StageCopyBytes, stageBytes);
-                logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", entry.HashPrefix, stageBytes, stageTicks * 1000.0 / Stopwatch.Frequency);
-            }
-        }
-
-        /// <summary>
         /// Copy the contents of a tree with no live native instance to <paramref name="destinationPath"/>, reading
         /// the deferred staging source of <paramref name="entry"/> when present and <paramref name="dataPath"/> otherwise.
         /// </summary>
         /// <returns><c>false</c> if no source file exists.</returns>
-        private static bool CopyPendingContents(TreeEntry entry, string dataPath, string destinationPath, bool overwrite)
+        private static bool CopyPendingContents(TreeEntry entry, string dataPath, string destinationPath, bool overwrite) => CopyPendingContents(entry, dataPath, destinationPath, overwrite, allowLink: false, out _);
+
+        /// <summary>
+        /// Snapshot the contents of a tree with no live native instance to <paramref name="destinationPath"/>. With
+        /// <paramref name="allowLink"/>, a pending entry's source is hard-linked rather than copied: it is a checkpoint snapshot or
+        /// a <c>data.bftree</c> staged from a flush file, and neither is ever written again. Without an entry, <paramref name="dataPath"/>
+        /// may be the file of a tree still being disposed, so it is always copied.
+        /// </summary>
+        /// <returns><c>false</c> if no source file exists.</returns>
+        private static bool CopyPendingContents(TreeEntry entry, string dataPath, string destinationPath, bool overwrite, bool allowLink, out bool linked)
         {
+            linked = false;
             while (true)
             {
-                var source = (entry == null ? null : Volatile.Read(ref entry.StagingSource)) ?? dataPath;
+                var staging = entry == null ? null : Volatile.Read(ref entry.StagingSource);
+                var source = staging ?? dataPath;
+                if (allowLink && overwrite && entry != null && (staging != null || entry.StagedFrom is { } staged && staged.Matches(dataPath)) && RangeIndexFileLinks.TryReplaceWithHardLink(source, destinationPath))
+                {
+                    linked = true;
+                    return true;
+                }
+
                 try
                 {
                     RangeIndexFileLinks.Copy(source, destinationPath, overwrite);
@@ -1235,14 +1228,14 @@ namespace Garnet.server
                 // No live tree exists for this key (S-lock blocks RestoreTree from activating
                 // one mid-copy). data.bftree or the deferred staging source is stable — no concurrent writer.
                 // Recovery can re-flush a record at an address whose flush file survives from before the crash.
-                if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true))
+                if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true, allowLink: true, out var linked))
                 {
                     LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
                     return null; // do NOT set IsFlushed
                 }
 
                 SetFlushedFlag(valueSpan);
-                return "cold-copy";
+                return linked ? "cold-link" : "cold-copy";
             }
             finally
             {
@@ -1346,11 +1339,11 @@ namespace Garnet.server
                             // data.bftree once staged. No live tree means no concurrent writer.
                             var dataPath = LogDataPath(entry.HashPrefix);
                             var source = Volatile.Read(ref entry.StagingSource);
-                            if (!CopyPendingContents(entry, dataPath, checkpointPath, overwrite: true))
+                            if (!CopyPendingContents(entry, dataPath, checkpointPath, overwrite: true, allowLink: true, out var linked))
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: data.bftree missing for pending {Hash}", entry.HashPrefix);
                             else
                             {
-                                mode = "pending-copy";
+                                mode = linked ? "pending-link" : "pending-copy";
                                 if (source != null)
                                 {
                                     // Re-point staging at this checkpoint so purging the older one cannot strand the entry.

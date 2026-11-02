@@ -485,6 +485,53 @@ pub unsafe extern "C" fn bftree_new_from_cpr_snapshot(
     }
 }
 
+/// Recover a disk-backed BfTree that reads the immutable snapshot `base_path` in place and writes to a new private
+/// work file at `work_path`, which must not exist and is unlinked once opened. Opening never copies the snapshot.
+/// Memory-backed snapshots ignore `work_path`. Returns null on failure.
+///
+/// # Safety
+/// Caller must eventually call `bftree_drop` on the returned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn bftree_new_from_cpr_snapshot_overlay(
+    base_path: *const u8,
+    base_path_len: i32,
+    work_path: *const u8,
+    work_path_len: i32,
+    use_snapshot: u8,
+    buffer_ptr: *mut u8,
+    buffer_size: usize,
+) -> *mut BfTree {
+    let (Some(base), Some(work)) = (path_from_raw(base_path, base_path_len), path_from_raw(work_path, work_path_len)) else {
+        return std::ptr::null_mut();
+    };
+    let buf_ptr_opt = if buffer_ptr.is_null() { None } else { Some(buffer_ptr) };
+    let buf_size_opt = if buffer_ptr.is_null() { None } else { Some(buffer_size) };
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        BfTree::new_from_cpr_snapshot_overlay(base, work, use_snapshot != 0, buf_ptr_opt, buf_size_opt)
+    })) {
+        Ok(Ok(tree)) => Box::into_raw(Box::new(tree)),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+unsafe fn path_from_raw(path: *const u8, len: i32) -> Option<PathBuf> {
+    if path.is_null() || len <= 0 {
+        return None;
+    }
+    std::str::from_utf8(slice::from_raw_parts(path, len as usize)).ok().map(PathBuf::from)
+}
+
+/// Copies the process-wide I/O counters of copy-on-write overlay trees into `out`.
+///
+/// # Safety
+/// `out` must point to a writable `OverlayStats`.
+#[no_mangle]
+pub unsafe extern "C" fn bftree_overlay_stats(out: *mut bf_tree::OverlayStats) {
+    if !out.is_null() {
+        *out = bf_tree::overlay_stats();
+    }
+}
 /// Copies the phase timings of the most recent `bftree_new_from_cpr_snapshot` on the calling thread into `out`.
 ///
 /// # Safety

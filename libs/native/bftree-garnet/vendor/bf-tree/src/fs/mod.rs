@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 mod memory_vfs;
+mod overlay_vfs;
 mod std_vfs;
 
 #[cfg(target_os = "linux")]
@@ -22,6 +23,8 @@ mod spdk_vfs;
 pub(crate) use spdk_vfs::SpdkVfs;
 
 pub(crate) use memory_vfs::MemoryVfs;
+pub(crate) use overlay_vfs::OverlayVfs;
+pub use overlay_vfs::{overlay_stats, OverlayStats};
 pub(crate) use std_vfs::StdVfs;
 
 use crate::nodes::DISK_PAGE_SIZE;

@@ -174,6 +174,14 @@ namespace Garnet.server.BfTreeInterop
             byte use_snapshot,
             byte* buffer_ptr, nuint buffer_size);
 
+        /// <summary>Recovers a disk-backed tree over the CPR snapshot at base_path through a copy-on-write overlay whose writes go to work_path (which must not exist). Returns IntPtr.Zero on failure.</summary>
+        [LibraryImport(LibName)]
+        internal static partial nint bftree_new_from_cpr_snapshot_overlay(byte* base_path, int base_path_len, byte* work_path, int work_path_len, byte use_snapshot, byte* buffer_ptr, nuint buffer_size);
+
+        /// <summary>Copies the process-wide overlay I/O counters into <paramref name="stats"/>.</summary>
+        [LibraryImport(LibName)]
+        internal static partial void bftree_overlay_stats(BfTreeOverlayStats* stats);
+
         /// <summary>Copies the phase timings of the calling thread's most recent snapshot recovery into <paramref name="stats"/>.</summary>
         [LibraryImport(LibName)]
         internal static partial void bftree_last_recovery_stats(BfTreeRecoveryStats* stats);

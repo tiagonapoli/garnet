@@ -1,9 +1,10 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
 using System.Diagnostics;
 using System.Threading;
+using Garnet.server.BfTreeInterop;
 using Microsoft.Extensions.Logging;
 
 namespace Garnet.server
@@ -23,8 +24,8 @@ namespace Garnet.server
         {
             public long Ops, StubReadTicks, NativeTicks, SlowOps;
             public long CheckpointWaits, CheckpointWaitTicks;
-            public long Promotes, PromoteTicks, PreStageCopies, PreStageCopyTicks, PreStageCopyBytes;
-            public long Restores, RestoreTicks, StageCopies, StageCopyTicks, StageCopyBytes, PrefetchTakes, PrefetchWaitTicks, OpenTicks, StubUpdateTicks;
+            public long Promotes, PromoteTicks, PreStages, PreStageLinks, PreStageTicks, PreStageCopyBytes;
+            public long Restores, RestoreTicks, OpenTicks, StubUpdateTicks;
 
             public readonly PhaseStats Minus(in PhaseStats other) => new()
             {
@@ -36,16 +37,12 @@ namespace Garnet.server
                 CheckpointWaitTicks = CheckpointWaitTicks - other.CheckpointWaitTicks,
                 Promotes = Promotes - other.Promotes,
                 PromoteTicks = PromoteTicks - other.PromoteTicks,
-                PreStageCopies = PreStageCopies - other.PreStageCopies,
-                PreStageCopyTicks = PreStageCopyTicks - other.PreStageCopyTicks,
+                PreStages = PreStages - other.PreStages,
+                PreStageLinks = PreStageLinks - other.PreStageLinks,
+                PreStageTicks = PreStageTicks - other.PreStageTicks,
                 PreStageCopyBytes = PreStageCopyBytes - other.PreStageCopyBytes,
                 Restores = Restores - other.Restores,
                 RestoreTicks = RestoreTicks - other.RestoreTicks,
-                StageCopies = StageCopies - other.StageCopies,
-                StageCopyTicks = StageCopyTicks - other.StageCopyTicks,
-                StageCopyBytes = StageCopyBytes - other.StageCopyBytes,
-                PrefetchTakes = PrefetchTakes - other.PrefetchTakes,
-                PrefetchWaitTicks = PrefetchWaitTicks - other.PrefetchWaitTicks,
                 OpenTicks = OpenTicks - other.OpenTicks,
                 StubUpdateTicks = StubUpdateTicks - other.StubUpdateTicks,
             };
@@ -71,16 +68,12 @@ namespace Garnet.server
             CheckpointWaitTicks = Interlocked.Read(ref phaseStats.CheckpointWaitTicks),
             Promotes = Interlocked.Read(ref phaseStats.Promotes),
             PromoteTicks = Interlocked.Read(ref phaseStats.PromoteTicks),
-            PreStageCopies = Interlocked.Read(ref phaseStats.PreStageCopies),
-            PreStageCopyTicks = Interlocked.Read(ref phaseStats.PreStageCopyTicks),
+            PreStages = Interlocked.Read(ref phaseStats.PreStages),
+            PreStageLinks = Interlocked.Read(ref phaseStats.PreStageLinks),
+            PreStageTicks = Interlocked.Read(ref phaseStats.PreStageTicks),
             PreStageCopyBytes = Interlocked.Read(ref phaseStats.PreStageCopyBytes),
             Restores = Interlocked.Read(ref phaseStats.Restores),
             RestoreTicks = Interlocked.Read(ref phaseStats.RestoreTicks),
-            StageCopies = Interlocked.Read(ref phaseStats.StageCopies),
-            StageCopyTicks = Interlocked.Read(ref phaseStats.StageCopyTicks),
-            StageCopyBytes = Interlocked.Read(ref phaseStats.StageCopyBytes),
-            PrefetchTakes = Interlocked.Read(ref phaseStats.PrefetchTakes),
-            PrefetchWaitTicks = Interlocked.Read(ref phaseStats.PrefetchWaitTicks),
             OpenTicks = Interlocked.Read(ref phaseStats.OpenTicks),
             StubUpdateTicks = Interlocked.Read(ref phaseStats.StubUpdateTicks),
         };
@@ -127,11 +120,11 @@ namespace Garnet.server
             static double Ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
             var cold = s.CheckpointWaitTicks + s.PromoteTicks + s.RestoreTicks;
             logger?.LogInformation("{Tag} reason={Reason} elapsedMs={Elapsed:F0} ops={Ops} slowOps={Slow} stubReadMs={StubRead:F0} hotReadMs={HotRead:F0} nativeMs={Native:F0} " +
-                "checkpointWaits={CpWaits} checkpointWaitMs={CpWaitMs:F0} promotes={Promotes} promoteMs={PromoteMs:F0} preStageCopies={PreStageCopies} preStageCopyMs={PreStageCopyMs:F0} preStageCopyMB={PreStageCopyMB:F0} " +
-                "restores={Restores} restoreMs={RestoreMs:F0} stageCopies={StageCopies} stageCopyMs={StageCopyMs:F0} stageCopyMB={StageCopyMB:F0} prefetchTakes={PrefetchTakes} prefetchWaitMs={PrefetchWaitMs:F0} openMs={OpenMs:F0} stubUpdateMs={StubUpdateMs:F0}",
+                "checkpointWaits={CpWaits} checkpointWaitMs={CpWaitMs:F0} promotes={Promotes} promoteMs={PromoteMs:F0} preStages={PreStages} preStageLinks={PreStageLinks} preStageMs={PreStageMs:F0} preStageCopyMB={PreStageCopyMB:F0} " +
+                "restores={Restores} restoreMs={RestoreMs:F0} openMs={OpenMs:F0} stubUpdateMs={StubUpdateMs:F0} overlay=[{Overlay}]",
                 tag, reason, Ms(elapsedTicks), s.Ops, s.SlowOps, Ms(s.StubReadTicks), Ms(Math.Max(0, s.StubReadTicks - cold)), Ms(s.NativeTicks),
-                s.CheckpointWaits, Ms(s.CheckpointWaitTicks), s.Promotes, Ms(s.PromoteTicks), s.PreStageCopies, Ms(s.PreStageCopyTicks), s.PreStageCopyBytes / 1048576.0,
-                s.Restores, Ms(s.RestoreTicks), s.StageCopies, Ms(s.StageCopyTicks), s.StageCopyBytes / 1048576.0, s.PrefetchTakes, Ms(s.PrefetchWaitTicks), Ms(s.OpenTicks), Ms(s.StubUpdateTicks));
+                s.CheckpointWaits, Ms(s.CheckpointWaitTicks), s.Promotes, Ms(s.PromoteTicks), s.PreStages, s.PreStageLinks, Ms(s.PreStageTicks), s.PreStageCopyBytes / 1048576.0,
+                s.Restores, Ms(s.RestoreTicks), Ms(s.OpenTicks), Ms(s.StubUpdateTicks), BfTreeService.OverlayStats);
         }
     }
 }

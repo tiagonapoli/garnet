@@ -38,6 +38,25 @@ namespace Garnet.server.BfTreeInterop
     }
 
     /// <summary>
+    /// Process-wide I/O counters of trees opened over a snapshot through the copy-on-write overlay (mirrors bf-tree's <c>OverlayStats</c>).
+    /// </summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    public struct BfTreeOverlayStats
+    {
+        /// <summary>Bytes read from overlay base snapshots.</summary>
+        public ulong BaseReadBytes;
+        /// <summary>Bytes read from overlay work files.</summary>
+        public ulong WorkReadBytes;
+        /// <summary>Bytes written to overlay work files.</summary>
+        public ulong WorkWriteBytes;
+        /// <summary>Base pages copied into work files because a write covered them only partly.</summary>
+        public ulong CopyUpPages;
+
+        /// <inheritdoc/>
+        public override readonly string ToString() => $"baseReadMiB={BaseReadBytes / 1048576.0:F1} workReadMiB={WorkReadBytes / 1048576.0:F1} workWriteMiB={WorkWriteBytes / 1048576.0:F1} copyUpPages={CopyUpPages}";
+    }
+
+    /// <summary>
     /// Result codes for BfTree read operations.
     /// </summary>
     public enum BfTreeReadResult
@@ -662,6 +681,46 @@ namespace Garnet.server.BfTreeInterop
             if (treePtr == 0)
                 throw new InvalidOperationException($"Failed to recover BfTree from CPR snapshot '{recoveryPath}'.");
             return new BfTreeService(treePtr, storageBackend, filePath: null);
+        }
+
+        /// <summary>
+        /// Opens a disk-backed tree over the CPR snapshot <paramref name="basePath"/> without copying it: unwritten pages are
+        /// read from the snapshot and every write goes to the private work file <paramref name="workPath"/>, so the snapshot is never modified.
+        /// </summary>
+        /// <param name="basePath">Source CPR snapshot; must stay unmodified while the tree is open (it may be unlinked).</param>
+        /// <param name="workPath">Work file to create; it must not exist and is deleted by the native library once opened.</param>
+        /// <param name="enableSnapshots">Enable CPR snapshot support on the recovered tree.</param>
+        /// <param name="storageBackend">Storage backend of the recovered tree (for managed tracking).</param>
+        /// <param name="stats">Native recovery phase timings and counts.</param>
+        public static BfTreeService RecoverFromCprSnapshotOverlay(string basePath, string workPath, bool enableSnapshots, StorageBackendType storageBackend, out BfTreeRecoveryStats stats)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(basePath);
+            ArgumentException.ThrowIfNullOrEmpty(workPath);
+            var baseBytes = Encoding.UTF8.GetBytes(basePath);
+            var workBytes = Encoding.UTF8.GetBytes(workPath);
+            nint treePtr;
+            fixed (byte* bp = baseBytes)
+            fixed (byte* wp = workBytes)
+                treePtr = NativeBfTreeMethods.bftree_new_from_cpr_snapshot_overlay(bp, baseBytes.Length, wp, workBytes.Length, (byte)(enableSnapshots ? 1 : 0), null, 0);
+
+            BfTreeRecoveryStats nativeStats = default;
+            NativeBfTreeMethods.bftree_last_recovery_stats(&nativeStats);
+            stats = nativeStats;
+            if (treePtr == 0)
+                throw new InvalidOperationException($"Failed to open BfTree overlay over CPR snapshot '{basePath}' with work file '{workPath}'.");
+
+            return new BfTreeService(treePtr, storageBackend, filePath: null);
+        }
+
+        /// <summary>Gets the process-wide I/O counters of overlay trees.</summary>
+        public static BfTreeOverlayStats OverlayStats
+        {
+            get
+            {
+                BfTreeOverlayStats stats = default;
+                NativeBfTreeMethods.bftree_overlay_stats(&stats);
+                return stats;
+            }
         }
 
         /// <summary>
