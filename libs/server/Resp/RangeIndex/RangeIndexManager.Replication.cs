@@ -1,7 +1,8 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
+using System.Threading;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO;
@@ -195,9 +196,18 @@ namespace Garnet.server
 
             using (ReadRangeIndex(session, pinnedKey, ref inputCopy, stubSpan, out var status))
             {
-                if (status != GarnetStatus.OK) return;
+                if (status != GarnetStatus.OK)
+                {
+                    NoteReplayDrop("RISET", key, $"status={status}");
+                    return;
+                }
+
                 var treePtr = ReadIndex(stubSpan).TreeHandle;
-                if (treePtr == nint.Zero) return;
+                if (treePtr == nint.Zero)
+                {
+                    NoteReplayDrop("RISET", key, "treePtr=0");
+                    return;
+                }
 
                 var insertResult = BfTreeService.InsertByPtr(treePtr, field, value);
                 NoteTreeMutated(treePtr);
@@ -206,7 +216,22 @@ namespace Garnet.server
                     logger?.LogError("RI.SET AOF replay: native insert rejected ({result}) for a {keyLen}-byte key with field {fieldLen}B and value {valueLen}B; primary/replica divergence.", insertResult, key.Length, field.Length, value.Length);
                     throw new GarnetException($"RI.SET AOF replay failed: native insert returned {insertResult}");
                 }
+
+                // Soak diagnostic: a replayed insert must be immediately readable from the same tree.
+                var readResult = BfTreeService.ReadByPtr(treePtr, field, out var readValue);
+                if (readResult != BfTreeReadResult.Found || !readValue.AsSpan().SequenceEqual(value.ReadOnlySpan))
+                    logger?.LogCritical("[RangeIndexReplayReadBackMismatch] op=RISET key={key} treePtr={treePtr} readResult={readResult} readLen={readLen} valueLen={valueLen}", Convert.ToHexString(key), treePtr, readResult, readValue.Length, value.Length);
             }
+        }
+
+        long replayDropCount;
+
+        /// <summary>Logs a replayed RangeIndex write that could not be applied because the index or its tree was unavailable.</summary>
+        void NoteReplayDrop(string op, ReadOnlySpan<byte> key, string reason)
+        {
+            var count = Interlocked.Increment(ref replayDropCount);
+            if (count <= 50 || count % 1000 == 0)
+                logger?.LogCritical("[RangeIndexReplayOpDropped] count={count} op={op} key={key} reason={reason}", count, op, Convert.ToHexString(key), reason);
         }
 
         /// <summary>
@@ -227,9 +252,18 @@ namespace Garnet.server
 
             using (ReadRangeIndex(session, pinnedKey, ref inputCopy, stubSpan, out var status))
             {
-                if (status != GarnetStatus.OK) return;
+                if (status != GarnetStatus.OK)
+                {
+                    NoteReplayDrop("RIDEL", key, $"status={status}");
+                    return;
+                }
+
                 var treePtr = ReadIndex(stubSpan).TreeHandle;
-                if (treePtr == nint.Zero) return;
+                if (treePtr == nint.Zero)
+                {
+                    NoteReplayDrop("RIDEL", key, "treePtr=0");
+                    return;
+                }
 
                 var deleteResult = BfTreeService.DeleteByPtr(treePtr, field);
                 NoteTreeMutated(treePtr);

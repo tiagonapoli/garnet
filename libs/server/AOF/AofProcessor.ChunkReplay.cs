@@ -148,7 +148,14 @@ namespace Garnet.server
 
             // Buffer logic only for AOF version > 1
             if (!(asReplica && inFuzzyRegion))
-                return acc.storeVersion < storeWrapper.store.CurrentVersion;
+            {
+                var currentVersion = storeWrapper.store.CurrentVersion;
+                if (acc.storeVersion >= currentVersion)
+                    return false;
+
+                NoteOldVersionSkip(acc.opType, acc.storeVersion, acc.sessionID, currentVersion, asReplica, inFuzzyRegion);
+                return true;
+            }
 
             if (acc.storeVersion <= storeWrapper.store.CurrentVersion)
                 return false;

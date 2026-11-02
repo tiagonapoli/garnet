@@ -900,10 +900,27 @@ namespace Garnet.server
             }
 
             bool IsOldVersionRecord(AofHeader header)
-                => header.storeVersion < storeWrapper.store.CurrentVersion;
+            {
+                var currentVersion = storeWrapper.store.CurrentVersion;
+                if (header.storeVersion >= currentVersion)
+                    return false;
+
+                NoteOldVersionSkip(header.opType, header.storeVersion, header.sessionID, currentVersion, asReplica, inFuzzyRegion);
+                return true;
+            }
 
             bool IsNewVersionRecord(AofHeader header)
                 => header.storeVersion > storeWrapper.store.CurrentVersion;
+        }
+
+        long oldVersionSkipCount;
+
+        /// <summary>Counts and logs (rate-limited) records dropped because their store version predates the current version.</summary>
+        void NoteOldVersionSkip(AofEntryType opType, long recordVersion, int sessionId, long currentVersion, bool asReplica, bool inFuzzyRegion)
+        {
+            var count = Interlocked.Increment(ref oldVersionSkipCount);
+            if (count <= 50 || count % 1000 == 0)
+                logger?.LogWarning("[AofReplayVersionSkip] count={count} op={op} recordVersion={recordVersion} currentVersion={currentVersion} sessionId={sessionId} asReplica={asReplica} inFuzzyRegion={inFuzzyRegion}", count, opType, recordVersion, currentVersion, sessionId, asReplica, inFuzzyRegion);
         }
 
         /// <summary>

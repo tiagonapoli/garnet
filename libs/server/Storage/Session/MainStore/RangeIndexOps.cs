@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Threading;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using Garnet.common;
@@ -241,7 +242,7 @@ namespace Garnet.server
 
                 functionsState.rangeIndexManager.ReplicateRangeIndexSet(
                     key, field, value, functionsState.appendOnlyFile,
-                    stringBasicContext.Session.Version, stringBasicContext.Session.ID,
+                    StampRangeIndexAofVersion("RISET"), stringBasicContext.Session.ID,
                     functionsState.StoredProcMode);
 
                 return GarnetStatus.OK;
@@ -443,11 +444,28 @@ namespace Garnet.server
 
                 functionsState.rangeIndexManager.ReplicateRangeIndexDel(
                     key, field, functionsState.appendOnlyFile,
-                    stringBasicContext.Session.Version, stringBasicContext.Session.ID,
+                    StampRangeIndexAofVersion("RIDEL"), stringBasicContext.Session.ID,
                     functionsState.StoredProcMode);
 
                 return GarnetStatus.OK;
             }
+        }
+
+        static long staleRangeIndexStampCount;
+
+        /// <summary>Returns the store version to stamp on a RangeIndex AOF record, logging (rate-limited) a stamp below the system version.</summary>
+        long StampRangeIndexAofVersion(string op)
+        {
+            var version = stringBasicContext.Session.Version;
+            var systemVersion = stateMachineDriver.SystemState.Version;
+            if (version < systemVersion && functionsState.appendOnlyFile != null)
+            {
+                var count = Interlocked.Increment(ref staleRangeIndexStampCount);
+                if (count <= 50 || count % 1000 == 0)
+                    logger?.LogWarning("[RangeIndexAofStaleVersionStamp] count={count} op={op} sessionId={sessionId} stampedVersion={version} systemState={systemState}", count, op, stringBasicContext.Session.ID, version, stateMachineDriver.SystemState);
+            }
+
+            return version;
         }
 
         /// <summary>
