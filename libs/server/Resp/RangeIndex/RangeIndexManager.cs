@@ -1167,16 +1167,18 @@ namespace Garnet.server
         }
 
         private (int Files, long Bytes) cachedFlushFileMeasure;
-        private long cachedFlushFileMeasureTicks = long.MinValue;
+        private long nextFlushFileMeasureTicks;
         private int flushFileMeasureInProgress;
         private readonly object flushFileMeasureLock = new();
+
+        /// <summary>Gets the retained flush-file count and size reported by flush-snapshot logs.</summary>
+        internal (int Files, long Bytes) RetainedFlushFiles => MeasureFlushFiles();
 
         /// <summary>Returns the retained flush-file count and size, re-scanning the log root at most once per second.</summary>
         /// <remarks>Every flush snapshot logs this, so an unthrottled scan costs O(retained files) per snapshot and stalls flush workers.</remarks>
         private (int Files, long Bytes) MeasureFlushFiles()
         {
-            var now = Stopwatch.GetTimestamp();
-            if (now - Volatile.Read(ref cachedFlushFileMeasureTicks) < Stopwatch.Frequency || Interlocked.CompareExchange(ref flushFileMeasureInProgress, 1, 0) != 0)
+            if (Stopwatch.GetTimestamp() < Volatile.Read(ref nextFlushFileMeasureTicks) || Interlocked.CompareExchange(ref flushFileMeasureInProgress, 1, 0) != 0)
             {
                 lock (flushFileMeasureLock)
                     return cachedFlushFileMeasure;
@@ -1184,16 +1186,21 @@ namespace Garnet.server
 
             try
             {
-                var measure = ScanFlushFiles();
-                lock (flushFileMeasureLock)
-                    cachedFlushFileMeasure = measure;
-                Volatile.Write(ref cachedFlushFileMeasureTicks, Stopwatch.GetTimestamp());
-                return measure;
+                return RefreshFlushFileMeasure();
             }
             finally
             {
                 Volatile.Write(ref flushFileMeasureInProgress, 0);
             }
+        }
+
+        private (int Files, long Bytes) RefreshFlushFileMeasure()
+        {
+            var measure = ScanFlushFiles();
+            lock (flushFileMeasureLock)
+                cachedFlushFileMeasure = measure;
+            Volatile.Write(ref nextFlushFileMeasureTicks, Stopwatch.GetTimestamp() + Stopwatch.Frequency);
+            return measure;
         }
 
         /// <summary>Counts the flush files under the log root and their total size.</summary>
@@ -1588,7 +1595,8 @@ namespace Garnet.server
             if (logger is null || !logger.IsEnabled(LogLevel.Information))
                 return;
 
-            var (retained, retainedBytes) = MeasureFlushFiles();
+            // Deletions are rare and change the retained set, so re-scan rather than report a cached count.
+            var (retained, retainedBytes) = RefreshFlushFileMeasure();
             logger.LogInformation("[RangeIndexFlushFilesDeleted] reason={Reason} address=0x{Addr:x16} deleted={Deleted} deletedBytes={DeletedBytes} retainedFiles={Retained} retainedBytes={RetainedBytes} ms={Ms:F0}",
                 reason, address, deleted, deletedBytes, retained, retainedBytes, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }

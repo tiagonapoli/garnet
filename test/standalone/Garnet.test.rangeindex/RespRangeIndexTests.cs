@@ -2945,6 +2945,44 @@ namespace Garnet.test
             }
         }
 
+        /// <summary>The retained flush-file measurement reported by flush-snapshot logs must reflect the files on disk.</summary>
+        [Test]
+        public void RIRetainedFlushFilesMatchesDiskTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var store = server.Provider.StoreWrapper.store;
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+            var db = redis.GetDatabase(0);
+
+            // Measure before any flush file exists so a stuck cache would keep reporting zero.
+            ClassicAssert.AreEqual(0, rangeIndexManager.RetainedFlushFiles.Files);
+
+            db.Execute("RI.CREATE", "retainedkey", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+            db.Execute("RI.SET", "retainedkey", "field-x", "value-v1");
+            store.Log.ShiftReadOnlyAddress(store.Log.TailAddress, wait: true);
+            WaitForFlushSnapshots();
+
+            var onDisk = Directory.GetFiles(rangeIndexManager.RiLogRoot, "*.flush.bftree");
+            ClassicAssert.IsNotEmpty(onDisk);
+
+            // The measurement is refreshed at most once per second; allow generous slack for slow machines.
+            var deadline = System.Diagnostics.Stopwatch.StartNew();
+            var measured = rangeIndexManager.RetainedFlushFiles;
+            while (measured.Files != onDisk.Length && deadline.Elapsed < TimeSpan.FromSeconds(60))
+            {
+                Thread.Sleep(100);
+                measured = rangeIndexManager.RetainedFlushFiles;
+            }
+
+            ClassicAssert.AreEqual(onDisk.Length, measured.Files);
+            ClassicAssert.AreEqual(onDisk.Sum(f => new FileInfo(f).Length), measured.Bytes);
+        }
+
         /// <summary>
         /// Re-flushing a tree that was not mutated since its last snapshot must hard-link that immutable snapshot instead
         /// of writing a new copy, while a mutation must force a fresh, independent snapshot.
