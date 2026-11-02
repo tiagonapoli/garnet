@@ -566,6 +566,16 @@ namespace Garnet.server.BfTreeInterop
                 throw new InvalidOperationException("Failed to take CPR snapshot of BfTree.");
         }
 
+        /// <summary>Caps the bandwidth of all CPR snapshot writes in the process, in bytes per second; 0 removes the cap.</summary>
+        public static void SetSnapshotWriteRate(long bytesPerSecond)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(bytesPerSecond);
+            NativeBfTreeMethods.bftree_set_snapshot_write_rate((ulong)bytesPerSecond);
+        }
+
+        /// <summary>Gets the total time CPR snapshots in the process have slept on the snapshot write rate limit.</summary>
+        public static TimeSpan SnapshotWriteThrottledTime => TimeSpan.FromTicks((long)(NativeBfTreeMethods.bftree_snapshot_write_throttled_nanos() / 100));
+
         /// <summary>
         /// Recover a BfTree from a CPR snapshot file. Unified API for disk-backed and
         /// memory-backed (cache_only) trees — the storage backend is recorded in the
