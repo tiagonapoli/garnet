@@ -3411,11 +3411,12 @@ namespace Garnet.test
 
         /// <summary>
         /// A flush snapshot is written by a background worker, so marking pages read-only and evicting them must not wait
-        /// for it, while a checkpoint must not persist and a restore must not stage until the flush file exists.
+        /// for it, and neither must a promote of the evicted record, which reclaims the tree; a checkpoint must not persist
+        /// until the flush file exists.
         /// </summary>
         [Test]
         [CancelAfter(120_000)]
-        public async Task RIFlushSnapshotRunsInBackgroundAndGatesCheckpointAndRestoreAsync(System.Threading.CancellationToken cancellationToken)
+        public async Task RIFlushSnapshotRunsInBackgroundAndGatesCheckpointAsync(System.Threading.CancellationToken cancellationToken)
         {
             server.Dispose();
             TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
@@ -3446,19 +3447,27 @@ namespace Garnet.test
                 ClassicAssert.AreEqual(0, rim.LiveIndexCount, "eviction must not wait for the snapshot");
                 ClassicAssert.IsEmpty(Directory.GetFiles(rim.RiLogRoot, "*.flush.bftree"), "the flush file must not exist before its snapshot runs");
 
-                var save = Task.Run(() => db.Execute("SAVE"), cancellationToken);
+                // The evicted tree is still open, so the promote reclaims it instead of waiting for its snapshot and a copy.
                 var get = Task.Run(() =>
                 {
                     using var getRedis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
-                    return (string)getRedis.GetDatabase(0).Execute("RI.GET", "asyncflush", "field-x");
+                    var getDb = getRedis.GetDatabase(0);
+                    _ = getDb.Execute("RI.SET", "asyncflush", "field-y", "value-y");
+                    return (string)getDb.Execute("RI.GET", "asyncflush", "field-x");
                 }, cancellationToken);
+                ClassicAssert.AreEqual("value-v1", await get.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+                ClassicAssert.AreEqual(1, rim.DeferredTreesReclaimedCount);
+                ClassicAssert.AreEqual(1, rim.PendingFlushSnapshotCount, "the reclaimed tree's snapshot must still be queued");
 
-                // Neither may finish while the flush file is missing; completing early would expose a missing file.
-                ClassicAssert.AreEqual(-1, Task.WaitAny([save, get], TimeSpan.FromSeconds(1)), "checkpoint and restore must wait for the pending snapshot");
+                var save = Task.Run(() => db.Execute("SAVE"), cancellationToken);
+
+                // Completing early would persist a checkpoint referencing a missing flush file.
+                ClassicAssert.IsFalse(save.Wait(TimeSpan.FromSeconds(1), cancellationToken), "the checkpoint must wait for the pending snapshot");
 
                 gate.Set();
                 _ = await save.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
-                ClassicAssert.AreEqual("value-v1", await get.WaitAsync(TimeSpan.FromSeconds(30), cancellationToken));
+                ClassicAssert.AreEqual(1, rim.LiveIndexCount, "the settled release must leave the reclaimed tree registered");
+                ClassicAssert.AreEqual("value-y", (string)db.Execute("RI.GET", "asyncflush", "field-y"));
                 ClassicAssert.AreEqual(0, rim.PendingFlushSnapshotCount);
                 ClassicAssert.IsNotEmpty(Directory.GetFiles(rim.RiLogRoot, "*.flush.bftree"));
                 ClassicAssert.IsEmpty(Directory.GetFiles(rim.RiLogRoot, "*" + RangeIndexManager.InProgressSuffix), "completed snapshots must be renamed to their final name");
@@ -3474,7 +3483,10 @@ namespace Garnet.test
             server.Start();
 
             using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
                 ClassicAssert.AreEqual("value-v1", (string)redis.GetDatabase(0).Execute("RI.GET", "asyncflush", "field-x"));
+                ClassicAssert.AreEqual("value-y", (string)redis.GetDatabase(0).Execute("RI.GET", "asyncflush", "field-y"));
+            }
         }
 
         /// <summary>
