@@ -178,5 +178,9 @@ namespace Garnet.common
         /// Replica full sync: park before recovering the received checkpoint until the condition is re-enabled.
         /// </summary>
         Replication_Wait_Replica_Before_Checkpoint_Recovery,
+        /// <summary>
+        /// Primary AOF sync task: park before sending the stream initialization message until the condition is re-enabled.
+        /// </summary>
+        Replication_Wait_Primary_Before_Aof_Stream_Init,
     }
 }

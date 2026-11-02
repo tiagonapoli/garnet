@@ -214,6 +214,8 @@ namespace Garnet.cluster
                 }
                 finally
                 {
+                    // Before releasing the lock, so gossip cannot resync before the primary's AOF stream marks a session replicating.
+                    RestartReplicationReestablishmentInterval();
                     if (downgradeLock)
                     {
                         EndRecovery(RecoveryStatus.ReadRole, downgradeLock: true);
