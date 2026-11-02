@@ -321,7 +321,9 @@ namespace Garnet.server
                     if (flushChainClosed)
                         return false;
                     queuedFlushSnapshots.Add(snapshot);
-                    flushChain = flushChain.ContinueWith(_ => work(), CancellationToken.None, TaskContinuationOptions.None, scheduler);
+                    // A non-empty queue already has a run chained that has not taken its batch yet, and it will take this one.
+                    if (queuedFlushSnapshots.Count == 1)
+                        flushChain = flushChain.ContinueWith(_ => work(), CancellationToken.None, TaskContinuationOptions.None, scheduler);
                     return true;
                 }
             }
@@ -705,17 +707,20 @@ namespace Garnet.server
         internal bool UnregisterIndex(ReadOnlySpan<byte> keyBytes)
         {
             var keyId = KeyId(keyBytes);
-            DiscardParkedTreeLocked(keyId, "unregister");
-            if (liveIndexes.TryRemove(keyId, out var entry))
+            TreeEntry entry;
+            using (LockTreeOwnership(GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes)), "unregister"))
             {
-                DrainEntryFlushSnapshots(entry, "unregister");
-                entry.Retire();
-                ForgetTree(entry.Tree);
-                try { entry.Tree?.Dispose(); }
-                catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree on unregister"); }
-                return true;
+                DiscardParkedTreeLocked(keyId, "unregister");
+                if (!liveIndexes.TryRemove(keyId, out entry))
+                    return false;
             }
-            return false;
+
+            DrainEntryFlushSnapshots(entry, "unregister");
+            entry.Retire();
+            ForgetTree(entry.Tree);
+            try { entry.Tree?.Dispose(); }
+            catch (Exception ex) { logger?.LogWarning(ex, "Failed to dispose BfTree on unregister"); }
+            return true;
         }
 
         /// <summary>
@@ -745,6 +750,7 @@ namespace Garnet.server
             {
                 var entry = kvp.Value;
                 rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var lockToken);
+                var ownership = LockTreeOwnership(entry.KeyHash, "store-reset");
                 try
                 {
                     if (!liveIndexes.TryRemove(kvp))
@@ -762,6 +768,7 @@ namespace Garnet.server
                 }
                 finally
                 {
+                    ownership.Dispose();
                     rangeIndexLocks.ReleaseLock(lockToken);
                 }
             }
@@ -811,17 +818,18 @@ namespace Garnet.server
         /// <para>Called from RIPROMOTE PostCopyUpdater (cold case: src.TreeHandle == 0) and
         /// from <c>PostCopyToTail</c> (compaction with disk source).</para>
         ///
-        /// <para>Concurrency: takes the per-key EXCLUSIVE rangeIndex lock for the duration of the
+        /// <para>Concurrency: takes the per-key tree ownership lock (never the rangeIndex lock, since this runs under a
+        /// Tsavorite bucket latch that readers holding the rangeIndex lock may be waiting on) for the duration of the
         /// file copy. This is required because <c>CASRecordIntoChain</c> unseals dst immediately
         /// on CAS-success (in <c>Helpers.cs.CASRecordIntoChain</c>), so by the time this trigger
         /// fires, concurrent readers can already observe dst with <c>TreeHandle == 0</c> and
-        /// invoke <c>RestoreTree</c>, which opens <c>data.bftree</c> under its own per-key
-        /// exclusive lock. Holding the exclusive lock here blocks <c>RestoreTree</c> until the
+        /// invoke <c>RestoreTree</c>, which opens <c>data.bftree</c> under the same per-key
+        /// ownership lock. Holding it here blocks <c>RestoreTree</c> until the
         /// file is fully written, preventing it from observing a partial <c>data.bftree</c>.</para>
         ///
         /// <para><c>data.bftree</c> becomes a hard link to the flush file (a copy only where links are unsupported). That is
         /// safe because <c>RestoreTree</c> opens it through a copy-on-write overlay and nothing else writes it in place. The
-        /// exclusive lock serializes against any reader that would open <c>data.bftree</c>, and against other concurrent
+        /// ownership lock serializes against any reader that would open <c>data.bftree</c>, and against other concurrent
         /// <c>PreStageAndRegisterPending</c> calls for the same key. A crash mid-copy is self-healing: post-recovery either
         /// <c>OnRecoverySnapshotRead</c> (above-FUA stub) or the next RIPROMOTE-cold (IsFlushed=true stub) re-pre-stages and
         /// replaces any partial file before <c>RestoreTree</c> can observe it.</para>
@@ -867,11 +875,11 @@ namespace Garnet.server
 
             var dataPath = LogDataPath(hashPrefix);
 
-            // Acquire the per-key exclusive lock for the duration of the file copy AND the
-            // pending-entry registration. This blocks any concurrent RestoreTree (which also
-            // takes the exclusive lock) from observing a partial data.bftree.
+            // Hold the key's ownership lock for the file copy AND the pending-entry registration, so a concurrent
+            // RestoreTree (which opens data.bftree under the same lock) never observes a partial data.bftree. This runs
+            // inside the RIPROMOTE/copy-to-tail record latch, so it must not take the RangeIndex lock (see LockTreeOwnership).
             // riLogRoot was created in the constructor.
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
+            var ownership = LockTreeOwnership(keyHash, "prestage");
             try
             {
                 DiscardParkedTreeLocked(KeyId(keyBytes), "staged");
@@ -910,7 +918,7 @@ namespace Garnet.server
             }
             finally
             {
-                rangeIndexLocks.ReleaseLock(lockToken);
+                ownership.Dispose();
             }
         }
 
@@ -920,7 +928,7 @@ namespace Garnet.server
         /// </summary>
         private void DiscardStaleDataFile(ReadOnlySpan<byte> keyBytes, long keyHash, string hashPrefix)
         {
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
+            using var ownership = LockTreeOwnership(keyHash, "discard-stale");
             try
             {
                 if (liveIndexes.TryGetValue(KeyId(keyBytes), out var entry) && entry != null)
@@ -937,10 +945,6 @@ namespace Garnet.server
             catch (Exception ex)
             {
                 logger?.LogError(ex, "PreStageAndRegisterPending: failed to delete the stale working file of {Hash}", hashPrefix);
-            }
-            finally
-            {
-                rangeIndexLocks.ReleaseLock(lockToken);
             }
         }
 
@@ -1162,8 +1166,38 @@ namespace Garnet.server
             catch (IOException) { return -1; }
         }
 
-        /// <summary>Counts the flush files under the log root and their total size.</summary>
+        private (int Files, long Bytes) cachedFlushFileMeasure;
+        private long cachedFlushFileMeasureTicks = long.MinValue;
+        private int flushFileMeasureInProgress;
+        private readonly object flushFileMeasureLock = new();
+
+        /// <summary>Returns the retained flush-file count and size, re-scanning the log root at most once per second.</summary>
+        /// <remarks>Every flush snapshot logs this, so an unthrottled scan costs O(retained files) per snapshot and stalls flush workers.</remarks>
         private (int Files, long Bytes) MeasureFlushFiles()
+        {
+            var now = Stopwatch.GetTimestamp();
+            if (now - Volatile.Read(ref cachedFlushFileMeasureTicks) < Stopwatch.Frequency || Interlocked.CompareExchange(ref flushFileMeasureInProgress, 1, 0) != 0)
+            {
+                lock (flushFileMeasureLock)
+                    return cachedFlushFileMeasure;
+            }
+
+            try
+            {
+                var measure = ScanFlushFiles();
+                lock (flushFileMeasureLock)
+                    cachedFlushFileMeasure = measure;
+                Volatile.Write(ref cachedFlushFileMeasureTicks, Stopwatch.GetTimestamp());
+                return measure;
+            }
+            finally
+            {
+                Volatile.Write(ref flushFileMeasureInProgress, 0);
+            }
+        }
+
+        /// <summary>Counts the flush files under the log root and their total size.</summary>
+        private (int Files, long Bytes) ScanFlushFiles()
         {
             var files = 0;
             long bytes = 0;
@@ -1187,63 +1221,37 @@ namespace Garnet.server
 
         /// <summary>
         /// OnFlush cold-case: stub.TreeHandle == 0. The pre-staged <c>data.bftree</c> is the
-        /// only candidate source for capturing this flush. We must serialize against any
-        /// concurrent RestoreTree (X-lock) that could activate a tree mid-copy and start
-        /// writing to data.bftree from a worker thread. Use SHARED RI lock — deadlock-free
-        /// because no firing-thread holds an X-lock across a Tsavorite op that fires deferred
-        /// OnFlush (RestoreTree releases X before its RMW; PreStage / DisposeTreeUnderLock
-        /// don't issue Tsavorite ops while holding X; OnFlush itself doesn't take X).
+        /// only candidate source for capturing this flush. Holds the key's ownership lock so no
+        /// concurrent RestoreTree activates a tree, and no pre-stage rewrites data.bftree, mid-copy.
+        /// OnFlush may fire inside another operation's record latch, so it must not take the
+        /// RangeIndex lock (see <see cref="LockTreeOwnership"/>).
         /// </summary>
         /// <returns>How the snapshot was taken, or <c>null</c> if no source existed.</returns>
         private string SnapshotForFlushCold(ReadOnlySpan<byte> key, string hashPrefix, string dataPath, string flushPath, Span<byte> valueSpan, long logicalAddress)
         {
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(key));
-            var lockIndex = rangeIndexLocks.CalculateIndexWithHint(keyHash);
+            using var ownership = LockTreeOwnership(keyHash, "flush-cold");
 
-            bool releaseLock;
-            ReadOptimizedLock.LockToken sharedLockToken;
-            if (SharedLockHeldForKeyHash.Value.Held && SharedLockHeldForKeyHash.Value.Index == lockIndex)
+            // Re-check: a tree may have become live under a different stub for this key
+            // (RestoreTree completed before we acquired the ownership lock).
+            if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
             {
-                // Do not acquire shared lock if already held for this index
-                releaseLock = false;
-                sharedLockToken = default;
-            }
-            else
-            {
-                releaseLock = true;
-                rangeIndexLocks.AcquireSharedLock(keyHash, out sharedLockToken);
-            }
-
-            try
-            {
-                // Re-check: a tree may have become live under a different stub for this key
-                // (RestoreTree completed before we acquired the shared lock).
-                if (liveIndexes.TryGetValue(KeyId(key), out var entry) && entry?.Tree != null && entry.TrySnapshotUnderClaim(flushPath, allowLink: true, out var kind))
-                {
-                    Volatile.Write(ref entry.LastFlushAddress, logicalAddress);
-                    SetFlushedFlag(valueSpan);
-                    return SnapshotMode("cold-live", kind);
-                }
-
-                // No live tree exists for this key (S-lock blocks RestoreTree from activating
-                // one mid-copy). data.bftree or the deferred staging source is stable — no concurrent writer.
-                // Recovery can re-flush a record at an address whose flush file survives from before the crash.
-                if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true, allowLink: true, out var linked))
-                {
-                    LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
-                    return null; // do NOT set IsFlushed
-                }
-
+                Volatile.Write(ref entry.LastFlushAddress, logicalAddress);
                 SetFlushedFlag(valueSpan);
-                return linked ? "cold-link" : "cold-copy";
+                return SnapshotMode("cold-live", kind);
             }
-            finally
+
+            // No live tree exists for this key (the ownership lock blocks RestoreTree from activating
+            // one mid-copy). data.bftree or the deferred staging source is stable — no concurrent writer.
+            // Recovery can re-flush a record at an address whose flush file survives from before the crash.
+            if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true, allowLink: true, out var linked))
             {
-                if (releaseLock)
-                {
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
-                }
+                LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
+                return null; // do NOT set IsFlushed
             }
+
+            SetFlushedFlag(valueSpan);
+            return linked ? "cold-link" : "cold-copy";
         }
 
         /// <summary>

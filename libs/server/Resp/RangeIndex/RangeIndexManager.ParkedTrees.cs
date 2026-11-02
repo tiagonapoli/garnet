@@ -23,7 +23,7 @@ namespace Garnet.server
     /// it instead of copying the file.
     ///
     /// <para>A parked tree still owns <c>data.bftree</c>: every writer of that file discards it first, and parked trees are
-    /// disposed under the key's exclusive lock, which also guards those writers.</para>
+    /// disposed under the key's tree ownership lock, which also guards those writers.</para>
     /// </summary>
     public sealed partial class RangeIndexManager
     {
@@ -71,7 +71,7 @@ namespace Garnet.server
 
         /// <summary>
         /// Parks <paramref name="tree"/>, evicted from <paramref name="entry"/>, for reuse by a promote of its last flushed record.
-        /// The caller holds the key's exclusive lock and has removed <paramref name="entry"/> from <see cref="liveIndexes"/>.
+        /// The caller holds the key's tree ownership lock and has removed <paramref name="entry"/> from <see cref="liveIndexes"/>.
         /// </summary>
         /// <param name="cacheBytes">Circular-buffer size of the tree, counted against <see cref="MaxParkedTreeBytes"/>.</param>
         /// <returns><c>false</c> if the tree cannot be parked and must be disposed.</returns>
@@ -106,8 +106,7 @@ namespace Garnet.server
             if (parkedTrees.IsEmpty)
                 return false;
 
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
-            try
+            using (LockTreeOwnership(keyHash, "parked-reuse"))
             {
                 if (!parkedTrees.TryRemove(keyId, out var parked))
                     return false;
@@ -127,13 +126,9 @@ namespace Garnet.server
                     parked.HashPrefix, flushAddress, Stopwatch.GetElapsedTime(parked.ParkedAt).TotalMilliseconds, parkedTrees.Count);
                 return true;
             }
-            finally
-            {
-                rangeIndexLocks.ReleaseLock(lockToken);
-            }
         }
 
-        /// <summary>Disposes the key's parked tree, if any; the caller holds the key's exclusive lock.</summary>
+        /// <summary>Disposes the key's parked tree, if any; the caller holds the key's tree ownership lock.</summary>
         private void DiscardParkedTreeLocked(Guid keyId, string reason)
         {
             if (!parkedTrees.IsEmpty && parkedTrees.TryRemove(keyId, out var parked))
@@ -150,15 +145,8 @@ namespace Garnet.server
                 return;
 
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
-            try
-            {
+            using (LockTreeOwnership(keyHash, "parked-discard"))
                 DiscardParkedTreeLocked(KeyId(keyBytes), reason);
-            }
-            finally
-            {
-                rangeIndexLocks.ReleaseLock(lockToken);
-            }
         }
 
         /// <summary>
@@ -182,8 +170,7 @@ namespace Garnet.server
                     if (!expired && !overCapacity)
                         break;
 
-                    rangeIndexLocks.AcquireExclusiveLock(kvp.Value.KeyHash, out var lockToken);
-                    try
+                    using (LockTreeOwnership(kvp.Value.KeyHash, "parked-sweep"))
                     {
                         if (parkedTrees.TryRemove(kvp))
                         {
@@ -192,10 +179,6 @@ namespace Garnet.server
                             _ = Interlocked.Add(ref parkedTreeBytes, -kvp.Value.CacheBytes);
                             DisposeParkedTree(kvp.Value, all ? "discard-all" : expired ? "expired" : excess >= 0 ? "over-capacity" : "over-memory");
                         }
-                    }
-                    finally
-                    {
-                        rangeIndexLocks.ReleaseLock(lockToken);
                     }
                 }
             }

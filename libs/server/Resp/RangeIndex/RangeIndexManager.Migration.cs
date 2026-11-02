@@ -313,6 +313,7 @@ namespace Garnet.server
                 }
 
                 var keyId = KeyId(keyBytes);
+                using var ownership = LockTreeOwnership(keyHash, "migrate-snapshot");
                 if (stub.TreeHandle != nint.Zero && liveIndexes.TryGetValue(keyId, out var treeEntry) && treeEntry.Tree != null)
                 {
                     // Tree is live — CPR snapshot straight to the migration destination under the

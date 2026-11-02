@@ -28,6 +28,12 @@ namespace Garnet.server
     /// </list>
     ///
     /// <para>Locks are striped by key hash via <see cref="ReadOptimizedLock"/> for scalability.</para>
+    ///
+    /// <para><b>Tree ownership lock</b> (<see cref="LockTreeOwnership"/>): guards which tree, parked tree, or deferred release
+    /// a key owns, and the key's <c>data.bftree</c>. Callbacks that run inside a Tsavorite operation (RIPROMOTE
+    /// PostCopyUpdater, PostCopyToTail, OnFlush) hold the record's bucket latch, and readers hold the RangeIndex lock across
+    /// Tsavorite operations that wait for that latch, so such callbacks take only this lock. Its holders never issue
+    /// Tsavorite operations nor wait for a RangeIndex lock; a RangeIndex lock, when also needed, is taken first.</para>
     /// </summary>
     public sealed partial class RangeIndexManager
     {
@@ -81,13 +87,57 @@ namespace Garnet.server
             }
         }
 
-        /// <summary>
-        /// Prevents re-entrant use of <see cref="ReadOptimizedLock"/> by remembering if we've
-        /// already acquired a lock on this thread.
-        /// </summary>
-        private readonly ThreadLocal<(bool Held, int Index)> SharedLockHeldForKeyHash = new(trackAllValues: false);
+        /// <summary>RAII holder for a tree ownership lock (<see cref="LockTreeOwnership"/>).</summary>
+        internal readonly ref struct TreeOwnershipLock : IDisposable
+        {
+            private readonly object gate;
+
+            internal TreeOwnershipLock(object gate) => this.gate = gate;
+
+            /// <inheritdoc/>
+            public void Dispose() => Monitor.Exit(gate);
+        }
+
+        private const int TreeOwnershipLockCount = 1024;
+
+        private readonly object[] treeOwnershipLocks = CreateTreeOwnershipLocks();
+
+        private long treeOwnershipLockWaits;
+        private long treeOwnershipLockWaitTicks;
 
         private readonly ReadOptimizedLock rangeIndexLocks;
+
+        private static object[] CreateTreeOwnershipLocks()
+        {
+            var locks = new object[TreeOwnershipLockCount];
+            for (var i = 0; i < locks.Length; i++)
+                locks[i] = new object();
+            return locks;
+        }
+
+        /// <summary>Gets how often a tree ownership lock was contended and the total time spent waiting for it.</summary>
+        internal (long Waits, TimeSpan WaitTime) TreeOwnershipLockContention
+            => (Interlocked.Read(ref treeOwnershipLockWaits), Stopwatch.GetElapsedTime(0, Interlocked.Read(ref treeOwnershipLockWaitTicks)));
+
+        /// <summary>Acquires the key's tree ownership lock; it is reentrant.</summary>
+        /// <param name="reason">Names the caller in the slow-wait log.</param>
+        private TreeOwnershipLock LockTreeOwnership(long keyHash, string reason)
+        {
+            var gate = treeOwnershipLocks[(int)((ulong)keyHash & (TreeOwnershipLockCount - 1))];
+            if (!Monitor.TryEnter(gate))
+            {
+                var start = Stopwatch.GetTimestamp();
+                Monitor.Enter(gate);
+                var ticks = Stopwatch.GetTimestamp() - start;
+                _ = Interlocked.Increment(ref treeOwnershipLockWaits);
+                _ = Interlocked.Add(ref treeOwnershipLockWaitTicks, ticks);
+                var ms = ticks * 1000.0 / Stopwatch.Frequency;
+                if (ms >= 100)
+                    logger?.LogInformation("[RangeIndexOwnershipLockWait] reason={Reason} ms={Ms:F0}", reason, ms);
+            }
+
+            return new TreeOwnershipLock(gate);
+        }
 
         /// <summary>
         /// Read the RangeIndex stub under a shared lock.
@@ -125,79 +175,69 @@ namespace Garnet.server
         Retry:
             var output = StringOutput.FromPinnedSpan(indexSpan);
             rangeIndexLocks.AcquireSharedLock(keyHash, out var sharedLockToken);
-            SharedLockHeldForKeyHash.Value = (true, rangeIndexLocks.CalculateIndexWithHint(keyHash));
 
+            GarnetStatus readRes;
             try
             {
+                readRes = session.Read_RangeIndex(key.ReadOnlySpan, ref input, ref output, ref session.stringBasicContext);
+            }
+            catch
+            {
+                rangeIndexLocks.ReleaseLock(sharedLockToken);
+                throw;
+            }
 
-                GarnetStatus readRes;
-                try
-                {
-                    readRes = session.Read_RangeIndex(key.ReadOnlySpan, ref input, ref output, ref session.stringBasicContext);
-                }
-                catch
-                {
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
-                    throw;
-                }
+            if (readRes != GarnetStatus.OK)
+            {
+                status = readRes;
+                rangeIndexLocks.ReleaseLock(sharedLockToken);
+                return default;
+            }
 
-                if (readRes != GarnetStatus.OK)
+            var outputSpan = output.SpanByteAndMemory.IsSpanByte
+                ? output.SpanByteAndMemory.SpanByte.ReadOnlySpan
+                : output.SpanByteAndMemory.MemorySpan;
+
+            if (outputSpan.Length != IndexSizeBytes)
+            {
+                rangeIndexLocks.ReleaseLock(sharedLockToken);
+                throw new GarnetException($"Unexpected stub size {outputSpan.Length} for RangeIndex read, expected {IndexSizeBytes}");
+            }
+
+            ref readonly var stub = ref ReadIndex(outputSpan);
+
+            // Per-tree checkpoint barrier: one volatile read on hot path (no checkpoint = skipped).
+            if (checkpointInProgress
+                && WaitForTreeCheckpoint(key.ReadOnlySpan, ref output, indexSpan, ref sharedLockToken))
+            {
+                goto Retry;
+            }
+
+            if (stub.IsFlushed)
+            {
+                rangeIndexLocks.ReleaseLock(sharedLockToken);
+                PromoteToTail(session, key);
+                goto Retry;
+            }
+
+            if (stub.TreeHandle == nint.Zero)
+            {
+                rangeIndexLocks.ReleaseLock(sharedLockToken);
+
+                // Restore under exclusive lock to prevent concurrent restores.
+                // Pre-staging of data.bftree always happened earlier (PostCopyToTail-cold,
+                // RIPROMOTE PostCopyUpdater-cold, or OnRecoverySnapshotRead) so RestoreTree
+                // just opens data.bftree directly.
+                if (!RestoreTree(session, key, keyHash, ref input, indexSpan))
                 {
-                    status = readRes;
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
+                    status = GarnetStatus.NOTFOUND;
                     return default;
                 }
-
-                var outputSpan = output.SpanByteAndMemory.IsSpanByte
-                    ? output.SpanByteAndMemory.SpanByte.ReadOnlySpan
-                    : output.SpanByteAndMemory.MemorySpan;
-
-                if (outputSpan.Length != IndexSizeBytes)
-                {
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
-                    throw new GarnetException($"Unexpected stub size {outputSpan.Length} for RangeIndex read, expected {IndexSizeBytes}");
-                }
-
-                ref readonly var stub = ref ReadIndex(outputSpan);
-
-                // Per-tree checkpoint barrier: one volatile read on hot path (no checkpoint = skipped).
-                if (checkpointInProgress
-                    && WaitForTreeCheckpoint(key.ReadOnlySpan, ref output, indexSpan, ref sharedLockToken))
-                {
-                    goto Retry;
-                }
-
-                if (stub.IsFlushed)
-                {
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
-                    PromoteToTail(session, key);
-                    goto Retry;
-                }
-
-                if (stub.TreeHandle == nint.Zero)
-                {
-                    rangeIndexLocks.ReleaseLock(sharedLockToken);
-
-                    // Restore under exclusive lock to prevent concurrent restores.
-                    // Pre-staging of data.bftree always happened earlier (PostCopyToTail-cold,
-                    // RIPROMOTE PostCopyUpdater-cold, or OnRecoverySnapshotRead) so RestoreTree
-                    // just opens data.bftree directly.
-                    if (!RestoreTree(session, key, keyHash, ref input, indexSpan))
-                    {
-                        status = GarnetStatus.NOTFOUND;
-                        return default;
-                    }
-                    goto Retry;
-                }
-
-                status = GarnetStatus.OK;
-                return new(in rangeIndexLocks, sharedLockToken);
+                goto Retry;
             }
-            finally
-            {
-                // Returning or retrying MUST have released the shared lock
-                SharedLockHeldForKeyHash.Value = (false, 0);
-            }
+
+            status = GarnetStatus.OK;
+            return new(in rangeIndexLocks, sharedLockToken);
         }
 
         /// <summary>
@@ -384,6 +424,7 @@ namespace Garnet.server
 
                 var keySpan = key.ReadOnlySpan;
                 var keyId = KeyId(keySpan);
+                using var ownership = LockTreeOwnership(keyHash, "restore");
 
                 // Race-resolved path: another stub for this key may already have a live tree
                 // (RestoreTree ran via a different addr). Reuse it instead of opening another.
