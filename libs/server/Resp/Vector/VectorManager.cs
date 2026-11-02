@@ -187,6 +187,16 @@ namespace Garnet.server
 
         private bool initialized;
 
+        /// <summary>
+        /// Whether <see cref="ReconcileRecoveredState"/> has completed since this manager was created.
+        /// </summary>
+        public bool HasReconciledRecoveredState { get; private set; }
+
+        /// <summary>
+        /// Number of full-log scans run by <see cref="ReconcileRecoveredState"/>.
+        /// </summary>
+        internal int RecoveredStateScanCount { get; private set; }
+
         private readonly ILogger logger;
 
         private readonly int dbId;
@@ -335,8 +345,13 @@ namespace Garnet.server
             // before the checkpoint is recovered without being reported. Liveness below is decided by
             // absence, so completing the set from the recovered store is what keeps a live Vector Set from
             // being mistaken for an abandoned context and having its element records deleted.
+            var totalStart = Stopwatch.GetTimestamp();
+            var recoveredMetadataCount = recoveredMetadata.Count;
             RecoveredIndexScanFunctions indexScan = new(this);
             _ = session.storageSession.stringBasicContext.Session.IterateLookupSnapshot(ref indexScan);
+            RecoveredStateScanCount++;
+            var scanMs = Stopwatch.GetElapsedTime(totalStart).TotalMilliseconds;
+            var liveIndexCount = recoveredIndexes.Count;
 
             var needsUpdated = false;
 
@@ -388,13 +403,12 @@ namespace Garnet.server
                         if (!recoveredMetadata.TryGetValue(i, out contextMetadatas[i]) || contextMetadatas[i].IsEmpty)
                         {
                             // Nothing was recovered for this index, so keep whatever is already in memory rather
-                            // than defaulting it. A cluster node with AOF enabled reconciles twice while starting
-                            // up - once from RecoverCheckpointAndAOFAsync and again from StoreWrapper - and the
-                            // first pass consumes recoveredMetadata, so the second has only the index records to
-                            // go on. Defaulting here would drop a reservation that has no index record instead of
-                            // marking it for cleanup below, leaving that context free to hand to the next Vector
-                            // Set while the data behind it is still present, and would reset the persisted
-                            // version so that later metadata writes are cancelled as stale.
+                            // than defaulting it. A pass that follows an earlier one finds recoveredMetadata already
+                            // consumed, so it has only the index records to go on. Defaulting here would drop a
+                            // reservation that has no index record instead of marking it for cleanup below, leaving
+                            // that context free to hand to the next Vector Set while the data behind it is still
+                            // present, and would reset the persisted version so that later metadata writes are
+                            // cancelled as stale.
                             contextMetadatas[i] = i < priorMetadatas.Length ? priorMetadatas[i] : new();
                         }
                     }
@@ -501,6 +515,9 @@ namespace Garnet.server
                 logger?.LogCritical("VectorManager cleanup channel rejected a recovery cleanup request");
                 GarnetAsserts.Assert(false, "VectorManager cleanup channel should never drop a request");
             }
+
+            HasReconciledRecoveredState = true;
+            logger?.LogInformation("[VectorSetReconcile] dbId={dbId} scannedRecords={scannedRecords} liveIndexes={liveIndexes} recoveredMetadata={recoveredMetadata} scanMs={scanMs:F1} totalMs={totalMs:F1}", dbId, indexScan.ScannedRecords, liveIndexCount, recoveredMetadataCount, scanMs, Stopwatch.GetElapsedTime(totalStart).TotalMilliseconds);
         }
 
         /// <summary>
@@ -515,9 +532,11 @@ namespace Garnet.server
                 this.manager = manager;
             }
 
+            internal long ScannedRecords { get; private set; }
+
             public void OnException(Exception exception, long numberOfRecords) { }
             public bool OnStart(long beginAddress, long endAddress) => true;
-            public void OnStop(bool completed, long numberOfRecords) { }
+            public void OnStop(bool completed, long numberOfRecords) => ScannedRecords = numberOfRecords;
 
             /// <inheritdoc/>
             public bool Reader<TSourceLogRecord>(in TSourceLogRecord logRecord, RecordMetadata recordMetadata, long numberOfRecords, out CursorRecordResult cursorRecordResult)
