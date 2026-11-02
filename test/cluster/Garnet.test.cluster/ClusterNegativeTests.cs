@@ -17,6 +17,7 @@ using StackExchange.Redis;
 
 
 #if DEBUG
+using Garnet.cluster;
 using Garnet.common;
 #endif
 
@@ -1013,6 +1014,65 @@ namespace Garnet.test.cluster
                     $"node {pending} never converged after a gossip round failed");
                 Thread.Sleep(100);
             }
+        }
+
+        [Test, Order(18), CancelAfter(testTimeout)]
+        [Category("REPLICATION")]
+        public async Task ClusterEnsureReplicationDoesNotRestartSyncThatOutlastedPollIntervalAsync(CancellationToken cancellationToken)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            var pollIntervalSeconds = 10;
+
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, timeout: timeout, clusterReplicationReestablishmentTimeout: pollIntervalSeconds);
+            context.CreateConnection();
+
+            _ = context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], addslot: true, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(primaryIndex, replicaIndex, logger: context.logger);
+
+            var replicationManager = ((ClusterProvider)context.nodes[replicaIndex].Provider.StoreWrapper.clusterProvider).replicationManager;
+
+            try
+            {
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync);
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Wait_Primary_Before_Aof_Stream_Init);
+
+                _ = context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, async: true, logger: context.logger);
+
+                // Keep the attach in progress for longer than the poll interval, as a slow full sync would.
+                // This injection parks the replica attach first and then the primary's sync session.
+                await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(pollIntervalSeconds + 2), cancellationToken).ConfigureAwait(false);
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync);
+                await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync).ConfigureAwait(false);
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync);
+
+                // The replica sync has completed, but no session is replicating until the primary's AOF stream starts.
+                await ExceptionInjectionHelper.WaitOnClearAsync(ExceptionInjectionType.Replication_Wait_Primary_Before_Aof_Stream_Init).ConfigureAwait(false);
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync);
+                context.clusterTestUtils.WaitForReplicaRecovery(replicaIndex, context.logger);
+
+                // Span several 1-second gossip rounds, each of which runs EnsureReplication on the replica.
+                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+                ClassicAssert.AreEqual(0, replicationManager.AutoResyncCount, "EnsureReplication restarted a sync that had just completed");
+
+                ExceptionInjectionHelper.EnableException(ExceptionInjectionType.Replication_Wait_Primary_Before_Aof_Stream_Init);
+                await context.clusterTestUtils.WaitForConnectedReplicaCountAsync(primaryIndex, 1, context.logger).ConfigureAwait(false);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_InProgress_During_DiskBased_Replica_Attach_Sync);
+                ExceptionInjectionHelper.DisableException(ExceptionInjectionType.Replication_Wait_Primary_Before_Aof_Stream_Init);
+            }
+
+            context.kvPairs = [];
+            context.PopulatePrimary(ref context.kvPairs, keyLength: 32, kvpairCount: 16, primaryIndex);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            context.ValidateKVCollectionAgainstReplica(ref context.kvPairs, replicaIndex);
+            ClassicAssert.AreEqual(0, replicationManager.AutoResyncCount);
         }
 #endif
     }

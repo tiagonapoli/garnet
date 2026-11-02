@@ -43,6 +43,12 @@ namespace Garnet.cluster
         private SingleWriterMultiReaderLock recoveryStateChangeLock;
 
         private long lastEnsureReplicationAttempt;
+        private long autoResyncCount;
+
+        /// <summary>
+        /// Number of resyncs <see cref="EnsureReplication"/> started after detecting a lost replication session.
+        /// </summary>
+        internal long AutoResyncCount => Volatile.Read(ref autoResyncCount);
 
         public bool IsRecovering => currentRecoveryStatus is not (RecoveryStatus.NoRecovery or RecoveryStatus.ReadRole);
 
@@ -176,6 +182,11 @@ namespace Garnet.cluster
         }
 
         /// <summary>
+        /// Restarts the <see cref="EnsureReplication"/> poll interval when a replica sync ends; a sync can outlast the interval.
+        /// </summary>
+        internal void RestartReplicationReestablishmentInterval() => Volatile.Write(ref lastEnsureReplicationAttempt, Environment.TickCount64);
+
+        /// <summary>
         /// If this node is a Replica, ensures that a session engaged in replication exists from its paired primary.
         /// </summary>
         public void EnsureReplication(ClusterSession activeSession, IEnumerable<IClusterSession> allClusterSessions)
@@ -255,6 +266,7 @@ namespace Garnet.cluster
                 }
 
                 logger?.LogInformation("Beginning resync to {primaryId} after replication session failed", primaryId);
+                _ = Interlocked.Increment(ref autoResyncCount);
 
                 // At this point we need to hold the lock until this upcoming task completes
                 suppressUnlock = true;

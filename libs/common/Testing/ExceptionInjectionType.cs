@@ -189,5 +189,9 @@ namespace Garnet.common
         /// decremented the send count and before it releases the waiter.
         /// </summary>
         Sender_Pause_Before_Slot_Release,
+        /// <summary>
+        /// Primary AOF sync task: park before sending the stream initialization message until the condition is re-enabled.
+        /// </summary>
+        Replication_Wait_Primary_Before_Aof_Stream_Init,
     }
 }
