@@ -264,7 +264,10 @@ namespace Garnet.server
 
             var start = Stopwatch.GetTimestamp();
             var waited = 0;
-            foreach (var kvp in pendingFlushSnapshots)
+
+            // ToArray is a point-in-time copy; enumerating the live dictionary would also await snapshots queued during the
+            // wait, which under sustained page flushes never ends and starves checkpoints (783 s seen in the soak).
+            foreach (var kvp in pendingFlushSnapshots.ToArray())
             {
                 if (filter != null && !filter(kvp.Value.Address))
                     continue;
