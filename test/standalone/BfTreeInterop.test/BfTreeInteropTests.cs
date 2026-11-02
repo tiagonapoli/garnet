@@ -467,6 +467,39 @@ namespace BfTreeInterop.test
         }
 
         [Test]
+        public void SnapshotAndRecover_MultiLevelTree_ReportsRecoveryStats()
+        {
+            const int count = 50_000;
+            var snapshotPath = Path.Combine(Path.GetTempPath(), $"bftree_snap_{Guid.NewGuid():N}.bftree");
+            try
+            {
+                tree.Dispose();
+                tree = new BfTreeService(filePath: treePath, enableSnapshots: true, cbMinRecordSize: 4);
+                InsertTestData(count);
+                BfTreeService.CprSnapshotByPtr(tree.NativePtr, snapshotPath);
+                tree.Dispose();
+
+                tree = BfTreeService.RecoverFromCprSnapshot(snapshotPath, false, StorageBackendType.Disk, out var stats);
+
+                Assert.That(stats.InnerNodes, Is.GreaterThan(1UL), "tree should have multiple inner nodes");
+                Assert.That(stats.BasePages, Is.GreaterThan(0UL));
+                Assert.That(stats.MiniPages, Is.GreaterThan(0UL));
+                Assert.That(stats.TotalUs, Is.GreaterThanOrEqualTo(stats.InnerUs + stats.BaseMapUs + stats.MiniUs));
+                for (int i = 0; i < count; i++)
+                {
+                    var key = Encoding.UTF8.GetBytes($"key:{i:D4}");
+                    Assert.That(tree.Read(key, out var readValue), Is.EqualTo(BfTreeReadResult.Found), $"key:{i:D4} not found after recovery");
+                    Assert.That(readValue, Is.EqualTo(Encoding.UTF8.GetBytes($"val:{i}")));
+                }
+            }
+            finally
+            {
+                if (File.Exists(snapshotPath))
+                    File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
         public void RepeatedSnapshots_DoNotSleepBetweenPhases()
         {
             const int snapshotCount = 10;
