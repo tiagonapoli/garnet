@@ -49,12 +49,19 @@ namespace Garnet.server
         /// <summary>Gets the number of promotes that reclaimed an evicted tree before its flush snapshots finished.</summary>
         internal int DeferredTreesReclaimedCount => Volatile.Read(ref deferredTreesReclaimed);
 
-        /// <summary>An evicted tree waiting for its flush snapshots; <see cref="Settled"/> and <see cref="Reclaimed"/> are guarded by the key's lock.</summary>
-        private sealed class DeferredTreeRelease(TreeEntry entry, BfTreeService tree, ulong cacheBytes)
+        private int evictionsWithReaderDrainDeferred;
+
+        /// <summary>Gets the number of evictions that found the key's lock held and deferred draining the tree's readers.</summary>
+        internal int EvictionsWithReaderDrainDeferredCount => Volatile.Read(ref evictionsWithReaderDrainDeferred);
+
+        /// <summary>An evicted tree waiting for its flush snapshots; <see cref="Settled"/> and <see cref="Reclaimed"/> are guarded by the key's tree ownership lock.</summary>
+        private sealed class DeferredTreeRelease(TreeEntry entry, BfTreeService tree, ulong cacheBytes, bool drainReaders)
         {
             public readonly TreeEntry Entry = entry;
             public readonly BfTreeService Tree = tree;
             public readonly ulong CacheBytes = cacheBytes;
+            /// <summary>The eviction could not take the exclusive lock, so readers of the tree must be drained before it is released.</summary>
+            public readonly bool DrainReaders = drainReaders;
             public readonly long QueuedAt = Stopwatch.GetTimestamp();
             private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
             public bool Settled;
@@ -411,18 +418,18 @@ namespace Garnet.server
 
         /// <summary>
         /// Hands an evicted tree with queued flush snapshots to its last snapshot, which disposes or parks it when done unless
-        /// a promote reclaims it first (<see cref="TryReclaimDeferredTree"/>). The caller has removed the entry under the
-        /// per-key exclusive lock, which drained every reader of the evicted record, and readers of the evicted record now
-        /// promote or restore it, so no reader can still use the tree.
+        /// a promote reclaims it first (<see cref="TryReclaimDeferredTree"/>). The caller has removed the entry, and new readers
+        /// of the evicted record promote or restore it. Readers already using the tree were drained by the caller's exclusive lock,
+        /// or, with <paramref name="drainReaders"/>, are drained before the release settles.
         /// </summary>
-        /// <returns><c>false</c> if no snapshot is pending, so the caller disposes the tree itself.</returns>
-        private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
+        /// <returns><c>false</c> if no snapshot is pending and no drain is needed, so the caller disposes the tree itself.</returns>
+        private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes, bool drainReaders = false)
         {
             var chain = entry.CloseFlushChainAsync();
-            if (chain.IsCompleted)
+            if (chain.IsCompleted && !drainReaders)
                 return false;
 
-            var release = new DeferredTreeRelease(entry, tree, cacheBytes);
+            var release = new DeferredTreeRelease(entry, tree, cacheBytes, drainReaders);
             pendingTreeReleases[keyId] = release;
             _ = chain.ContinueWith(_ => SettleDeferredRelease(keyId, release), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
             return true;
@@ -435,8 +442,19 @@ namespace Garnet.server
             var outcome = "disposed";
             try
             {
-                rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var lockToken);
-                try
+                // A barrier on the exclusive lock waits out readers that took the tree before its eviction.
+                if (release.DrainReaders && !release.Reclaimed)
+                {
+                    var drainStart = Stopwatch.GetTimestamp();
+                    rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var drainToken);
+                    rangeIndexLocks.ReleaseLock(drainToken);
+                    var drainMs = Stopwatch.GetElapsedTime(drainStart).TotalMilliseconds;
+                    if (drainMs >= 100)
+                        logger?.LogInformation("[RangeIndexEvictReaderDrain] hash={Hash} ms={Ms:F0}", entry.HashPrefix, drainMs);
+                }
+
+                // Only ownership bookkeeping happens here: the tree is unreachable to readers since its eviction.
+                using (LockTreeOwnership(entry.KeyHash, "release-settle"))
                 {
                     release.Settled = true;
                     if (release.Reclaimed)
@@ -444,10 +462,6 @@ namespace Garnet.server
                     // A registration since the eviction may have staged data.bftree over the evicted tree's file.
                     else if (EvictedTreeGrace > TimeSpan.Zero && !liveIndexes.ContainsKey(keyId) && TryParkEvictedTreeLocked(keyId, entry, release.Tree, release.CacheBytes))
                         outcome = "parked";
-                }
-                finally
-                {
-                    rangeIndexLocks.ReleaseLock(lockToken);
                 }
 
                 if (outcome == "disposed")
@@ -474,29 +488,22 @@ namespace Garnet.server
             if (pendingTreeReleases.IsEmpty || !pendingTreeReleases.TryGetValue(keyId, out var release))
                 return false;
 
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
-            try
-            {
-                var entry = release.Entry;
-                if (release.Settled || release.Reclaimed || Volatile.Read(ref entry.LastFlushAddress) != flushAddress || liveIndexes.ContainsKey(keyId))
-                    return false;
+            using var ownership = LockTreeOwnership(keyHash, "reclaim");
+            var entry = release.Entry;
+            if (release.Settled || release.Reclaimed || Volatile.Read(ref entry.LastFlushAddress) != flushAddress || liveIndexes.ContainsKey(keyId))
+                return false;
 
-                DiscardParkedTreeLocked(keyId, "reclaimed");
-                entry.ReopenFlushChain();
-                if (!liveIndexes.TryAdd(keyId, entry))
-                    return false;
+            DiscardParkedTreeLocked(keyId, "reclaimed");
+            entry.ReopenFlushChain();
+            if (!liveIndexes.TryAdd(keyId, entry))
+                return false;
 
-                release.Reclaimed = true;
-                _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, DeferredTreeRelease>(keyId, release));
-                _ = Interlocked.Increment(ref deferredTreesReclaimed);
-                logger?.LogInformation("[RangeIndexDeferredTreeReclaimed] hash={Hash} addr=0x{Addr:x16} deferredMs={Ms:F0} pendingSnapshots={Pending}",
-                    entry.HashPrefix, flushAddress, Stopwatch.GetElapsedTime(release.QueuedAt).TotalMilliseconds, pendingFlushSnapshots.Count);
-                return true;
-            }
-            finally
-            {
-                rangeIndexLocks.ReleaseLock(lockToken);
-            }
+            release.Reclaimed = true;
+            _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, DeferredTreeRelease>(keyId, release));
+            _ = Interlocked.Increment(ref deferredTreesReclaimed);
+            logger?.LogInformation("[RangeIndexDeferredTreeReclaimed] hash={Hash} addr=0x{Addr:x16} deferredMs={Ms:F0} pendingSnapshots={Pending}",
+                entry.HashPrefix, flushAddress, Stopwatch.GetElapsedTime(release.QueuedAt).TotalMilliseconds, pendingFlushSnapshots.Count);
+            return true;
         }
 
         /// <summary>Closes <paramref name="entry"/> to new flush snapshots and waits for the queued ones.</summary>
@@ -546,7 +553,24 @@ namespace Garnet.server
                     _ = TryExecuteTask(task);
             }
 
-            protected override void QueueTask(Task task) => tasks.Add(task);
+            // After Dispose a rejected task would fault and synchronously schedule its successor, recursing down a long
+            // per-tree chain until the stack overflows; such stragglers run on the thread pool and skip their work instead.
+            protected override void QueueTask(Task task)
+            {
+                if (!tasks.IsAddingCompleted)
+                {
+                    try
+                    {
+                        tasks.Add(task);
+                        return;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }
+
+                _ = ThreadPool.UnsafeQueueUserWorkItem(t => _ = TryExecuteTask(t), task, preferLocal: false);
+            }
 
             protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
 

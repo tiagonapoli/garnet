@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Garnet.common;
 using Garnet.server.BfTreeInterop;
 using Microsoft.Extensions.Logging;
@@ -256,16 +257,29 @@ namespace Garnet.server
                 return;
 
             // All liveIndexes mutations (cold-pending eviction below, plus the activated path
-            // further down) MUST hold the per-key exclusive lock to serialize against
-            // SetCheckpointBarrier / SnapshotAllTreesForCheckpoint / RegisterIndex /
-            // PreStageAndRegisterPending which all touch this entry under the same lock.
+            // further down) hold the per-key exclusive lock, which drains readers of the tree, and
+            // the tree ownership lock, which serializes against RestoreTree / PreStageAndRegisterPending /
+            // deferred reclaim and parked-tree bookkeeping for this entry.
             // Without it, a cold eviction concurrent with checkpoint can silently drop a
             // pending entry mid-snapshot iteration, narrowing checkpoint coverage for the key.
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(key));
             TreeEntry disposedEntry = null;
             BfTreeService disposedTree = null;
             string hashPrefix = null;
-            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
+            // Eviction runs inside an epoch drain that a reader holding the shared lock may be waiting on (a pending read
+            // spins until the page closes), so it never waits for the exclusive lock: when contended, readers are drained
+            // later by the deferred release instead.
+            var exclusive = true;
+            ReadOptimizedLock.LockToken lockToken;
+            if (deleteFiles)
+                rangeIndexLocks.AcquireExclusiveLock(keyHash, out lockToken);
+            else if (!rangeIndexLocks.TryAcquireExclusiveLock(keyHash, out lockToken))
+            {
+                exclusive = false;
+                _ = Interlocked.Increment(ref evictionsWithReaderDrainDeferred);
+            }
+
+            var ownership = LockTreeOwnership(keyHash, "evict");
             try
             {
                 if (stub.TreeHandle == nint.Zero && !deleteFiles)
@@ -290,9 +304,9 @@ namespace Garnet.server
                     disposedTree = entry?.Tree;
 
                     // Registered under the lock so a restore of the evicted record waits for the tree to be released.
-                    if (!deleteFiles && disposedTree != null && TryDeferReleaseToFlushSnapshots(keyId, entry, disposedTree, stub.CacheSize))
+                    if (!deleteFiles && disposedTree != null && TryDeferReleaseToFlushSnapshots(keyId, entry, disposedTree, stub.CacheSize, drainReaders: !exclusive))
                     {
-                        logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} releaseDeferred=true", entry.HashPrefix, disposedTree.NativePtr);
+                        logger?.LogInformation("RangeIndexSoakEvicted hash={Hash} tree={Tree} releaseDeferred=true readerDrainDeferred={Drain}", entry.HashPrefix, disposedTree.NativePtr, !exclusive);
                         return;
                     }
 
@@ -310,7 +324,9 @@ namespace Garnet.server
             }
             finally
             {
-                rangeIndexLocks.ReleaseLock(lockToken);
+                ownership.Dispose();
+                if (exclusive)
+                    rangeIndexLocks.ReleaseLock(lockToken);
             }
 
             // A deleted key's queued flush snapshots may still be needed to recover an older checkpoint, so they finish first.

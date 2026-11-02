@@ -860,6 +860,146 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
+        /// A full sync from a checkpoint whose tree snapshots were cut while writes ran must apply every tail write on the replica,
+        /// even while the restored trees are evicted, reclaimed, and read concurrently during replay.
+        /// </summary>
+        [Test, Order(11)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexFullSyncFromLiveCheckpointSnapshotsKeepsTailWrites([Values(2, 4)] int treeCount, [Values(0, 50)] int snapshotDelayMs)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, lowMemory: true, enableRangeIndexPreview: true);
+            context.CreateConnection();
+
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitAll(context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var replicaEndpoint = (IPEndPoint)context.endpoints[replicaIndex];
+            const int fields = 64;
+            var expected = new Dictionary<(int, int), string>();
+            void Write(int t, int f, string v)
+            {
+                if (v == null)
+                    _ = context.clusterTestUtils.Execute(primaryEndpoint, "RI.DEL", [$"idx{t}", $"field-{f:D3}"], logger: context.logger);
+                else
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", [$"idx{t}", $"field-{f:D3}", v], logger: context.logger));
+                expected[(t, f)] = v;
+            }
+
+            for (var t = 0; t < treeCount; t++)
+            {
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.CREATE", [$"idx{t}", "DISK", "CACHESIZE", "65536", "MINRECORD", "8"], logger: context.logger));
+                for (var f = 0; f < fields; f++)
+                    Write(t, f, $"load-{t}-{f}");
+            }
+
+            var pad = new string('p', 2048);
+            var round = 0;
+            void Round()
+            {
+                round++;
+                for (var t = 0; t < treeCount; t++)
+                {
+                    // Like the soak: re-set the field deleted last round, set a few more, then delete one.
+                    Write(t, (round - 1) * 7 % fields, $"r{round}-{t}-a");
+                    for (var k = 1; k <= 4; k++)
+                        Write(t, (round * 13 + k * 5) % fields, $"r{round}-{t}-{k}");
+                    Write(t, round * 7 % fields, null);
+                }
+
+                for (var j = 0; j < 4; j++)
+                    ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "SET", [$"pad-{round}-{j}", pad], logger: context.logger));
+            }
+
+            // Hold the primary's checkpoint snapshots so they are cut while writes keep landing on the trees.
+            var primaryRim = context.nodes[primaryIndex].Provider.StoreWrapper.rangeIndexManager;
+            using var gate = new ManualResetEventSlim();
+            using var started = new ManualResetEventSlim();
+            primaryRim.BeforeFlushSnapshotForTest = path =>
+            {
+                if (path.Contains(".flush.", StringComparison.Ordinal))
+                    return;
+                started.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+            try
+            {
+                var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+                context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+                ClassicAssert.AreEqual("Background saving started", (string)context.clusterTestUtils.Execute(primaryEndpoint, "BGSAVE", [], logger: context.logger));
+                ClassicAssert.IsTrue(started.Wait(TimeSpan.FromSeconds(30)), "the checkpoint must queue a tree snapshot");
+                for (var i = 0; i < 40; i++)
+                    Round();
+                gate.Set();
+                context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+            }
+            finally
+            {
+                gate.Set();
+                primaryRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            for (var i = 0; i < 200; i++)
+                Round();
+
+            var replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+            if (snapshotDelayMs > 0)
+                replicaRim.BeforeFlushSnapshotForTest = _ => Thread.Sleep(snapshotDelayMs);
+
+            using var stopReads = new CancellationTokenSource();
+            var reads = Task.Run(async () =>
+            {
+                var rng = new Random(7);
+                while (!stopReads.IsCancellationRequested)
+                {
+                    try
+                    {
+                        _ = context.clusterTestUtils.Execute(replicaEndpoint, "READONLY", [], logger: context.logger);
+                        _ = context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", [$"idx{rng.Next(treeCount)}", $"field-{rng.Next(fields):D3}"], logger: context.logger);
+                    }
+                    catch
+                    {
+                        // The replica rejects reads until it has synced.
+                    }
+
+                    await Task.Delay(5);
+                }
+            });
+
+            try
+            {
+                ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, failEx: false, logger: context.logger));
+                for (var i = 0; i < 200; i++)
+                    Round();
+                context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            }
+            finally
+            {
+                stopReads.Cancel();
+                await reads;
+                replicaRim = context.nodes[replicaIndex].Provider.StoreWrapper.rangeIndexManager;
+                replicaRim.BeforeFlushSnapshotForTest = null;
+            }
+
+            TestContext.Progress.WriteLine($"reclaimed={replicaRim.DeferredTreesReclaimedCount} parkedReused={replicaRim.ParkedTreesReusedCount} parkedDisposed={replicaRim.ParkedTreesDisposedCount} live={replicaRim.LiveIndexCount}");
+            var missing = new List<string>();
+            foreach (var ((t, f), value) in expected)
+            {
+                ClassicAssert.AreEqual(value, (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.GET", [$"idx{t}", $"field-{f:D3}"], logger: context.logger), $"primary idx{t} field-{f:D3}");
+                var actual = (string)context.clusterTestUtils.Execute(replicaEndpoint, "RI.GET", [$"idx{t}", $"field-{f:D3}"], logger: context.logger);
+                if (actual != value)
+                    missing.Add($"t{t}f{f}={actual ?? "nil"}!={value ?? "nil"}");
+            }
+
+            ClassicAssert.IsEmpty(missing, $"replica diverged on {missing.Count} fields: {string.Join(",", missing.Take(40))}");
+        }
+
+        /// <summary>
         /// A full sync streams RangeIndex files spanning many more chunks than the in-flight window, and the replica
         /// must receive them byte for byte, with or without wire compression.
         /// </summary>
