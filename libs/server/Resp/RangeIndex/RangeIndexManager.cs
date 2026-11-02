@@ -311,6 +311,34 @@ namespace Garnet.server
             readonly object flushChainLock = new();
             Task flushChain = Task.CompletedTask;
             bool flushChainClosed;
+            List<QueuedFlushSnapshot> queuedFlushSnapshots = [];
+
+            /// <summary>Queues <paramref name="snapshot"/> for the next run of <paramref name="work"/> after this tree's earlier snapshots.</summary>
+            /// <returns><c>false</c> if <see cref="CloseFlushChainAsync"/> was called because the tree is being released.</returns>
+            public bool TryAppendFlushSnapshot(QueuedFlushSnapshot snapshot, Action work, TaskScheduler scheduler)
+            {
+                lock (flushChainLock)
+                {
+                    if (flushChainClosed)
+                        return false;
+                    queuedFlushSnapshots.Add(snapshot);
+                    flushChain = flushChain.ContinueWith(_ => work(), CancellationToken.None, TaskContinuationOptions.None, scheduler);
+                    return true;
+                }
+            }
+
+            /// <summary>Removes and returns the flush snapshots queued so far.</summary>
+            public List<QueuedFlushSnapshot> TakeQueuedFlushSnapshots()
+            {
+                lock (flushChainLock)
+                {
+                    if (queuedFlushSnapshots.Count == 0)
+                        return queuedFlushSnapshots;
+                    var taken = queuedFlushSnapshots;
+                    queuedFlushSnapshots = [];
+                    return taken;
+                }
+            }
 
             /// <summary>Queues <paramref name="work"/> after this tree's earlier flush snapshots.</summary>
             /// <returns><c>false</c> if <see cref="CloseFlushChainAsync"/> was called because the tree is being released.</returns>
@@ -1110,7 +1138,7 @@ namespace Garnet.server
 
         /// <summary>Logs one flush snapshot with its cost and the flush files retained afterwards.</summary>
         /// <param name="queueMs">Time the snapshot waited for a background writer, or null when taken synchronously.</param>
-        private void LogFlushSnapshot(string hashPrefix, long logicalAddress, string flushPath, string mode, long start, double? queueMs = null)
+        private void LogFlushSnapshot(string hashPrefix, long logicalAddress, string flushPath, string mode, long start, double? queueMs = null, int batch = 1)
         {
             if (logger is null || !logger.IsEnabled(LogLevel.Information))
                 return;
@@ -1118,8 +1146,8 @@ namespace Garnet.server
             var ms = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             var bytes = mode is null ? 0 : TryGetFileLength(flushPath);
             var (retained, retainedBytes) = MeasureFlushFiles();
-            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} async={Async} bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0} pending={Pending} retainedFiles={Retained} retainedBytes={RetainedBytes} throttledTotalMs={ThrottledMs:F0} sweepReadTotalMB={SweepReadMB}",
-                hashPrefix, logicalAddress, mode ?? "failed", queueMs.HasValue, bytes, ms, queueMs ?? 0, pendingFlushSnapshots.Count, retained, retainedBytes, BfTreeService.SnapshotIOThrottledTime.TotalMilliseconds, BfTreeService.SnapshotReadBytes >> 20);
+            logger.LogInformation("[RangeIndexFlushSnapshot] hash={Hash} addr=0x{Addr:x16} mode={Mode} async={Async} bytes={Bytes} ms={Ms:F0} queueMs={QueueMs:F0} batch={Batch} pending={Pending} retainedFiles={Retained} retainedBytes={RetainedBytes} coalescedTotal={Coalesced} throttledTotalMs={ThrottledMs:F0} sweepReadTotalMB={SweepReadMB}",
+                hashPrefix, logicalAddress, mode ?? "failed", queueMs.HasValue, bytes, ms, queueMs ?? 0, batch, pendingFlushSnapshots.Count, retained, retainedBytes, CoalescedFlushSnapshotCount, BfTreeService.SnapshotIOThrottledTime.TotalMilliseconds, BfTreeService.SnapshotReadBytes >> 20);
         }
 
         private static long TryGetFileLength(string path)
