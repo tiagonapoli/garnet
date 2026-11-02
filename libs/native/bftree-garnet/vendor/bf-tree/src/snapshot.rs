@@ -26,7 +26,7 @@ use thread_local::ThreadLocal;
 use crate::{
     circular_buffer::CircularBuffer,
     error::ConfigError,
-    fs::VfsImpl,
+    fs::{OverlayVfs, VfsImpl},
     mini_page_op::{full_page_snapshot_image, LeafOperations},
     nodes::{leaf_node::MiniPageNextLevel, LeafNode, INVALID_DISK_OFFSET},
     nodes::{InnerNode, InnerNodeBuilder, PageID, DISK_PAGE_SIZE, INNER_NODE_SIZE},
@@ -1245,7 +1245,24 @@ impl CPRSnapShotMgr {
     ) -> Result<BfTree, ConfigError> {
         let start = std::time::Instant::now();
         let mut stats = RecoveryStats::default();
-        let result = Self::new_from_snapshot_timed(recovery_snapshot_file_path, use_snapshot, buffer_ptr, buffer_size, wal_config, &mut stats);
+        let result = Self::new_from_snapshot_timed(recovery_snapshot_file_path, None, use_snapshot, buffer_ptr, buffer_size, wal_config, &mut stats);
+        stats.total_us = elapsed_us(start);
+        LAST_RECOVERY_STATS.with(|s| s.set(stats));
+        result
+    }
+
+    /// Recovers a disk-backed tree that reads the immutable snapshot at `base_path` in place and writes to a new`r
+    /// private file at `work_path` (which must not exist), so opening the tree never copies the snapshot.
+    pub fn new_from_snapshot_overlay(
+        base_path: impl AsRef<Path>,
+        work_path: impl AsRef<Path>,
+        use_snapshot: bool,
+        buffer_ptr: Option<*mut u8>,
+        buffer_size: Option<usize>,
+    ) -> Result<BfTree, ConfigError> {
+        let start = std::time::Instant::now();
+        let mut stats = RecoveryStats::default();
+        let result = Self::new_from_snapshot_timed(base_path, Some(work_path.as_ref()), use_snapshot, buffer_ptr, buffer_size, None, &mut stats);
         stats.total_us = elapsed_us(start);
         LAST_RECOVERY_STATS.with(|s| s.set(stats));
         result
@@ -1253,6 +1270,7 @@ impl CPRSnapShotMgr {
 
     fn new_from_snapshot_timed(
         recovery_snapshot_file_path: impl AsRef<Path>,
+        work_path: Option<&Path>,
         use_snapshot: bool,
         buffer_ptr: Option<*mut u8>,
         buffer_size: Option<usize>,
@@ -1326,10 +1344,13 @@ impl CPRSnapShotMgr {
         let config = Arc::new(bf_tree_config);
 
         // Start Bf-Tree re-construction using recovery_snapshot_file_path and the config
-        let recovery_snapshot_vfs = make_vfs(
-            &recovery_snapshot_file_backend,
-            recovery_snapshot_file_path.as_ref(),
-        );
+        let recovery_snapshot_vfs: Arc<dyn VfsImpl> = match work_path {
+            Some(work_path) if !config.cache_only => Arc::new(
+                OverlayVfs::open_overlay(recovery_snapshot_file_path.as_ref(), work_path)
+                    .map_err(|e| ConfigError::SnapshotFileInvalid(format!("overlay open failed: {e}")))?,
+            ),
+            _ => make_vfs(&recovery_snapshot_file_backend, recovery_snapshot_file_path.as_ref()),
+        };
 
         // Step 1: reconstruct inner nodes.
         let inner_start = std::time::Instant::now();
@@ -1715,6 +1736,17 @@ impl BfTree {
             buffer_size,
             wal,
         )
+    }
+
+    /// Recover a disk-backed BfTree that reads `base_path` in place and writes to a new private file at `work_path`
+    pub fn new_from_cpr_snapshot_overlay(
+        base_path: impl AsRef<Path>,
+        work_path: impl AsRef<Path>,
+        use_snapshot: bool,
+        buffer_ptr: Option<*mut u8>,
+        buffer_size: Option<usize>,
+    ) -> Result<BfTree, ConfigError> {
+        CPRSnapShotMgr::new_from_snapshot_overlay(base_path, work_path, use_snapshot, buffer_ptr, buffer_size)
     }
 
     /// Check if all threads are running in the next version of the current snapshot
@@ -2123,6 +2155,68 @@ mod tests {
         std::fs::remove_file(tmp_snapshot_file_path).unwrap();
     }
 
+    /// A tree opened over a snapshot through the copy-on-write overlay sees the snapshot, persists its own changes in
+    /// its next snapshot, and never writes to the snapshot it was opened from.
+    #[test]
+    fn overlay_recovery_reads_base_and_never_modifies_it() {
+        let dir = std::path::PathBuf::from(format!("target/overlay_recovery_{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = |i: usize| format!("key-{i:08}").into_bytes();
+        let value = |i: usize, generation: u8| vec![generation; 64 + i % 200];
+        let read = |tree: &BfTree, i: usize| {
+            let mut buf = vec![0u8; 512];
+            match tree.read(&key(i), &mut buf) {
+                LeafReadResult::Found(n) => Some(buf[..n as usize].to_vec()),
+                _ => None,
+            }
+        };
+
+        let mut config = Config::new(dir.join("data.bftree"), 64 * 1024);
+        config.storage_backend(crate::StorageBackend::Std);
+        config.use_snapshot(true);
+        let base = dir.join("base.bftree");
+        {
+            let tree = BfTree::with_config(config, None).unwrap();
+            for i in 0..20_000 {
+                assert!(matches!(tree.insert(&key(i), &value(i, 1)), crate::LeafInsertResult::Success));
+            }
+            tree.cpr_snapshot(&base);
+        }
+        let base_bytes = std::fs::read(&base).unwrap();
+
+        let work = dir.join("data.work");
+        let next = dir.join("next.bftree");
+        {
+            let tree = BfTree::new_from_cpr_snapshot_overlay(&base, &work, true, None, None).unwrap();
+            assert!(!work.exists() || cfg!(windows));
+            for i in 0..20_000 {
+                assert_eq!(read(&tree, i), Some(value(i, 1)), "key {i} before update");
+            }
+            for i in (0..20_000).step_by(2) {
+                assert!(matches!(tree.insert(&key(i), &value(i, 2)), crate::LeafInsertResult::Success));
+            }
+            for i in 20_000..30_000 {
+                assert!(matches!(tree.insert(&key(i), &value(i, 3)), crate::LeafInsertResult::Success));
+            }
+            tree.cpr_snapshot(&next);
+        }
+        assert!(crate::fs::overlay_stats().work_write_bytes > 0);
+        assert!(std::fs::read(&base).unwrap() == base_bytes, "the overlay wrote to its base");
+
+        let reopened = BfTree::new_from_cpr_snapshot(&next, false, None, None, None).unwrap();
+        for i in 0..30_000 {
+            let expected = if i >= 20_000 { value(i, 3) } else if i % 2 == 0 { value(i, 2) } else { value(i, 1) };
+            assert_eq!(read(&reopened, i), Some(expected), "key {i} after update");
+        }
+        drop(reopened);
+        let original = BfTree::new_from_cpr_snapshot(&base, false, None, None, None).unwrap();
+        for i in 0..30_000 {
+            assert_eq!(read(&original, i), (i < 20_000).then(|| value(i, 1)), "key {i} in base");
+        }
+        drop(original);
+        _ = std::fs::remove_dir_all(&dir);
+    }
     /// Testing snapshot for cache-only mode with std::thread
     #[test]
     fn cpr_snapshot_cache_only() {

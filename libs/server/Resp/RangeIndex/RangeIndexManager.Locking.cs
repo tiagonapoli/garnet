@@ -293,8 +293,8 @@ namespace Garnet.server
         /// <list type="bullet">
         /// <item><c>PostCopyToTail</c>-cold (compaction/CopyReadsToTail with disk source).</item>
         /// <item>RIPROMOTE <c>PostCopyUpdater</c>-cold (post-eviction or post-recovery first promote).</item>
-        /// <item><c>OnRecoverySnapshotRead</c> (above-FUA-at-checkpoint stubs) defers the copy from the
-        /// checkpoint snapshot to the first restore via <see cref="StageDeferredData"/>.</item>
+        /// <item><c>OnRecoverySnapshotRead</c> (above-FUA-at-checkpoint stubs) stages nothing; the restore
+        /// opens the checkpoint snapshot itself (<see cref="TreeEntry.StagingSource"/>).</item>
         /// </list></para>
         /// </remarks>
         private bool RestoreTree(
@@ -313,6 +313,43 @@ namespace Garnet.server
             finally
             {
                 _ = Interlocked.Add(ref phaseStats.RestoreTicks, Stopwatch.GetTimestamp() - start);
+            }
+        }
+
+        /// <summary>
+        /// Opens a pending entry's tree over its immutable contents — the checkpoint staging source, else <paramref name="dataPath"/> —
+        /// through a copy-on-write overlay, so activation never copies the tree and never writes to a file other trees or
+        /// snapshots share. The caller must hold the per-key exclusive lock.
+        /// </summary>
+        /// <returns><c>false</c> if no source file exists.</returns>
+        private bool TryOpenOverlay(TreeEntry entry, string dataPath, string hashPrefix, StorageBackendType storageBackend, out BfTreeService tree, out string baseSnapshot, out string baselineSnapshot, out BfTreeRecoveryStats stats)
+        {
+            while (true)
+            {
+                var staging = entry == null ? null : Volatile.Read(ref entry.StagingSource);
+                baseSnapshot = staging ?? dataPath;
+                baselineSnapshot = staging ?? (entry?.StagedFrom is { } staged && staged.Matches(dataPath) ? staged.Source : null);
+                if (File.Exists(baseSnapshot))
+                {
+                    try
+                    {
+                        tree = BfTreeService.RecoverFromCprSnapshotOverlay(baseSnapshot, LogOverlayWorkPath(hashPrefix), enableSnapshots: true, storageBackend, out stats);
+                        return true;
+                    }
+                    catch (InvalidOperationException) when (staging != null && !ReferenceEquals(staging, Volatile.Read(ref entry.StagingSource)))
+                    {
+                        // A checkpoint moved the staging source to its own snapshot before deleting the old one.
+                        continue;
+                    }
+                }
+                else if (staging != null && !ReferenceEquals(staging, Volatile.Read(ref entry.StagingSource)))
+                {
+                    continue;
+                }
+
+                tree = null;
+                stats = default;
+                return false;
             }
         }
 
@@ -357,30 +394,21 @@ namespace Garnet.server
                 else
                 {
                     var hashPrefix = HashKeyToPrefix(keySpan);
-                    var workingPath = LogDataPath(hashPrefix);
-                    var stageStart = Stopwatch.GetTimestamp();
+                    var dataPath = LogDataPath(hashPrefix);
+                    var discardStart = Stopwatch.GetTimestamp();
                     DiscardParkedTreeLocked(keyId, "restore");
-                    if (existing != null)
-                        StageDeferredData(existing, workingPath);
 
-                    if (!File.Exists(workingPath))
+                    var restoreStart = Stopwatch.GetTimestamp();
+                    var overlayBefore = BfTreeService.OverlayStats;
+                    if (!TryOpenOverlay(existing, dataPath, hashPrefix, (StorageBackendType)stub.StorageBackend, out var bfTree, out var baseSnapshot, out var baselineSnapshot, out var recoveryStats))
                     {
-                        // Should not happen in normal flow — pre-staging guarantees data.bftree
-                        // exists for any stub above FUA whose TreeHandle is 0. Assert in Debug;
-                        // LogWarning + return false in Release so the affected key surfaces
-                        // NOTFOUND rather than crashing the process.
+                        // Should not happen in normal flow — pre-staging guarantees data.bftree (or a checkpoint staging source)
+                        // exists for any stub above FUA whose TreeHandle is 0. Assert in Debug; LogWarning + return false in
+                        // Release so the affected key surfaces NOTFOUND rather than crashing the process.
                         GarnetAsserts.Assert(false, $"RestoreTree: data.bftree missing for {hashPrefix} — pre-stage invariant violated");
                         logger?.LogWarning("RestoreTree: data.bftree missing for {Hash} — pre-stage invariant violated", hashPrefix);
                         return false;
                     }
-
-                    var restoreStart = Stopwatch.GetTimestamp();
-                    var baselineSnapshot = existing?.StagedFrom is { } staged && staged.Matches(workingPath) ? staged.Source : null;
-                    var bfTree = BfTreeService.RecoverFromCprSnapshot(
-                        workingPath,
-                        enableSnapshots: true,
-                        (StorageBackendType)stub.StorageBackend,
-                        out var recoveryStats);
 
                     RegisterIndex(bfTree, keyHash, keySpan, baselineSnapshot);
                     _ = Interlocked.Add(ref phaseStats.OpenTicks, Stopwatch.GetTimestamp() - restoreStart);
@@ -395,7 +423,8 @@ namespace Garnet.server
                         return false;
                     }
                     nativePtr = winner.Tree.NativePtr;
-                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} lockWaitMs={LockWaitMs:F0} stageMs={StageMs:F0} openMs={OpenMs:F0} baseline={Baseline} native=[{NativeStats}]", hashPrefix, nativePtr, workingPath, lockWaitMs, Stopwatch.GetElapsedTime(stageStart, restoreStart).TotalMilliseconds, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds, baselineSnapshot != null, recoveryStats);
+                    var overlayAfter = BfTreeService.OverlayStats;
+                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} base={Base} lockWaitMs={LockWaitMs:F0} discardMs={DiscardMs:F0} openMs={OpenMs:F0} baseline={Baseline} overlayBaseReadMiB={BaseReadMiB:F1} native=[{NativeStats}]", hashPrefix, nativePtr, baseSnapshot, lockWaitMs, Stopwatch.GetElapsedTime(discardStart, restoreStart).TotalMilliseconds, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds, baselineSnapshot != null, (overlayAfter.BaseReadBytes - overlayBefore.BaseReadBytes) / 1048576.0, recoveryStats);
                 }
             }
             catch (Exception ex)
