@@ -298,7 +298,9 @@ namespace Garnet.server
             Span<byte> indexSpan)
         {
             nint nativePtr;
+            var lockStart = Stopwatch.GetTimestamp();
             rangeIndexLocks.AcquireExclusiveLock(keyHash, out var exclusiveLockToken);
+            var lockWaitMs = Stopwatch.GetElapsedTime(lockStart).TotalMilliseconds;
             try
             {
                 // Re-read stub under exclusive lock to check if another thread already restored.
@@ -330,6 +332,7 @@ namespace Garnet.server
                 {
                     var hashPrefix = HashKeyToPrefix(keySpan);
                     var workingPath = LogDataPath(hashPrefix);
+                    var stageStart = Stopwatch.GetTimestamp();
                     if (existing != null)
                         StageDeferredData(existing, workingPath);
 
@@ -349,7 +352,8 @@ namespace Garnet.server
                     var bfTree = BfTreeService.RecoverFromCprSnapshot(
                         workingPath,
                         enableSnapshots: true,
-                        (StorageBackendType)stub.StorageBackend);
+                        (StorageBackendType)stub.StorageBackend,
+                        out var recoveryStats);
 
                     RegisterIndex(bfTree, keyHash, keySpan, baselineSnapshot);
 
@@ -363,7 +367,7 @@ namespace Garnet.server
                         return false;
                     }
                     nativePtr = winner.Tree.NativePtr;
-                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} openMs={OpenMs:F0} baseline={Baseline}", hashPrefix, nativePtr, workingPath, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds, baselineSnapshot != null);
+                    logger?.LogInformation("RangeIndexSoakRestored hash={Hash} tree={Tree} file={File} lockWaitMs={LockWaitMs:F0} stageMs={StageMs:F0} openMs={OpenMs:F0} baseline={Baseline} native=[{NativeStats}]", hashPrefix, nativePtr, workingPath, lockWaitMs, Stopwatch.GetElapsedTime(stageStart, restoreStart).TotalMilliseconds, Stopwatch.GetElapsedTime(restoreStart).TotalMilliseconds, baselineSnapshot != null, recoveryStats);
                 }
             }
             catch (Exception ex)

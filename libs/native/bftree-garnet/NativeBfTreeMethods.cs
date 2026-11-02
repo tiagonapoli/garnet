@@ -162,6 +162,10 @@ namespace Garnet.server.BfTreeInterop
             byte use_snapshot,
             byte* buffer_ptr, nuint buffer_size);
 
+        /// <summary>Copies the phase timings of the calling thread's most recent snapshot recovery into <paramref name="stats"/>.</summary>
+        [LibraryImport(LibName)]
+        internal static partial void bftree_last_recovery_stats(BfTreeRecoveryStats* stats);
+
         /// <summary>
         /// Returns 1 if all threads have moved past the snapshot's version barrier,
         /// 0 otherwise, -1 on panic. Useful for assertions/diagnostics.
