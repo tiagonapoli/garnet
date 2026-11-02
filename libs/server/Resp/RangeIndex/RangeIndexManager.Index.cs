@@ -273,8 +273,8 @@ namespace Garnet.server
                     // Pending entry cleanup on eviction (no native tree to dispose). An activated entry belongs to a newer
                     // record (e.g. RestoreTree registered it before its RIRESTORE RMW moved the stub), so leave it alone.
                     var pendingKeyId = KeyId(key);
-                    if (liveIndexes.TryGetValue(pendingKeyId, out var pendingEntry) && pendingEntry.Tree == null)
-                        _ = liveIndexes.TryRemove(new KeyValuePair<Guid, TreeEntry>(pendingKeyId, pendingEntry));
+                    if (liveIndexes.TryGetValue(pendingKeyId, out var pendingEntry) && pendingEntry.Tree == null && liveIndexes.TryRemove(new KeyValuePair<Guid, TreeEntry>(pendingKeyId, pendingEntry)))
+                        DiscardStagingPrefetch(pendingEntry);
                     return;
                 }
 

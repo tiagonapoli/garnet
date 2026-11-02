@@ -85,12 +85,14 @@ namespace Garnet.server
 
         private FlushSnapshotScheduler FlushScheduler => LazyInitializer.EnsureInitialized(ref flushSnapshotScheduler, () => new FlushSnapshotScheduler(FlushSnapshotConcurrency));
 
-        /// <summary>Removes snapshot files a crash left half-written.</summary>
+        /// <summary>Removes snapshot and staging-prefetch files a crash left half-written or unused.</summary>
         private void DeleteInProgressSnapshots()
         {
             try
             {
                 foreach (var path in Directory.EnumerateFiles(riLogRoot, "*" + InProgressSuffix))
+                    File.Delete(path);
+                foreach (var path in Directory.EnumerateFiles(riLogRoot, "*" + StagingPrefetchSuffix))
                     File.Delete(path);
             }
             catch (Exception ex)
