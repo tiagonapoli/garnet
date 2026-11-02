@@ -140,6 +140,8 @@ namespace Garnet.cluster
                     break;
             }
             FlushConfig();
+            // Sign this replica's future checkpoints with the history it now follows, so a primary restart can reuse them instead of forcing a full resync
+            SetPrimaryReplicationId();
         }
 
         /// <summary>
