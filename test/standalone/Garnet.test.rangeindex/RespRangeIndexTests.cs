@@ -1737,6 +1737,158 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Verifies that recovery prefetches pending trees in the background and that first use renames the
+        /// prefetched copy into place instead of copying the checkpoint snapshot again.
+        /// </summary>
+        [Test]
+        public void RIStagingPrefetchIsConsumedOnFirstUseTest()
+        {
+            var keys = new[] { "pf0", "pf1", "pf2" };
+            var riLogRoot = RecoverPendingTreesForStagingPrefetch(keys);
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+
+            ClassicAssert.AreEqual(keys.Length, rim.BeginStagingPrefetch("test"));
+            ClassicAssert.IsTrue(rim.WaitForStagingPrefetchForTest(TimeSpan.FromSeconds(60)));
+            ClassicAssert.AreEqual(keys.Length, Directory.GetFiles(riLogRoot, "*" + RangeIndexManager.StagingPrefetchSuffix).Length);
+            ClassicAssert.IsEmpty(Directory.GetFiles(riLogRoot, "*.data.bftree"), "prefetch must not stage data.bftree itself");
+
+            using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+            var db = redis.GetDatabase(0);
+            foreach (var key in keys)
+                ClassicAssert.AreEqual($"v-{key}", (string)db.Execute("RI.GET", key, "field"));
+
+            ClassicAssert.AreEqual(keys.Length, rim.StagingPrefetchConsumedCount);
+            ClassicAssert.AreEqual(0, rim.StagingPrefetchDiscardedCount);
+            ClassicAssert.IsEmpty(Directory.GetFiles(riLogRoot, "*" + RangeIndexManager.StagingPrefetchSuffix));
+            ClassicAssert.AreEqual(keys.Length, Directory.GetFiles(riLogRoot, "*.data.bftree").Length);
+        }
+
+        /// <summary>
+        /// Verifies that first use of a tree whose prefetch has not started copies the snapshot itself rather than
+        /// waiting behind other prefetches, and that the prefetches already running are still consumed.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public void RIStagingPrefetchQueuedTreeFallsBackToCopyTest(System.Threading.CancellationToken cancellationToken)
+        {
+            var keys = new[] { "pfq0", "pfq1", "pfq2" };
+            var riLogRoot = RecoverPendingTreesForStagingPrefetch(keys);
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+
+            using var gate = new ManualResetEventSlim();
+            var started = new System.Collections.Concurrent.ConcurrentBag<string>();
+            rim.BeforeStagingPrefetchCopyForTest = hash =>
+            {
+                started.Add(hash);
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                ClassicAssert.AreEqual(keys.Length, rim.BeginStagingPrefetch("test"));
+                ClassicAssert.IsTrue(SpinWait.SpinUntil(() => started.Count >= RangeIndexManager.StagingPrefetchConcurrency, TimeSpan.FromSeconds(60)), "prefetch workers did not start");
+
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+                var db = redis.GetDatabase(0);
+                var queued = keys.Single(k => !started.Contains(RangeIndexManager.HashKeyToPrefix(System.Text.Encoding.ASCII.GetBytes(k))));
+                ClassicAssert.AreEqual($"v-{queued}", (string)db.Execute("RI.GET", queued, "field"));
+                ClassicAssert.AreEqual(0, rim.StagingPrefetchConsumedCount);
+                ClassicAssert.AreEqual(1, rim.StagingPrefetchDiscardedCount);
+
+                gate.Set();
+                ClassicAssert.IsTrue(rim.WaitForStagingPrefetchForTest(TimeSpan.FromSeconds(60)));
+                foreach (var key in keys)
+                    ClassicAssert.AreEqual($"v-{key}", (string)db.Execute("RI.GET", key, "field"));
+
+                ClassicAssert.AreEqual(keys.Length - 1, rim.StagingPrefetchConsumedCount);
+                ClassicAssert.IsEmpty(Directory.GetFiles(riLogRoot, "*" + RangeIndexManager.StagingPrefetchSuffix));
+            }
+            finally
+            {
+                gate.Set();
+                rim.BeforeStagingPrefetchCopyForTest = null;
+            }
+        }
+
+        /// <summary>
+        /// Verifies that AOF replay after checkpoint recovery prefetches the pending trees it touches and recovers
+        /// both checkpointed and replayed data without leaving prefetched copies behind.
+        /// </summary>
+        [Test]
+        public void RIAofReplayUsesStagingPrefetchTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true);
+            server.Start();
+
+            var keys = new[] { "pfa0", "pfa1", "pfa2" };
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                foreach (var key in keys)
+                {
+                    db.Execute("RI.CREATE", key, "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                    db.Execute("RI.SET", key, "field", $"v-{key}");
+                }
+
+                db.Execute("SAVE");
+                foreach (var key in keys)
+                    db.Execute("RI.SET", key, "tail", $"t-{key}");
+                db.Execute("COMMITAOF");
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            ClassicAssert.AreEqual(keys.Length, rim.StagingPrefetchConsumedCount + rim.StagingPrefetchDiscardedCount, "replay should take the prefetch of every tree it touches");
+            ClassicAssert.IsTrue(rim.WaitForStagingPrefetchForTest(TimeSpan.FromSeconds(60)));
+            ClassicAssert.IsEmpty(Directory.GetFiles(Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex"), "*" + RangeIndexManager.StagingPrefetchSuffix));
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                foreach (var key in keys)
+                {
+                    ClassicAssert.AreEqual($"v-{key}", (string)db.Execute("RI.GET", key, "field"));
+                    ClassicAssert.AreEqual($"t-{key}", (string)db.Execute("RI.GET", key, "tail"));
+                }
+            }
+        }
+
+        /// <summary>Creates one tree per key, checkpoints, and recovers without the AOF so every tree is left pending.</summary>
+        private string RecoverPendingTreesForStagingPrefetch(string[] keys)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                foreach (var key in keys)
+                {
+                    db.Execute("RI.CREATE", key, "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                    db.Execute("RI.SET", key, "field", $"v-{key}");
+                }
+
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+            var riLogRoot = Path.Combine(TestUtils.MethodTestDir, "Store", "rangeindex");
+            foreach (var file in Directory.GetFiles(riLogRoot, "*.data.bftree"))
+                File.Delete(file);
+
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, tryRecover: true);
+            server.Start();
+            return riLogRoot;
+        }
+
+        /// <summary>
         /// Verifies that post-checkpoint mutations are replayed from AOF after recovery.
         /// With AOF enabled, v+1 data IS replayed from AOF after checkpoint recovery.
         /// </summary>

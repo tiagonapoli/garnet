@@ -152,6 +152,12 @@ namespace Garnet.server
             /// <summary>Immutable snapshot that <c>data.bftree</c> was last staged from for this pending entry; null when unknown.</summary>
             public StagedCopy StagedFrom;
 
+            /// <summary>Background copy of <see cref="StagingSource"/>; owned by whoever clears this field.</summary>
+            public StagingPrefetch Prefetch;
+
+            /// <summary>Gets whether the entry was removed from <see cref="liveIndexes"/>.</summary>
+            public bool IsRetired => Volatile.Read(ref retired) != 0;
+
             /// <summary>
             /// Activates a pending entry with <paramref name="tree"/>, opened from an unmodified copy of
             /// <paramref name="baselineSnapshot"/> when it is non-null, so an unchanged tree's next snapshot can link that file.
@@ -652,6 +658,7 @@ namespace Garnet.server
             if (liveIndexes.TryRemove(keyId, out var entry))
             {
                 DrainEntryFlushSnapshots(entry, "unregister");
+                DiscardStagingPrefetch(entry);
                 entry.Retire();
                 ForgetTree(entry.Tree);
                 try { entry.Tree?.Dispose(); }
@@ -669,6 +676,7 @@ namespace Garnet.server
         {
             // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
             StopFlushSnapshots("store-reset");
+            StopStagingPrefetch("store-reset");
             try
             {
                 DiscardTrees();
@@ -716,6 +724,7 @@ namespace Garnet.server
             DisposeIncompleteStreamReassembly();
 
             StopFlushSnapshots("dispose");
+            StopStagingPrefetch("dispose");
             DisposeFlushScheduler();
 
             foreach (var kvp in liveIndexes)
@@ -878,6 +887,14 @@ namespace Garnet.server
             while (Volatile.Read(ref entry.StagingSource) is { } source)
             {
                 var copyStart = Stopwatch.GetTimestamp();
+                if (TryTakeStagingPrefetch(entry, source, dataPath))
+                {
+                    Volatile.Write(ref entry.StagingSource, null);
+                    entry.StagedFrom = StagedCopy.Describe(source, dataPath);
+                    logger?.LogInformation("RangeIndexSoakLazyStaged hash={Hash} bytes={Bytes} prefetched=true waitMs={Ms:F0}", entry.HashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
+                    continue;
+                }
+
                 try
                 {
                     File.Copy(source, dataPath, overwrite: true);
