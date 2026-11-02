@@ -566,15 +566,18 @@ namespace Garnet.server.BfTreeInterop
                 throw new InvalidOperationException("Failed to take CPR snapshot of BfTree.");
         }
 
-        /// <summary>Caps the bandwidth of all CPR snapshot writes in the process, in bytes per second; 0 removes the cap.</summary>
-        public static void SetSnapshotWriteRate(long bytesPerSecond)
+        /// <summary>Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.</summary>
+        public static void SetSnapshotIORate(long bytesPerSecond)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(bytesPerSecond);
-            NativeBfTreeMethods.bftree_set_snapshot_write_rate((ulong)bytesPerSecond);
+            NativeBfTreeMethods.bftree_set_snapshot_io_rate((ulong)bytesPerSecond);
         }
 
-        /// <summary>Gets the total time CPR snapshots in the process have slept on the snapshot write rate limit.</summary>
-        public static TimeSpan SnapshotWriteThrottledTime => TimeSpan.FromTicks((long)(NativeBfTreeMethods.bftree_snapshot_write_throttled_nanos() / 100));
+        /// <summary>Gets the total time CPR snapshots in the process have slept on the snapshot I/O rate limit.</summary>
+        public static TimeSpan SnapshotIOThrottledTime => TimeSpan.FromTicks((long)(NativeBfTreeMethods.bftree_snapshot_io_throttled_nanos() / 100));
+
+        /// <summary>Gets the total base-page bytes CPR snapshot sweeps in the process have read from tree files.</summary>
+        public static long SnapshotReadBytes => (long)NativeBfTreeMethods.bftree_snapshot_read_bytes();
 
         /// <summary>
         /// Recover a BfTree from a CPR snapshot file. Unified API for disk-backed and
