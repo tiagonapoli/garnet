@@ -1373,6 +1373,8 @@ namespace Tsavorite.core
                         // Ignore this record
                         touched = true;
                         info.SetInvalid();
+                        if (storeFunctions.CallOnFlush)
+                            storeFunctions.OnRecoveryDiscard(ref logRecord, pageStartLogicalAddress + recordOffset);
                         if (info.PreviousAddress < recoverFromAddress)
                         {
                             hei.entry.Set(info.PreviousAddress, hei.tag);

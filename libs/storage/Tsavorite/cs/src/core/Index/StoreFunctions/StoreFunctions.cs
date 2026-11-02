@@ -118,6 +118,9 @@ namespace Tsavorite.core
         public readonly void OnRecoverySnapshotRead(ref LogRecord logRecord) => recordTriggers.OnRecoverySnapshotRead(ref logRecord);
 
         /// <inheritdoc/>
+        public readonly void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress) => recordTriggers.OnRecoveryDiscard(ref logRecord, logicalAddress);
+
+        /// <inheritdoc/>
         public readonly void OnCheckpoint(CheckpointTrigger trigger, System.Guid checkpointToken) => recordTriggers.OnCheckpoint(trigger, checkpointToken);
 
         /// <inheritdoc/>

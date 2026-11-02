@@ -2554,6 +2554,65 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A tree flushed after the recovered checkpoint leaves a flush file newer than the record recovery restores; recovery
+        /// must delete it, or superseded-file cleanup and replication keep that orphan and drop the file the live record reads.
+        /// </summary>
+        [Test]
+        public void RIRecoveryDeletesFlushFilesAboveRecoveredTailTest()
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var hashPrefix = RangeIndexManager.HashKeyToPrefix("orphan"u8);
+            string checkpointedFile;
+            string orphanFile;
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                var store = server.Provider.StoreWrapper.store;
+                var riLogRoot = server.Provider.StoreWrapper.rangeIndexManager.RiLogRoot;
+
+                db.Execute("RI.CREATE", "orphan", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "orphan", "field", "checkpointed");
+                store.Log.FlushAndEvict(wait: true);
+                WaitForFlushSnapshots();
+                checkpointedFile = Directory.GetFiles(riLogRoot, $"{hashPrefix}.*.flush.bftree").Single();
+
+                db.Execute("SAVE");
+
+                // Promote the tree past the checkpoint tail, mutate it, and flush it again before the "crash".
+                ClassicAssert.AreEqual("checkpointed", (string)db.Execute("RI.GET", "orphan", "field"));
+                db.Execute("RI.SET", "orphan", "field", "lost");
+                store.Log.FlushAndEvict(wait: true);
+                WaitForFlushSnapshots();
+                orphanFile = Directory.GetFiles(riLogRoot, $"{hashPrefix}.*.flush.bftree").Single(f => f != checkpointedFile);
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            var rangeIndexManager = server.Provider.StoreWrapper.rangeIndexManager;
+            ClassicAssert.IsFalse(File.Exists(orphanFile), "Recovery must delete the flush file written after the recovered checkpoint");
+            ClassicAssert.IsTrue(File.Exists(checkpointedFile), "The flush file of the recovered record must survive recovery");
+
+            // The cluster cleanup keeps only the newest file per tree, which must be the one the recovered record reads.
+            rangeIndexManager.DeleteSupersededFlushFiles(long.MaxValue);
+            ClassicAssert.IsTrue(File.Exists(checkpointedFile), "Superseded-file cleanup must keep the file of the live record");
+            var replicated = rangeIndexManager.EnumerateFilesForReplication(Guid.NewGuid(), 0, long.MaxValue).Where(e => e.IsFlushFile).Select(e => Path.GetFileName(e.Path)).ToList();
+            CollectionAssert.Contains(replicated, Path.GetFileName(checkpointedFile), "Replication must send the file of the live record");
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                ClassicAssert.AreEqual("checkpointed", (string)db.Execute("RI.GET", "orphan", "field"));
+            }
+        }
+
+        /// <summary>
         /// A tree still tracked after a store reset (as before a replica recovers in place) must be discarded: recovery
         /// replaces its data.bftree, and a later restore would otherwise reuse the old native tree over the new file.
         /// </summary>

@@ -812,6 +812,7 @@ namespace Garnet.server
                     "The destination record at the tail will have no pending entry; subsequent RestoreTree " +
                     "will return NOTFOUND for the affected key. NOT falling back to any other flush file " +
                     "to avoid restoring an incorrect tree version.", snapshotPath);
+                DiscardStaleDataFile(keyBytes, keyHash, hashPrefix);
                 return;
             }
 
@@ -842,6 +843,36 @@ namespace Garnet.server
                 logger?.LogError(ex, "PreStageAndRegisterPending: copy/register failed for {Hash}; " +
                     "destination record will have no pending entry; subsequent RestoreTree will return NOTFOUND",
                     hashPrefix);
+            }
+            finally
+            {
+                rangeIndexLocks.ReleaseLock(lockToken);
+            }
+        }
+
+        /// <summary>
+        /// Deletes the working file of a tree whose source flush file is missing, unless a tree of the key is open or staged,
+        /// so that <c>RestoreTree</c> reports the key as not found instead of opening whatever an earlier tree left there.
+        /// </summary>
+        private void DiscardStaleDataFile(ReadOnlySpan<byte> keyBytes, long keyHash, string hashPrefix)
+        {
+            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
+            try
+            {
+                if (liveIndexes.TryGetValue(KeyId(keyBytes), out var entry) && entry != null)
+                    return;
+
+                DiscardParkedTreeLocked(KeyId(keyBytes), "source-missing");
+                var dataPath = LogDataPath(hashPrefix);
+                if (File.Exists(dataPath))
+                {
+                    File.Delete(dataPath);
+                    logger?.LogError("PreStageAndRegisterPending: deleted stale {Path} so the key is reported as not found", dataPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "PreStageAndRegisterPending: failed to delete the stale working file of {Hash}", hashPrefix);
             }
             finally
             {
@@ -1355,7 +1386,9 @@ namespace Garnet.server
         /// <para>A flush file is read only through the latest log record of its tree (RIPROMOTE, copy-to-tail), and
         /// recovering or replicating a checkpoint uses the newest file below that checkpoint's end address. When a newer
         /// file of the same tree exists below the end address of the oldest retained checkpoint, the older file is
-        /// therefore unreachable, even though log truncation would keep it until <c>BeginAddress</c> passes it.</para>
+        /// therefore unreachable, even though log truncation would keep it until <c>BeginAddress</c> passes it. This
+        /// holds because recovery deletes the files of records it discards (<see cref="DeleteDiscardedFlushFile"/>,
+        /// <see cref="DeleteFlushFilesAboveRecoveredTail"/>), so no file is newer than the live record of its tree.</para>
         /// </summary>
         /// <param name="oldestCheckpointEndAddress">The hybrid log end address of the oldest retained checkpoint.</param>
         public void DeleteSupersededFlushFiles(long oldestCheckpointEndAddress)
@@ -1394,6 +1427,53 @@ namespace Garnet.server
             catch (Exception ex)
             {
                 logger?.LogWarning(ex, "DeleteSupersededFlushFiles: enumeration failed under {Root}", riLogRoot);
+            }
+        }
+
+        /// <summary>Deletes the flush file of a record that recovery invalidated, so it can never be taken for the newest file of its tree.</summary>
+        /// <param name="key">The key of the invalidated record.</param>
+        /// <param name="logicalAddress">The address of the invalidated record.</param>
+        internal void DeleteDiscardedFlushFile(ReadOnlySpan<byte> key, long logicalAddress)
+        {
+            if (string.IsNullOrEmpty(riLogRoot))
+                return;
+
+            var hashPrefix = HashKeyToPrefix(key);
+            var path = LogFlushPath(hashPrefix, logicalAddress);
+            if (File.Exists(path) && TryDeleteFlushFile(path, out var bytes))
+                logger?.LogInformation("[RangeIndexFlushFilesDeleted] reason=recovery-undo hash={Hash} address=0x{Addr:x16} deleted=1 deletedBytes={Bytes}", hashPrefix, logicalAddress, bytes);
+        }
+
+        /// <summary>
+        /// Deletes every flush file at or above <paramref name="recoveredTailAddress"/>. Their records were written after the
+        /// recovered checkpoint and are not part of the recovered log, so the files are unreachable; left in place, a file
+        /// newer than the live record of its tree would be taken for that tree's newest file.
+        /// </summary>
+        /// <param name="recoveredTailAddress">The tail address of the hybrid log right after checkpoint recovery.</param>
+        public void DeleteFlushFilesAboveRecoveredTail(long recoveredTailAddress)
+        {
+            if (string.IsNullOrEmpty(riLogRoot) || !Directory.Exists(riLogRoot))
+                return;
+
+            try
+            {
+                var start = Stopwatch.GetTimestamp();
+                var deleted = 0;
+                long deletedBytes = 0;
+                foreach (var (path, _, addr) in new List<(string, string, long)>(EnumerateFlushFiles()))
+                {
+                    if (addr >= recoveredTailAddress && TryDeleteFlushFile(path, out var bytes))
+                    {
+                        deleted++;
+                        deletedBytes += bytes;
+                    }
+                }
+
+                LogFlushFileDeletion("recovery-tail", recoveredTailAddress, deleted, deletedBytes, start);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex, "DeleteFlushFilesAboveRecoveredTail: enumeration failed under {Root}", riLogRoot);
             }
         }
 
@@ -1541,7 +1621,8 @@ namespace Garnet.server
         ///
         /// <para>Only the highest-address flush file per key hash within the range is included. Older flush files belong to
         /// superseded stub records, which are never dereferenced: <see cref="PreStageAndRegisterPending"/> is only invoked
-        /// with the address of the live record (RIPROMOTE copy-update and compaction copy of live records).</para>
+        /// with the address of the live record (RIPROMOTE copy-update and compaction copy of live records), and recovery deletes
+        /// the files of the records it discards, so no file is newer than the live record of its tree.</para>
         /// </summary>
         /// <param name="checkpointToken">The checkpoint token (storeHlogToken) to locate
         /// per-checkpoint snapshots.</param>

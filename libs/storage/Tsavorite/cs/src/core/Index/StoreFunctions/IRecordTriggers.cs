@@ -132,6 +132,15 @@ namespace Tsavorite.core
         void OnRecoverySnapshotRead(ref LogRecord logRecord) { }
 
         /// <summary>
+        /// Called per record that recovery invalidates because it belongs to the version after the recovered checkpoint.
+        /// Any state that <see cref="OnFlush(ref LogRecord, long)"/> created for the record at <paramref name="logicalAddress"/>
+        /// is unreachable afterwards. Only called when <see cref="CallOnFlush"/> is true. Default implementation is a no-op.
+        /// </summary>
+        /// <param name="logRecord">The invalidated record.</param>
+        /// <param name="logicalAddress">Logical address of the invalidated record.</param>
+        void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress) { }
+
+        /// <summary>
         /// Called at checkpoint lifecycle points identified by <paramref name="trigger"/>.
         /// Default implementation is a no-op.
         /// </summary>
@@ -230,6 +239,10 @@ namespace Tsavorite.core
 
         /// <inheritdoc/>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress) { }
+
+        /// <inheritdoc/>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void OnCheckpoint(CheckpointTrigger trigger, Guid checkpointToken) { }
 
         /// <inheritdoc/>
@@ -299,6 +312,10 @@ namespace Tsavorite.core
         /// <inheritdoc/>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void OnRecoverySnapshotRead(ref LogRecord logRecord) { }
+
+        /// <inheritdoc/>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void OnRecoveryDiscard(ref LogRecord logRecord, long logicalAddress) { }
 
         /// <inheritdoc/>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
