@@ -335,6 +335,13 @@ namespace Garnet.server
                 }
             }
 
+            /// <summary>Accepts flush snapshots again after <see cref="CloseFlushChainAsync"/>, for a released tree that is reclaimed.</summary>
+            public void ReopenFlushChain()
+            {
+                lock (flushChainLock)
+                    flushChainClosed = false;
+            }
+
             public TreeEntry(BfTreeService tree, long keyHash, string hashPrefix)
             {
                 Tree = tree;
@@ -790,8 +797,14 @@ namespace Garnet.server
 
             var hashPrefix = HashKeyToPrefix(keyBytes);
             var snapshotPath = LogFlushPath(hashPrefix, srcFlushAddress);
-            WaitForFlushFile(KeyId(keyBytes), snapshotPath, "prestage");
             var keyHash = GarnetKeyComparer.StaticGetHashCode64((FixedSpanByteKey)PinnedSpanByte.FromPinnedSpan(keyBytes));
+
+            // An evicted tree whose flush snapshots are still queued holds this record's state; only a promote reclaims it,
+            // because its retrying read publishes the tree into the new record at once.
+            if (reuseParkedTree && TryReclaimDeferredTree(keyHash, KeyId(keyBytes), srcFlushAddress))
+                return;
+
+            WaitForFlushFile(KeyId(keyBytes), snapshotPath, "prestage");
 
             // The tree evicted from this record may still be open, holding the flush file's contents without a copy. Only a
             // promote reuses it: its retrying read publishes the tree into the new record at once.

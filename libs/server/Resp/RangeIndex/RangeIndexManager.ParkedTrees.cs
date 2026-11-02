@@ -97,27 +97,6 @@ namespace Garnet.server
         }
 
         /// <summary>
-        /// Parks a tree whose disposal waited for its flush snapshots, unless the key was registered again meanwhile.
-        /// </summary>
-        /// <returns><c>false</c> if the tree was not parked and must be disposed.</returns>
-        private bool TryParkReleasedTree(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
-        {
-            if (EvictedTreeGrace <= TimeSpan.Zero)
-                return false;
-
-            rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var lockToken);
-            try
-            {
-                // A registration since the eviction may have staged data.bftree over the evicted tree's file.
-                return !liveIndexes.ContainsKey(keyId) && TryParkEvictedTreeLocked(keyId, entry, tree, cacheBytes);
-            }
-            finally
-            {
-                rangeIndexLocks.ReleaseLock(lockToken);
-            }
-        }
-
-        /// <summary>
         /// Re-registers the parked tree of the key when it was evicted from the record flushed at <paramref name="flushAddress"/>,
         /// so that record's promote need not stage <paramref name="flushPath"/>. Any other parked tree of the key is disposed.
         /// </summary>

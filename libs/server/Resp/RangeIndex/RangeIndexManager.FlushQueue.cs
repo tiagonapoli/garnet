@@ -42,7 +42,28 @@ namespace Garnet.server
         private readonly ConcurrentDictionary<string, PendingFlushSnapshot> pendingFlushSnapshots = new();
 
         /// <summary>Evicted or deleted trees whose disposal waits for their pending flush snapshots, by key id.</summary>
-        private readonly ConcurrentDictionary<Guid, Task> pendingTreeReleases = new();
+        private readonly ConcurrentDictionary<Guid, DeferredTreeRelease> pendingTreeReleases = new();
+
+        private int deferredTreesReclaimed;
+
+        /// <summary>Gets the number of promotes that reclaimed an evicted tree before its flush snapshots finished.</summary>
+        internal int DeferredTreesReclaimedCount => Volatile.Read(ref deferredTreesReclaimed);
+
+        /// <summary>An evicted tree waiting for its flush snapshots; <see cref="Settled"/> and <see cref="Reclaimed"/> are guarded by the key's lock.</summary>
+        private sealed class DeferredTreeRelease(TreeEntry entry, BfTreeService tree, ulong cacheBytes)
+        {
+            public readonly TreeEntry Entry = entry;
+            public readonly BfTreeService Tree = tree;
+            public readonly ulong CacheBytes = cacheBytes;
+            public readonly long QueuedAt = Stopwatch.GetTimestamp();
+            private readonly TaskCompletionSource done = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public bool Settled;
+            public bool Reclaimed;
+
+            public Task Completion => done.Task;
+
+            public void Complete() => _ = done.TrySetResult();
+        }
 
         /// <summary>Flush files below this address are truncated; a snapshot finishing below it deletes its file.</summary>
         private long flushFilesTruncatedBelow;
@@ -197,10 +218,10 @@ namespace Garnet.server
             }
 
             // The evicted tree may still have data.bftree open; staging over it must wait for its disposal.
-            if (pendingTreeReleases.TryGetValue(keyId, out var release) && !release.IsCompleted)
+            if (pendingTreeReleases.TryGetValue(keyId, out var release) && !release.Completion.IsCompleted)
             {
                 waited++;
-                AsyncUtils.BlockingWait(release);
+                AsyncUtils.BlockingWait(release.Completion);
             }
 
             LogFlushDrainWait(reason, waited, start);
@@ -306,13 +327,14 @@ namespace Garnet.server
                     AsyncUtils.BlockingWait(snapshot);
             }
             foreach (var kvp in pendingTreeReleases)
-                AsyncUtils.BlockingWait(kvp.Value);
+                AsyncUtils.BlockingWait(kvp.Value.Completion);
         }
 
         /// <summary>
-        /// Hands an evicted tree with queued flush snapshots to its last snapshot, which disposes it when done. The
-        /// caller has removed the entry under the per-key exclusive lock, which drained every reader of the evicted
-        /// record, and readers of the evicted record now restore from disk, so no reader can still use the tree.
+        /// Hands an evicted tree with queued flush snapshots to its last snapshot, which disposes or parks it when done unless
+        /// a promote reclaims it first (<see cref="TryReclaimDeferredTree"/>). The caller has removed the entry under the
+        /// per-key exclusive lock, which drained every reader of the evicted record, and readers of the evicted record now
+        /// promote or restore it, so no reader can still use the tree.
         /// </summary>
         /// <returns><c>false</c> if no snapshot is pending, so the caller disposes the tree itself.</returns>
         private bool TryDeferReleaseToFlushSnapshots(Guid keyId, TreeEntry entry, BfTreeService tree, ulong cacheBytes)
@@ -321,28 +343,81 @@ namespace Garnet.server
             if (chain.IsCompleted)
                 return false;
 
-            var queuedAt = Stopwatch.GetTimestamp();
-            var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            pendingTreeReleases[keyId] = released.Task;
-            _ = chain.ContinueWith(prior =>
+            var release = new DeferredTreeRelease(entry, tree, cacheBytes);
+            pendingTreeReleases[keyId] = release;
+            _ = chain.ContinueWith(_ => SettleDeferredRelease(keyId, release), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+            return true;
+        }
+
+        /// <summary>Parks or disposes a deferred tree once its flush snapshots are written, unless a promote reclaimed it.</summary>
+        private void SettleDeferredRelease(Guid keyId, DeferredTreeRelease release)
+        {
+            var entry = release.Entry;
+            var outcome = "disposed";
+            try
             {
+                rangeIndexLocks.AcquireExclusiveLock(entry.KeyHash, out var lockToken);
                 try
                 {
-                    if (TryParkReleasedTree(keyId, entry, tree, cacheBytes))
-                        logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0} parked=true", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
-                    else
-                    {
-                        DisposeAndDeleteFilesDeferred(entry, tree, hashPrefix: null);
-                        logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0}", entry.HashPrefix, Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds);
-                    }
+                    release.Settled = true;
+                    if (release.Reclaimed)
+                        outcome = "reclaimed";
+                    // A registration since the eviction may have staged data.bftree over the evicted tree's file.
+                    else if (EvictedTreeGrace > TimeSpan.Zero && !liveIndexes.ContainsKey(keyId) && TryParkEvictedTreeLocked(keyId, entry, release.Tree, release.CacheBytes))
+                        outcome = "parked";
                 }
                 finally
                 {
-                    _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, Task>(keyId, released.Task));
-                    _ = released.TrySetResult();
+                    rangeIndexLocks.ReleaseLock(lockToken);
                 }
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-            return true;
+
+                if (outcome == "disposed")
+                    DisposeAndDeleteFilesDeferred(entry, release.Tree, hashPrefix: null);
+            }
+            finally
+            {
+                _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, DeferredTreeRelease>(keyId, release));
+                release.Complete();
+                logger?.LogInformation("[RangeIndexFlushReleaseDeferred] hash={Hash} waitMs={Ms:F0} outcome={Outcome}",
+                    entry.HashPrefix, Stopwatch.GetElapsedTime(release.QueuedAt).TotalMilliseconds, outcome);
+            }
+        }
+
+        /// <summary>
+        /// Re-registers the evicted tree of the key while its flush snapshots are still queued, when it was evicted from the
+        /// record flushed at <paramref name="flushAddress"/>, so that record's promote waits for neither the snapshot nor a copy.
+        /// The same <see cref="TreeEntry"/> returns, so its snapshot claim keeps serializing the queued snapshots with later ones,
+        /// and a snapshot cut after the promote is safe for the reasons a late flush snapshot is.
+        /// </summary>
+        /// <returns><c>true</c> if the tree is live again.</returns>
+        private bool TryReclaimDeferredTree(long keyHash, Guid keyId, long flushAddress)
+        {
+            if (pendingTreeReleases.IsEmpty || !pendingTreeReleases.TryGetValue(keyId, out var release))
+                return false;
+
+            rangeIndexLocks.AcquireExclusiveLock(keyHash, out var lockToken);
+            try
+            {
+                var entry = release.Entry;
+                if (release.Settled || release.Reclaimed || Volatile.Read(ref entry.LastFlushAddress) != flushAddress || liveIndexes.ContainsKey(keyId))
+                    return false;
+
+                DiscardParkedTreeLocked(keyId, "reclaimed");
+                entry.ReopenFlushChain();
+                if (!liveIndexes.TryAdd(keyId, entry))
+                    return false;
+
+                release.Reclaimed = true;
+                _ = pendingTreeReleases.TryRemove(new KeyValuePair<Guid, DeferredTreeRelease>(keyId, release));
+                _ = Interlocked.Increment(ref deferredTreesReclaimed);
+                logger?.LogInformation("[RangeIndexDeferredTreeReclaimed] hash={Hash} addr=0x{Addr:x16} deferredMs={Ms:F0} pendingSnapshots={Pending}",
+                    entry.HashPrefix, flushAddress, Stopwatch.GetElapsedTime(release.QueuedAt).TotalMilliseconds, pendingFlushSnapshots.Count);
+                return true;
+            }
+            finally
+            {
+                rangeIndexLocks.ReleaseLock(lockToken);
+            }
         }
 
         /// <summary>Closes <paramref name="entry"/> to new flush snapshots and waits for the queued ones.</summary>
