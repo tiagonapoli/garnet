@@ -747,6 +747,10 @@ namespace Garnet
         public int RangeIndexEvictedTreeGraceSeconds { get; set; }
 
         [IntRangeValidation(0, int.MaxValue, isRequired: false)]
+        [Option("range-index-parked-tree-memory-mb", Required = false, HelpText = "Most circular-buffer memory, in MiB, held by evicted Range Index trees kept open for reuse; the oldest beyond it are disposed")]
+        public int RangeIndexParkedTreeMemoryMB { get; set; }
+
+        [IntRangeValidation(0, int.MaxValue, isRequired: false)]
         [Option("vector-set-quantization-task-count", Required = false, HelpText = "Configure how many quantization tasks are used to optimize Vector Set operations (default: 0 uses the machine CPU count; maximum: the machine CPU count)")]
         public int VectorSetQuantizationTaskCount { get; set; }
 
@@ -1079,6 +1083,7 @@ namespace Garnet
                 VectorSetQuantizationTaskCount = VectorSetQuantizationTaskCount,
                 EnableRangeIndexPreview = EnableRangeIndexPreview,
                 RangeIndexEvictedTreeGraceSeconds = RangeIndexEvictedTreeGraceSeconds,
+                RangeIndexParkedTreeMemoryMB = RangeIndexParkedTreeMemoryMB,
             };
         }
 

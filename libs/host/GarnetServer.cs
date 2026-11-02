@@ -431,6 +431,7 @@ namespace Garnet
                 {
                     BackgroundCheckpointSnapshots = serverOptions.EnableAOF,
                     EvictedTreeGrace = TimeSpan.FromSeconds(serverOptions.RangeIndexEvictedTreeGraceSeconds),
+                    MaxParkedTreeBytes = (long)serverOptions.RangeIndexParkedTreeMemoryMB << 20,
                 };
             }
             var vectorManager = new VectorManager(
