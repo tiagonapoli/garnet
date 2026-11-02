@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -256,7 +257,11 @@ namespace Garnet.server
         {
             try
             {
-                await DoCompactionAsync(db, isFromCheckpoint: true, logger).ConfigureAwait(false);
+                // AOF replay waits for a replica checkpoint's version shift, so replicas compact after the checkpoint instead of before it.
+                var isReplica = StoreWrapper.serverOptions.EnableCluster && StoreWrapper.clusterProvider.IsReplica();
+                if (!isReplica)
+                    await DoCompactionAsync(db, isFromCheckpoint: true, logger).ConfigureAwait(false);
+
                 var lastSaveStoreTailAddress = db.Store.Log.TailAddress;
 
                 var full = db.LastSaveStoreTailAddress == 0 ||
@@ -265,6 +270,9 @@ namespace Garnet.server
                 var checkpointType = StoreWrapper.serverOptions.UseFoldOverCheckpoints ? CheckpointType.FoldOver : CheckpointType.Snapshot;
                 if (!await InitiateCheckpointAsync(db, full, checkpointType, logger).ConfigureAwait(false))
                     return CheckpointResult.Failed;
+
+                if (isReplica)
+                    await CompactAfterReplicaCheckpointAsync(db, logger).ConfigureAwait(false);
 
                 return CheckpointResult.Succeeded(full ? lastSaveStoreTailAddress : null);
             }
@@ -276,6 +284,25 @@ namespace Garnet.server
             }
 
             return CheckpointResult.Failed;
+        }
+
+        /// <summary>
+        /// Compacts a replica's log once its checkpoint has completed; a compaction failure does not fail the completed checkpoint.
+        /// </summary>
+        /// <param name="db">Database that was checkpointed</param>
+        /// <param name="logger">Logger</param>
+        private async ValueTask CompactAfterReplicaCheckpointAsync(GarnetDatabase db, ILogger logger)
+        {
+            var start = Stopwatch.GetTimestamp();
+            try
+            {
+                await DoCompactionAsync(db, isFromCheckpoint: true, logger).ConfigureAwait(false);
+                (logger ?? Logger)?.LogInformation("[ReplicaCheckpointCompaction] dbId={DbId} beginAddress={BeginAddress} ms={Ms:F0}", db.Id, db.Store.Log.BeginAddress, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                (logger ?? Logger)?.LogError(ex, "[ReplicaCheckpointCompaction] failed dbId={DbId} ms={Ms:F0}", db.Id, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            }
         }
 
         /// <summary>
@@ -474,6 +501,8 @@ namespace Garnet.server
                 // so replicas must compact here or their log BeginAddress never advances.
                 var isReplica = StoreWrapper.serverOptions.EnableCluster && StoreWrapper.clusterProvider.IsReplica();
                 if (isFromCheckpoint && StoreWrapper.serverOptions.CompactionFrequencySecs > 0 && !isReplica) return;
+                if (isFromCheckpoint)
+                    StoreWrapper.BeforeCheckpointCompactionForTest?.Invoke();
 
                 await DoCompactionAsync(db, StoreWrapper.runtimeConfig.GetInt(ServerConfigType.COMPACTION_MAX_SEGMENTS), 1,
                     StoreWrapper.runtimeConfig.GetEnum<LogCompactionType>(ServerConfigType.COMPACTION_TYPE),
