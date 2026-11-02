@@ -61,6 +61,9 @@ namespace Garnet.server
                     untilAddress.SetValueIf(appendOnlyFile.Log.TailAddress, -1);
 
                     maxReplayedStoreVersion = 0;
+                    if (untilAddress.AnyGreater(appendOnlyFile.Log.BeginAddress))
+                        _ = db.RangeIndexManager?.BeginStagingPrefetch("aof-replay");
+
                     var recordsReplayed = storeWrapper.serverOptions.MultiLogEnabled ? MultiLogRecover(appendOnlyFile, db.Id, untilAddress) : SingleLogRecover(appendOnlyFile, db.Id, 0, untilAddress);
 
                     _ = Interlocked.Add(ref total_number_of_replayed_records, recordsReplayed);
