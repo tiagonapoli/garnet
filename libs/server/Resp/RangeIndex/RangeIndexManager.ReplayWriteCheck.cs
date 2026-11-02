@@ -17,8 +17,9 @@ namespace Garnet.server
         /// <summary>Recent replayed fields remembered per index for <see cref="VerifyReplayedWrites"/>.</summary>
         internal const int ReplayWriteCheckCapacity = 128;
 
-        /// <summary>Replayed writes of an index between two re-reads of its remembered fields.</summary>
-        internal const int ReplayWriteCheckInterval = 32;
+        /// <summary>Minimum time between two periodic re-reads of an index's remembered fields; a tree change re-reads at once.</summary>
+        /// <remarks>Each re-read costs <see cref="ReplayWriteCheckCapacity"/> tree reads, so a per-op cadence slows replica apply.</remarks>
+        internal static readonly TimeSpan ReplayWriteCheckInterval = TimeSpan.FromSeconds(1);
 
         private readonly ConcurrentDictionary<string, ReplayWriteTracker> replayWriteTrackers = new();
         private long replayWriteLossCount;
@@ -35,7 +36,6 @@ namespace Garnet.server
         {
             public readonly Dictionary<string, (byte[] Field, byte[] Value, long At)> Expected = [];
             public readonly Queue<string> Order = new();
-            public int OpsSinceCheck;
             public nint LastCheckedTree;
             public long LastCheckAt;
         }
@@ -52,18 +52,20 @@ namespace Garnet.server
             lock (tracker)
             {
                 var fieldId = Convert.ToHexString(field);
-                if (!tracker.Expected.ContainsKey(fieldId))
+                if (!tracker.Expected.TryGetValue(fieldId, out var entry))
                 {
                     tracker.Order.Enqueue(fieldId);
                     while (tracker.Order.Count > ReplayWriteCheckCapacity)
                         _ = tracker.Expected.Remove(tracker.Order.Dequeue());
+
+                    entry.Field = GC.AllocateArray<byte>(field.Length, pinned: true);
+                    field.CopyTo(entry.Field);
                 }
 
-                tracker.Expected[fieldId] = (GC.AllocateArray<byte>(field.Length, pinned: true), isDelete ? null : value.ToArray(), Stopwatch.GetTimestamp());
-                field.CopyTo(tracker.Expected[fieldId].Field);
+                tracker.Expected[fieldId] = (entry.Field, isDelete ? null : value.ToArray(), Stopwatch.GetTimestamp());
 
                 // A different tree means the index was evicted and restored or promoted since the last check: re-read right away.
-                if (++tracker.OpsSinceCheck < ReplayWriteCheckInterval && treePtr == tracker.LastCheckedTree)
+                if (treePtr == tracker.LastCheckedTree && Stopwatch.GetElapsedTime(tracker.LastCheckAt) < ReplayWriteCheckInterval)
                     return;
 
                 VerifyReplayedWrites(key, tracker, treePtr);
@@ -74,7 +76,6 @@ namespace Garnet.server
         {
             var previousTree = tracker.LastCheckedTree;
             var sinceCheckMs = tracker.LastCheckAt == 0 ? 0 : Stopwatch.GetElapsedTime(tracker.LastCheckAt).TotalMilliseconds;
-            tracker.OpsSinceCheck = 0;
             tracker.LastCheckedTree = treePtr;
             tracker.LastCheckAt = Stopwatch.GetTimestamp();
             _ = Interlocked.Increment(ref replayWriteChecks);
