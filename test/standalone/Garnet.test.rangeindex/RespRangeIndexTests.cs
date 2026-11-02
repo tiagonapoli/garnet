@@ -2554,6 +2554,38 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// The synced copy used for tree snapshots must produce an exact copy across sync intervals, replace a destination that
+        /// is a hard link to an immutable snapshot without modifying that snapshot, and leave no destination when the source is missing.
+        /// </summary>
+        [Test]
+        public void RIFileCopyPreservesHardLinkedSnapshotTest()
+        {
+            var dir = Path.Combine(TestUtils.MethodTestDir, "copy");
+            Directory.CreateDirectory(dir);
+            var snapshot = Path.Combine(dir, "snapshot.bftree");
+            var source = Path.Combine(dir, "source.bftree");
+            var destination = Path.Combine(dir, "data.bftree");
+
+            var snapshotBytes = new byte[4096];
+            Array.Fill(snapshotBytes, (byte)0x5A);
+            File.WriteAllBytes(snapshot, snapshotBytes);
+            var sourceBytes = new byte[RangeIndexFileLinks.SyncIntervalBytes + 12345];
+            new Random(7).NextBytes(sourceBytes);
+            File.WriteAllBytes(source, sourceBytes);
+
+            ClassicAssert.IsTrue(RangeIndexFileLinks.TryReplaceWithHardLink(snapshot, destination), "Test requires hard links in the test directory");
+            RangeIndexFileLinks.Copy(source, destination, overwrite: true);
+
+            ClassicAssert.IsTrue(File.ReadAllBytes(destination).AsSpan().SequenceEqual(sourceBytes), "Copy must reproduce the source exactly");
+            ClassicAssert.IsTrue(File.ReadAllBytes(snapshot).AsSpan().SequenceEqual(snapshotBytes), "Overwriting must not write through a hard link to the snapshot");
+            Assert.Throws<IOException>(() => RangeIndexFileLinks.Copy(source, destination, overwrite: false));
+
+            var missingDestination = Path.Combine(dir, "missing.bftree");
+            Assert.Throws<FileNotFoundException>(() => RangeIndexFileLinks.Copy(Path.Combine(dir, "absent.bftree"), missingDestination, overwrite: true));
+            ClassicAssert.IsFalse(File.Exists(missingDestination), "A failed copy must not leave a destination behind");
+        }
+
+        /// <summary>
         /// A tree flushed after the recovered checkpoint leaves a flush file newer than the record recovery restores; recovery
         /// must delete it, or superseded-file cleanup and replication keep that orphan and drop the file the live record reads.
         /// </summary>

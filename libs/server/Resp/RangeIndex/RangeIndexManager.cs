@@ -776,7 +776,7 @@ namespace Garnet.server
         /// exclusive lock. Holding the exclusive lock here blocks <c>RestoreTree</c> until the
         /// file is fully written, preventing it from observing a partial <c>data.bftree</c>.</para>
         ///
-        /// <para>A direct <c>File.Copy(overwrite: true)</c> is sufficient under this lock — the
+        /// <para>A direct copy over <c>data.bftree</c> is sufficient under this lock — the
         /// exclusive lock serializes against any reader that would open <c>data.bftree</c>, and
         /// against other concurrent <c>PreStageAndRegisterPending</c> calls for the same key.
         /// A crash mid-copy is self-healing: post-recovery either <c>OnRecoverySnapshotRead</c>
@@ -827,7 +827,7 @@ namespace Garnet.server
             {
                 DiscardParkedTreeLocked(KeyId(keyBytes), "staged");
                 var copyStart = Stopwatch.GetTimestamp();
-                File.Copy(snapshotPath, dataPath, overwrite: true);
+                RangeIndexFileLinks.Copy(snapshotPath, dataPath, overwrite: true);
                 logger?.LogInformation("RangeIndexSoakPreStaged hash={Hash} bytes={Bytes} copyMs={Ms:F0}", hashPrefix, new FileInfo(dataPath).Length, Stopwatch.GetElapsedTime(copyStart).TotalMilliseconds);
 
                 var keyId = KeyId(keyBytes);
@@ -943,7 +943,7 @@ namespace Garnet.server
 
                 try
                 {
-                    File.Copy(source, dataPath, overwrite: true);
+                    RangeIndexFileLinks.Copy(source, dataPath, overwrite: true);
                 }
                 catch (FileNotFoundException) when (!ReferenceEquals(source, Volatile.Read(ref entry.StagingSource)))
                 {
@@ -969,9 +969,7 @@ namespace Garnet.server
                 var source = (entry == null ? null : Volatile.Read(ref entry.StagingSource)) ?? dataPath;
                 try
                 {
-                    if (overwrite)
-                        RangeIndexFileLinks.DeleteIfExists(destinationPath);
-                    File.Copy(source, destinationPath, overwrite);
+                    RangeIndexFileLinks.Copy(source, destinationPath, overwrite);
                     return true;
                 }
                 catch (FileNotFoundException)
@@ -1023,14 +1021,14 @@ namespace Garnet.server
         /// activated a live tree yet. ANOTHER stub for the same key may have a live tree in
         /// <see cref="liveIndexes"/> (RestoreTree ran against a different addr's stub) — workers
         /// using that tree would write to <c>data.bftree</c> concurrently, making
-        /// <c>File.Copy(data.bftree)</c> unsafe. So:
+        /// copying <c>data.bftree</c> unsafe. So:
         /// <list type="bullet">
         /// <item>Acquire per-key SHARED RI lock — blocks RestoreTree's X-lock from registering
         /// a new tree during our copy. Deadlock-free: S-vs-S compatible with hot path; no path
         /// holds an RI X-lock across a Tsavorite op that fires deferred OnFlush.</item>
         /// <item>If <see cref="liveIndexes"/> has a live tree under another stub → use
         /// CPR snapshot (concurrent-safe with workers).</item>
-        /// <item>Else → safe to <c>File.Copy(data.bftree → flushPath)</c>.</item>
+        /// <item>Else → safe to copy <c>data.bftree → flushPath</c>.</item>
         /// </list></para>
         ///
         /// <para>Sets <see cref="RangeIndexStub.IsFlushed"/> on the in-memory stub on success so

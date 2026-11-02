@@ -150,7 +150,7 @@ namespace Garnet.server
                 try
                 {
                     BeforeStagingPrefetchCopyForTest?.Invoke(prefetch.Entry.HashPrefix);
-                    File.Copy(prefetch.Source, prefetch.TempPath, overwrite: true);
+                    RangeIndexFileLinks.Copy(prefetch.Source, prefetch.TempPath, overwrite: true);
                     copied = true;
                     var bytes = new FileInfo(prefetch.TempPath).Length;
                     _ = Interlocked.Add(ref batch.Bytes, bytes);
