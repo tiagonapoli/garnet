@@ -3,6 +3,7 @@
 
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -24,6 +25,11 @@ namespace Garnet.cluster
         private readonly byte[] overflowProbe = new byte[1];
         private byte[] compressedBuffer = [];
         private FileStream stream;
+        private long unsyncedBytes;
+        private long syncTicks;
+
+        // Syncing periodically bounds the dirty page backlog, which otherwise stalls later direct I/O (such as the hlog transfer) for seconds
+        private const long SyncIntervalBytes = 64L << 20;
 
         public CheckpointFileType Type { get; }
         public Guid Token { get; }
@@ -105,6 +111,7 @@ namespace Garnet.cluster
             if (decodeBuffer == null)
             {
                 stream.Write(data);
+                SyncIfDue(data.Length);
                 return;
             }
 
@@ -112,14 +119,32 @@ namespace Garnet.cluster
             {
                 case RangeIndexFileDataSource.ChunkCodec.Raw:
                     stream.Write(data[1..]);
+                    SyncIfDue(data.Length - 1);
                     break;
                 case RangeIndexFileDataSource.ChunkCodec.Deflate:
-                    stream.Write(decodeBuffer, 0, Inflate(startAddress, data[1..]));
+                    var decoded = Inflate(startAddress, data[1..]);
+                    stream.Write(decodeBuffer, 0, decoded);
+                    SyncIfDue(decoded);
                     break;
                 default:
                     ExceptionUtils.ThrowException(new GarnetException($"RangeIndexFileDataSink: unknown chunk codec {data[0]} at {startAddress} for {filePath}"));
                     break;
             }
+        }
+
+        private void SyncIfDue(long written)
+        {
+            unsyncedBytes += written;
+            if (unsyncedBytes >= SyncIntervalBytes)
+                Sync();
+        }
+
+        private void Sync()
+        {
+            var start = Stopwatch.GetTimestamp();
+            stream.Flush(flushToDisk: true);
+            syncTicks += Stopwatch.GetTimestamp() - start;
+            unsyncedBytes = 0;
         }
 
         /// <summary>
@@ -153,10 +178,14 @@ namespace Garnet.cluster
         /// <inheritdoc/>
         public void Complete()
         {
-            stream?.Flush();
-            stream?.Dispose();
-            stream = null;
-            logger?.LogInformation("RangeIndexFileDataSink: completed writing {type} to {path}", Type, filePath);
+            if (stream != null)
+            {
+                // The replica recovers from these files once the sync completes, so they must be durable first
+                Sync();
+                stream.Dispose();
+                stream = null;
+            }
+            logger?.LogInformation("RangeIndexFileDataSink: completed writing {type} to {path} fsyncMs={fsyncMs}", Type, filePath, syncTicks * 1000 / Stopwatch.Frequency);
         }
 
         /// <inheritdoc/>
