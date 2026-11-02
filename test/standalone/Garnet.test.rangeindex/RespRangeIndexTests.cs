@@ -388,6 +388,14 @@ namespace Garnet.test
             server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true);
             server.Start();
 
+            // Replay restores the checkpointed tree before applying the three post-checkpoint ops
+            var replayStats = server.Provider.StoreWrapper.rangeIndexManager.ReadPhaseStats();
+            ClassicAssert.AreEqual(3, replayStats.Ops);
+            ClassicAssert.AreEqual(1, replayStats.Restores);
+            ClassicAssert.AreEqual(1, replayStats.StageCopies + replayStats.PrefetchTakes);
+            ClassicAssert.Greater(replayStats.OpenTicks, 0);
+            ClassicAssert.GreaterOrEqual(replayStats.StubReadTicks, replayStats.RestoreTicks);
+
             using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
             {
                 var db = redis.GetDatabase(0);
