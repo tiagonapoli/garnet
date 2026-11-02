@@ -291,6 +291,21 @@ namespace Garnet.server
         /// <param name="logAddressSequenceNumber"></param>
         public void ProcessAofRecordInternal(int virtualSublogIdx, byte* ptr, int length, bool asReplica, out bool isCheckpointStart, long logAddressSequenceNumber = 0)
         {
+            var start = Stopwatch.GetTimestamp();
+            ProcessAofRecordInternalCore(virtualSublogIdx, ptr, length, asReplica, out isCheckpointStart, logAddressSequenceNumber);
+            var elapsedMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            if (elapsedMs >= SlowReplayRecordThresholdMs)
+            {
+                var header = *(AofHeader*)ptr;
+                logger?.LogWarning("[AofReplaySlowRecord] ms={Ms:F0} op={Op} chunked={Chunked} length={Length} address={Address} asReplica={AsReplica}", elapsedMs, header.opType, header.IsChunked, length, logAddressSequenceNumber, asReplica);
+            }
+        }
+
+        /// <summary>Replayed records slower than this are logged with their type to attribute replica replay stalls.</summary>
+        internal const double SlowReplayRecordThresholdMs = 200;
+
+        void ProcessAofRecordInternalCore(int virtualSublogIdx, byte* ptr, int length, bool asReplica, out bool isCheckpointStart, long logAddressSequenceNumber)
+        {
             var header = *(AofHeader*)ptr;
 
             // Reject entries written by a newer Garnet version (higher AOF header version) rather than

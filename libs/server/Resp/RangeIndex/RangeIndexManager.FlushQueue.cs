@@ -58,7 +58,7 @@ namespace Garnet.server
 
         /// <summary>
         /// Whether checkpoint snapshots of live trees are written in the background rather than at
-        /// <see cref="CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
+        /// <see cref="Tsavorite.core.CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
         /// after the version shift, and replaying the AOF from the checkpoint over it converges for the same reason as a
         /// late flush snapshot.
         /// </summary>
