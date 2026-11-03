@@ -164,6 +164,8 @@ namespace Garnet.server
             if (appendOnlyFile.Log.RecoverLatestSequenceNumber(out var recoverUntilSequenceNumber))
             {
                 var beginAddress = appendOnlyFile.Log.BeginAddress;
+                using var recoveryAbort = new CancellationTokenSource();
+                SetReplayCancellationToken(recoveryAbort.Token);
                 var recoverDrivers = new RecoverLogDriver[untilAddress.Length];
                 for (var physicalSublogIdx = 0; physicalSublogIdx < untilAddress.Length; physicalSublogIdx++)
                 {
@@ -177,6 +179,7 @@ namespace Garnet.server
                         beginAddress[physicalSublogIdx],
                         untilAddress[physicalSublogIdx],
                         recoverUntilSequenceNumber,
+                        recoveryAbort,
                         logger);
                 }
 
@@ -192,6 +195,7 @@ namespace Garnet.server
                 {
                     for (var physicalSublogIdx = 0; physicalSublogIdx < untilAddress.Length; physicalSublogIdx++)
                         recoverDrivers[physicalSublogIdx]?.Dispose();
+                    SetReplayCancellationToken(default);
                 }
             }
 

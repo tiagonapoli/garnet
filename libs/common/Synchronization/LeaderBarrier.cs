@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 using System;
+using System.Diagnostics;
 using System.Threading;
 
 namespace Garnet.common
@@ -19,15 +20,15 @@ namespace Garnet.common
         ManualResetEventSlim releaseAll = new(false);
 
         /// <summary>
-        /// Attempts to signal arrival and wait for other participants within the specified timeout and cancellation
-        /// token.
+        /// Signals arrival; the first participant waits until every participant arrives, the others wait until the leader releases them.
         /// </summary>
         /// <param name="exception">When this method returns, contains the exception that occurred during the operation, or null if no exception
         /// was thrown.</param>
-        /// <param name="timeout">The maximum time the first participant waits for the others to arrive; a timeout is reported through <paramref name="exception"/>.</param>
-        /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
+        /// <param name="cancellationToken">Cancels the wait; the only way a wait ends before the barrier completes.</param>
+        /// <param name="slowWaitReportInterval">Interval at which the leader reports that it is still waiting for participants.</param>
+        /// <param name="onSlowWait">Invoked by the leader every <paramref name="slowWaitReportInterval"/> with the elapsed wait and the arrived participant count.</param>
         /// <returns>true if the caller is the first participant to arrive; otherwise, false.</returns>
-        public bool TrySignalOrWait(out Exception exception, TimeSpan timeout = default, CancellationToken cancellationToken = default)
+        public bool TrySignalOrWait(out Exception exception, CancellationToken cancellationToken = default, TimeSpan slowWaitReportInterval = default, Action<TimeSpan, int> onSlowWait = null)
         {
             exception = null;
             var newValue = Interlocked.Decrement(ref arrivedCount);
@@ -37,9 +38,15 @@ namespace Garnet.common
                 // First participant to arrive
                 if (newValue == participantCount - 1)
                 {
-                    // Wait only if there are more participants to arrive
-                    if (newValue > 0 && !releaseFirst.Wait(timeout, cancellationToken))
-                        exception = new TimeoutException($"{nameof(LeaderBarrier)} leader timed out after {timeout} waiting for {participantCount} participants to arrive");
+                    // Wait only if there are more participants to arrive. A slow participant is legitimate (for example a cold
+                    // larger-than-memory read), so the leader never gives up on its own; only cancellation ends the wait.
+                    if (newValue > 0)
+                    {
+                        var start = Stopwatch.GetTimestamp();
+                        var interval = onSlowWait != null && slowWaitReportInterval > TimeSpan.Zero ? slowWaitReportInterval : Timeout.InfiniteTimeSpan;
+                        while (!releaseFirst.Wait(interval, cancellationToken))
+                            onSlowWait(Stopwatch.GetElapsedTime(start), participantCount - Volatile.Read(ref arrivedCount));
+                    }
                     return true;
                 }
 

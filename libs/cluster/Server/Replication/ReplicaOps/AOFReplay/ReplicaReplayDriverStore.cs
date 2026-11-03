@@ -58,6 +58,8 @@ namespace Garnet.cluster
                 _lock.ReadLock();
                 if (disposed)
                     return;
+                // A faulted replay task cancels cts, which must also end waits on cross-task synchronized operations.
+                clusterProvider.replicationManager.AofProcessor.SetReplayCancellationToken(cts.Token);
                 replicaReplayDrivers[physicalSublogIdx] = new ReplicaReplayDriver(physicalSublogIdx, clusterProvider, networkSender, cts, logger);
                 _ = barrier?.SignalAndWait(clusterProvider.serverOptions.ReplicaSyncTimeout, cts.Token);
             }

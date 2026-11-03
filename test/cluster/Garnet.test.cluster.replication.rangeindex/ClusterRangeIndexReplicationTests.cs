@@ -275,6 +275,76 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
+        /// Parallel AOF recovery must wait for a slow replay task at a cross-task transaction barrier instead of timing out, and must
+        /// never report success after a replay task fault: either would leave the rest of the log unapplied on the recovered node.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexParallelRecoveryWaitsForSlowReplayTaskAtTransactionBarrier()
+        {
+            const int replayTaskCount = 4;
+            const int replicaSyncTimeoutSeconds = 1;
+            context.CreateInstances(1, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true, replayTaskCount: replayTaskCount, replicaSyncTimeout: replicaSyncTimeoutSeconds);
+            context.CreateConnection();
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.AddDelSlotsRange(0, [(0, 16383)], true, context.logger));
+            context.clusterTestUtils.BumpEpoch(0, logger: context.logger);
+
+            // The transaction spans the task that replays the tree write and another task, which reaches the barrier first.
+            static int ReplayTask(string key) => (int)((ulong)Garnet.server.GarnetLog.HASH(Encoding.ASCII.GetBytes(key)) % replayTaskCount);
+            var treeTask = ReplayTask("idx1");
+            var keys = Enumerable.Range(0, 256).Select(i => $"{{txn}}k{i}").ToArray();
+            var sameTaskKey = keys.First(k => ReplayTask(k) == treeTask);
+            var otherTaskKey = keys.First(k => ReplayTask(k) != treeTask);
+
+            var endpoint = (IPEndPoint)context.endpoints[0];
+            PopulateRangeIndex(0, "idx1", 1);
+            using (var client = context.clusterTestUtils.CreateGarnetClientSession(0))
+            {
+                client.Connect();
+                ClassicAssert.AreEqual("OK", await client.ExecuteAsync("MULTI"));
+                ClassicAssert.AreEqual("QUEUED", await client.ExecuteAsync("SET", sameTaskKey, "txn"));
+                ClassicAssert.AreEqual("QUEUED", await client.ExecuteAsync("SET", otherTaskKey, "txn"));
+                _ = await client.ExecuteForArrayAsync("EXEC");
+            }
+            var after = Enumerable.Range(0, 32).Select(i => $"after{i}").ToArray();
+            foreach (var key in after)
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(endpoint, "SET", [key, "1"], logger: context.logger));
+
+            context.nodes[0].Dispose(false);
+
+            const ExceptionInjectionType pause = ExceptionInjectionType.RangeIndex_Replay_Pause_Before_Set;
+            ExceptionInjectionHelper.EnableException(pause);
+            try
+            {
+                // Recovery parks the tree write while the other participant waits at the transaction barrier for longer than the sync timeout.
+                var restart = Task.Run(() =>
+                {
+                    context.nodes[0] = context.CreateInstance(context.clusterTestUtils.GetEndPoint(0), disableObjects: true, tryRecover: true, enableAOF: true,
+                        timeout: timeout, cleanClusterConfig: false, enableRangeIndexPreview: true, replayTaskCount: replayTaskCount, replicaSyncTimeout: replicaSyncTimeoutSeconds);
+                    context.nodes[0].Start();
+                });
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && ExceptionInjectionHelper.IsEnabled(pause) && !restart.IsCompleted)
+                    await Task.Delay(10);
+                ClassicAssert.IsFalse(ExceptionInjectionHelper.IsEnabled(pause), "recovery must park on the tree write");
+                await Task.Delay(TimeSpan.FromSeconds(3 * replicaSyncTimeoutSeconds));
+                ExceptionInjectionHelper.EnableException(pause);
+                await restart.WaitAsync(TimeSpan.FromSeconds(60));
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(pause);
+            }
+
+            context.CreateConnection();
+            ValidateRangeIndex(0, "idx1", 1);
+            ClassicAssert.AreEqual("txn", (string)context.clusterTestUtils.Execute(endpoint, "GET", [sameTaskKey], logger: context.logger));
+            ClassicAssert.AreEqual("txn", (string)context.clusterTestUtils.Execute(endpoint, "GET", [otherTaskKey], logger: context.logger));
+            foreach (var key in after)
+                ClassicAssert.AreEqual("1", (string)context.clusterTestUtils.Execute(endpoint, "GET", [key], logger: context.logger), $"{key} must be recovered");
+        }
+
+        /// <summary>
         /// A replica evicting a tree whose flush snapshots are still queued must keep applying replicated writes to it.
         /// </summary>
         [Test, Order(0)]
