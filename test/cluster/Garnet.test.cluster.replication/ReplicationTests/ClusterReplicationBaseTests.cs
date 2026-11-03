@@ -625,6 +625,95 @@ namespace Garnet.test.cluster
 
         [Test]
         [Category("REPLICATION")]
+        public async Task ClusterSRPrimaryCrashMidCheckpointReusesNewerReplicaCheckpoint()
+        {
+            // A primary killed during a checkpoint that its replica already completed recovers an older checkpoint; the
+            // replica's newer checkpoint still matches the primary's AOF, so the resync must not transfer a checkpoint.
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+            const ExceptionInjectionType CheckpointPause = ExceptionInjectionType.Checkpoint_Pause_At_Flush_Begin;
+            const int primaryIndex = 0;
+            const int replicaIndex = 1;
+            context.CreateInstances(2, tryRecover: true, enableAOF: true, useTLS: useTLS, asyncReplay: asyncReplay, clusterReplicationReestablishmentTimeout: 1, sublogCount: sublogCount);
+            context.CreateConnection(useTLS: useTLS);
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            Dictionary<string, int> kvPairs = [];
+            context.PopulatePrimaryRMW(ref kvPairs, keyLength: 32, kvpairCount: 500, primaryIndex: primaryIndex, addCount: 3);
+            var primaryLastSaveTime = context.clusterTestUtils.LastSave(primaryIndex, logger: context.logger);
+            var replicaLastSaveTime = context.clusterTestUtils.LastSave(replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(primaryIndex, primaryLastSaveTime);
+            context.clusterTestUtils.WaitUntilNextSecond(replicaIndex, replicaLastSaveTime);
+            context.clusterTestUtils.Checkpoint(primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(primaryIndex, primaryLastSaveTime, logger: context.logger);
+            context.clusterTestUtils.WaitCheckpoint(replicaIndex, replicaLastSaveTime, logger: context.logger);
+
+            // Writes covered only by the checkpoint the primary will lose
+            context.PopulatePrimaryRMW(ref kvPairs, keyLength: 32, kvpairCount: 500, primaryIndex: primaryIndex, addCount: 2);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            // Park the primary's next checkpoint after its markers reach the AOF, let the replica complete it, and snapshot
+            // the primary's files: this is the on-disk state of a primary killed mid-checkpoint.
+            replicaLastSaveTime = context.clusterTestUtils.LastSave(replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(replicaIndex, replicaLastSaveTime);
+            var nodeDir = context.nodeOptions[primaryIndex].CheckpointDir;
+            var crashDir = nodeDir.TrimEnd(Path.DirectorySeparatorChar) + "-crash";
+            Task<RedisResult> bgsave;
+            ExceptionInjectionHelper.EnableException(CheckpointPause);
+            try
+            {
+                bgsave = context.clusterTestUtils.GetServer(primaryIndex).ExecuteAsync("BGSAVE");
+                await ExceptionInjectionHelper.WaitOnClearAsync(CheckpointPause).WaitAsync(TimeSpan.FromSeconds(30));
+                _ = await context.nodes[primaryIndex].Store.CommitAOFAsync(CancellationToken.None);
+                context.clusterTestUtils.WaitCheckpoint(replicaIndex, replicaLastSaveTime, logger: context.logger);
+                CopyDirectory(nodeDir, crashDir);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(CheckpointPause);
+            }
+
+            HashSet<string> CheckpointTokens(int nodeIndex)
+                => [.. Directory.EnumerateDirectories(Path.Join(context.TestFolder, context.clusterTestUtils.GetEndPoint(nodeIndex).Port.ToString()), "*", SearchOption.AllDirectories).Select(Path.GetFileName).Where(name => Guid.TryParse(name, out _))];
+
+            context.nodes[primaryIndex].Dispose(false);
+            context.nodes[primaryIndex] = null;
+            _ = await Task.WhenAny(bgsave, Task.Delay(TimeSpan.FromSeconds(30)));
+            _ = bgsave.Exception;
+            Directory.Delete(nodeDir, recursive: true);
+            Directory.Move(crashDir, nodeDir);
+            var primaryTokens = CheckpointTokens(primaryIndex);
+
+            context.RestartNode(primaryIndex);
+            context.CreateConnection(useTLS: useTLS);
+
+            Dictionary<string, int> newKvPairs = [];
+            context.PopulatePrimaryRMW(ref newKvPairs, keyLength: 32, kvpairCount: 100, primaryIndex: primaryIndex, addCount: 4);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+            context.clusterTestUtils.WaitForReplicaRecovery(replicaIndex, context.logger);
+            foreach (var (key, value) in newKvPairs)
+                kvPairs[key] = value;
+            context.ValidateKVCollectionAgainstReplica(ref kvPairs, replicaIndex);
+            context.ValidateKVCollectionAgainstReplica(ref kvPairs, primaryIndex);
+
+            ClassicAssert.IsFalse(CheckpointTokens(replicaIndex).Overlaps(primaryTokens), "the replica resynced by receiving the primary's older checkpoint instead of reusing its newer one");
+
+            static void CopyDirectory(string source, string destination)
+            {
+                _ = Directory.CreateDirectory(destination);
+                foreach (var file in Directory.GetFiles(source))
+                {
+                    using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using var output = File.Create(Path.Combine(destination, Path.GetFileName(file)));
+                    input.CopyTo(output);
+                }
+
+                foreach (var directory in Directory.GetDirectories(source))
+                    CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
+            }
+        }
+
+        [Test]
+        [Category("REPLICATION")]
         public async Task ClusterSRReplicaKeepsWritesAfterPrimaryFallbackRecovery()
         {
             ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
