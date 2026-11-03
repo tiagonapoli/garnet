@@ -142,6 +142,10 @@ namespace Garnet.server.BfTreeInterop
             nint tree,
             byte* snapshot_path, int snapshot_path_len);
 
+        /// <summary>Like <see cref="bftree_cpr_snapshot"/>, but stops once <paramref name="abort_word"/> differs from <paramref name="generation"/>; returns 1 if aborted.</summary>
+        [LibraryImport(LibName)]
+        internal static partial int bftree_cpr_snapshot_abortable(nint tree, byte* snapshot_path, int snapshot_path_len, long* abort_word, long generation);
+
         /// <summary>Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.</summary>
         [LibraryImport(LibName)]
         internal static partial void bftree_set_snapshot_io_rate(ulong bytes_per_sec);

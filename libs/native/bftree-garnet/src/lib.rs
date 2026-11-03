@@ -413,6 +413,31 @@ pub unsafe extern "C" fn bftree_cpr_snapshot(tree: *mut BfTree, snapshot_path: *
     }
 }
 
+/// Like `bftree_cpr_snapshot`, but the sweep stops once the 64-bit word at `abort_word` differs from `generation`, which
+/// the caller reads before deciding to snapshot so an abort issued in between is not missed. Returns 0 on success, 1 if
+/// aborted (the file is incomplete and must be discarded), -1 on panic or invalid arguments.
+///
+/// # Safety
+/// As for `bftree_cpr_snapshot`; `abort_word` must be an 8-byte aligned word that stays valid for the whole call.
+#[no_mangle]
+pub unsafe extern "C" fn bftree_cpr_snapshot_abortable(tree: *mut BfTree, snapshot_path: *const u8, snapshot_path_len: i32, abort_word: *const u64, generation: u64) -> i32 {
+    if snapshot_path.is_null() || snapshot_path_len <= 0 || abort_word.is_null() {
+        return -1;
+    }
+    let snap_bytes = slice::from_raw_parts(snapshot_path, snapshot_path_len as usize);
+    let snap_str = match std::str::from_utf8(snap_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let tree = &*tree;
+    let word = std::sync::atomic::AtomicU64::from_ptr(abort_word as *mut u64);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tree.cpr_snapshot_abortable(Path::new(snap_str), &|| word.load(std::sync::atomic::Ordering::Relaxed) != generation))) {
+        Ok(true) => 0,
+        Ok(false) => 1,
+        Err(_) => -1,
+    }
+}
+
 /// Caps the I/O of all CPR snapshot sweeps in the process (base pages read plus bytes written), in bytes per second; 0 removes the cap.
 #[no_mangle]
 pub extern "C" fn bftree_set_snapshot_io_rate(bytes_per_sec: u64) {
