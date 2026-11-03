@@ -131,7 +131,6 @@ namespace Garnet.cluster
             replayBatchContext.RecordLength = recordLength;
             replayBatchContext.CurrentAddress = currentAddress;
             replayBatchContext.NextAddress = nextAddress;
-            replayBatchContext.IsProtected = isProtected;
 
             // Rendezvous 1 (ready): the page context above is published before the leader arrives, so
             // once this returns every replay task has met at the barrier and may scan the page.
@@ -281,7 +280,6 @@ namespace Garnet.cluster
                 replayBatchContext.RecordLength = 0;
                 replayBatchContext.CurrentAddress = 0;
                 replayBatchContext.NextAddress = 0;
-                replayBatchContext.IsProtected = false;
                 barrier.SignalWorkReadyWait(serverOptions.ReplicaSyncTimeout, cts.Token);
                 barrier.SignalWorkCompletedWait(serverOptions.ReplicaSyncTimeout, cts.Token);
             }

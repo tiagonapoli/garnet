@@ -274,7 +274,40 @@ namespace Garnet.test.cluster.MultiLogTests
             context.SimpleValidateDB(disableObjects: true, replicaNodeIndex);
         }
 
+        /// <summary>
+        /// Background (async) replica replay scans in-memory AOF pages under epoch protection; parallel replay tasks must still
+        /// acquire the epoch themselves when committing fast-commit metadata records, otherwise the replica fails fast.
+        /// </summary>
         [Test, Order(4)]
+        [Category("REPLICATION")]
+        public void ClusterParallelAsyncReplayCommitsMetadataTest()
+        {
+            var primaryNodeIndex = 0;
+            var replicaNodeIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, CommitFrequencyMs: 10, useTLS: useTLS, asyncReplay: true, sublogCount: 1, replayTaskCount: TestReplayTaskCount);
+            context.CreateConnection(useTLS: useTLS);
+
+            context.clusterTestUtils.AddDelSlotsRange(primaryNodeIndex, [(0, 16383)], addslot: true, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(primaryNodeIndex, primaryNodeIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaNodeIndex, replicaNodeIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryNodeIndex, replicaNodeIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(primaryNodeIndex, replicaNodeIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(replicaNodeIndex, primaryNodeIndex, logger: context.logger);
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex, primaryNodeIndex, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaRecovery(replicaNodeIndex, logger: context.logger);
+
+            context.kvPairs = [];
+            for (var round = 0; round < 20; round++)
+            {
+                context.SimplePopulateDB(disableObjects: true, keyLength: 16, kvpairCount: 50, primaryNodeIndex);
+                System.Threading.Thread.Sleep(20);
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryNodeIndex, replicaNodeIndex);
+            context.SimpleValidateDB(disableObjects: true, replicaNodeIndex);
+        }
+
+        [Test, Order(5)]
         [Category("REPLICATION")]
         public void ClusterParallelReplicationUpgrade([Values] bool upgradeFromSingleLog, [Values] bool disableObjects)
         {
