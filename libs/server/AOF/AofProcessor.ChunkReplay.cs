@@ -50,7 +50,7 @@ namespace Garnet.server
             else if (usingSinglePhysicalLogMultiReplay)
                 storeWrapper.appendOnlyFile.readConsistencyManager.UpdateVirtualSublogKeySequenceNumber(virtualSublogIdx, acc.keyHash, logAddressSequenceNumber);
 
-            return ReplayOp(virtualSublogIdx, acc, replayContext, stringContext, objectContext, unifiedContext, asReplica);
+            return ReplayOp(virtualSublogIdx, acc, replayContext, stringContext, objectContext, unifiedContext, asReplica, logAddressSequenceNumber);
         }
 
         private bool ReplayOp<TStringContext, TObjectContext, TUnifiedContext>(
@@ -60,7 +60,8 @@ namespace Garnet.server
                 TStringContext stringContext,
                 TObjectContext objectContext,
                 TUnifiedContext unifiedContext,
-                bool asReplica)
+                bool asReplica,
+                long logAddressSequenceNumber)
             where TStringContext : ITsavoriteContext<FixedSpanByteKey, StringInput, StringOutput, long, MainSessionFunctions, StoreFunctions, StoreAllocator>
             where TObjectContext : ITsavoriteContext<FixedSpanByteKey, ObjectInput, ObjectOutput, long, ObjectSessionFunctions, StoreFunctions, StoreAllocator>
             where TUnifiedContext : ITsavoriteContext<FixedSpanByteKey, UnifiedInput, UnifiedOutput, long, UnifiedSessionFunctions, StoreFunctions, StoreAllocator>
@@ -74,7 +75,7 @@ namespace Garnet.server
             {
                 // StoreRMW can queue vector operations onto different threads; everything else must wait for those to complete first.
                 // Skip (1) entries from a prior checkpoint; buffer (2) future entries in the fuzzy region.
-                var skip = ShouldSkipRecord(virtualSublogIdx, replayContext.inFuzzyRegion, acc, asReplica, out isBuffered);
+                var skip = ShouldSkipRecord(virtualSublogIdx, replayContext.inFuzzyRegion, acc, asReplica, logAddressSequenceNumber, out isBuffered);
                 if (!BeginReplayOp(replayContext, acc.opType, skip, out var bufferPtr, out var bufferLength))
                     return false;
 
@@ -138,11 +139,12 @@ namespace Garnet.server
         /// <param name="inFuzzyRegion"></param>
         /// <param name="acc"></param>
         /// <param name="asReplica"></param>
+        /// <param name="logAddressSequenceNumber">Log address sequence number of the record, kept with it if buffered.</param>
         /// <param name="isBuffered">True if the record was added to the fuzzy-region buffer for later replay, which takes
         /// ownership of it; the caller must then neither dispatch nor release it.</param>
         /// <returns>True if the caller must not dispatch this record now.</returns>
         /// <exception cref="GarnetException"></exception>
-        bool ShouldSkipRecord(int sublogIdx, bool inFuzzyRegion, ChunkedAccumulator acc, bool asReplica, out bool isBuffered)
+        bool ShouldSkipRecord(int sublogIdx, bool inFuzzyRegion, ChunkedAccumulator acc, bool asReplica, long logAddressSequenceNumber, out bool isBuffered)
         {
             isBuffered = false;
 
@@ -160,7 +162,7 @@ namespace Garnet.server
             if (acc.storeVersion <= storeWrapper.store.CurrentVersion)
                 return false;
 
-            aofReplayCoordinator.AddFuzzyRegionOperation(sublogIdx, acc);
+            aofReplayCoordinator.AddFuzzyRegionOperation(sublogIdx, acc, logAddressSequenceNumber);
             isBuffered = true;
             return true;
         }

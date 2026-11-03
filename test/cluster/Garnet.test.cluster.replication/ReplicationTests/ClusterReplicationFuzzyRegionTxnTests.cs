@@ -8,6 +8,7 @@ using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Garnet.common;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using StackExchange.Redis;
@@ -74,6 +75,63 @@ namespace Garnet.test.cluster
             // checkpoint's fuzzy region and were therefore buffered for replay at the end marker.
             AssertKeys(ReplicaIndex, expected, "replica lost transaction increments");
         }
+
+#if DEBUG
+        /// <summary>
+        /// A replica replaying with several tasks over a single physical log uses each record's log address as its
+        /// read-consistency sequence number. Plain writes buffered in a fuzzy region must keep that address so that
+        /// replaying them at the end marker neither fails the replica nor loses them.
+        /// </summary>
+        [Test]
+        [Category("REPLICATION")]
+        public async Task WritesBufferedInFuzzyRegionReplayOnParallelReplayReplicaAsync()
+        {
+            ClusterTestUtils.IgnoreIfExceptionInjectionDisabled();
+
+            const ExceptionInjectionType Pause = ExceptionInjectionType.Replication_Primary_Pause_Before_Checkpoint_End_Marker;
+            const int KeyCount = 64;
+
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, replayTaskCount: 4);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            var lastSave = context.clusterTestUtils.LastSave(PrimaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNextSecond(PrimaryIndex, lastSave);
+
+            ExceptionInjectionHelper.EnableException(Pause);
+            try
+            {
+                // On its own connection: BGSAVE runs the checkpoint up to the pause on the calling session, and the
+                // writes below must not queue behind it.
+                var saveTask = Task.Run(() =>
+                {
+                    var config = new ConfigurationOptions { AllowAdmin = true, SyncTimeout = 60_000 };
+                    config.EndPoints.Add(context.clusterTestUtils.GetEndPoint(PrimaryIndex));
+                    using var saveRedis = ConnectionMultiplexer.Connect(config);
+                    saveRedis.GetServer(context.clusterTestUtils.GetEndPoint(PrimaryIndex)).Save(SaveType.BackgroundSave);
+                });
+
+                // The checkpoint is now parked between its CheckpointStartCommit and CheckpointEndCommit, so every
+                // write below carries the new store version inside the fuzzy region and the replica buffers it.
+                await ExceptionInjectionHelper.WaitOnClearAsync(Pause).WaitAsync(TimeSpan.FromSeconds(30));
+                for (var i = 0; i < KeyCount; i++)
+                    ClassicAssert.AreEqual(ResponseState.OK, context.clusterTestUtils.SetKey(PrimaryIndex, Encoding.ASCII.GetBytes($"fz{i}"), Encoding.ASCII.GetBytes($"v{i}"), out _, out _, logger: context.logger));
+
+                ExceptionInjectionHelper.EnableException(Pause);
+                await saveTask.WaitAsync(TimeSpan.FromSeconds(30));
+                context.clusterTestUtils.WaitCheckpoint(PrimaryIndex, lastSave, logger: context.logger);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(Pause);
+            }
+
+            context.clusterTestUtils.WaitForReplicaAofSync(PrimaryIndex, ReplicaIndex, context.logger);
+
+            for (var i = 0; i < KeyCount; i++)
+                ClassicAssert.AreEqual($"v{i}", context.clusterTestUtils.GetKey(ReplicaIndex, Encoding.ASCII.GetBytes($"fz{i}"), out _, out _, out _, logger: context.logger), $"replica lost fz{i}");
+        }
+#endif
 
         void SetUpPrimaryAndReplica()
         {
