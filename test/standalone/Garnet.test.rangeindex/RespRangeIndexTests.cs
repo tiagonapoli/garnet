@@ -1505,6 +1505,53 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Recovers RangeIndex writes from the AOF with parallel replay tasks, with trees flushed and evicted in between.
+        /// </summary>
+        [Test]
+        public void RIParallelAofReplayRecoversAllTrees([Values(1, 4)] int replayTaskCount)
+        {
+            const int Trees = 8, Rounds = 40, PerRound = 25;
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, enableAOF: true, replayTaskCount: replayTaskCount);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                for (var t = 0; t < Trees; t++)
+                    db.Execute("RI.CREATE", $"pr{t}", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("SAVE");
+
+                for (var r = 0; r < Rounds; r++)
+                {
+                    for (var t = 0; t < Trees; t++)
+                        for (var j = 0; j < PerRound; j++)
+                            db.Execute("RI.SET", $"pr{t}", $"f-{r:D3}-{j:D3}", $"v-{t}-{r}-{j}");
+
+                    // Push stubs out of memory so replay has to restore and copy-update them.
+                    for (var i = 0; i < 50; i++)
+                        db.StringSet($"fill-{r}-{i}", new string('x', 512));
+                }
+            }
+
+            server.Dispose();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, enableAOF: true, tryRecover: true, replayTaskCount: replayTaskCount);
+            server.Start();
+            TestContext.Progress.WriteLine($"replayTaskCount={replayTaskCount} recoverMs={watch.ElapsedMilliseconds}");
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                for (var t = 0; t < Trees; t++)
+                    for (var r = 0; r < Rounds; r++)
+                        for (var j = 0; j < PerRound; j++)
+                            ClassicAssert.AreEqual($"v-{t}-{r}-{j}", (string)db.Execute("RI.GET", $"pr{t}", $"f-{r:D3}-{j:D3}"), $"pr{t} f-{r:D3}-{j:D3}");
+            }
+        }
+
+        /// <summary>
         /// Verifies that multiple trees survive checkpoint + recovery with all data intact.
         /// </summary>
         [Test]
