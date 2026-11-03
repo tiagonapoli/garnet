@@ -127,6 +127,28 @@ namespace Garnet.cluster
 
         private unsafe void ConsumeSchedulePage(byte* record, int recordLength, long currentAddress, long nextAddress, bool isProtected)
         {
+            if (!isProtected)
+            {
+                SchedulePage(record, recordLength, currentAddress, nextAddress);
+                return;
+            }
+
+            // Waiting on replay tasks while holding the log epoch would block its drains, and a replay task bumping the
+            // epoch (e.g. committing metadata) would then spin forever on a full drain list.
+            record = replayBatchContext.CopyToPrivatePage(record, recordLength);
+            replayIterator.UnsafeRelease();
+            try
+            {
+                SchedulePage(record, recordLength, currentAddress, nextAddress);
+            }
+            finally
+            {
+                replayIterator.UnsafeResume();
+            }
+        }
+
+        private unsafe void SchedulePage(byte* record, int recordLength, long currentAddress, long nextAddress)
+        {
             replayBatchContext.Record = record;
             replayBatchContext.RecordLength = recordLength;
             replayBatchContext.CurrentAddress = currentAddress;

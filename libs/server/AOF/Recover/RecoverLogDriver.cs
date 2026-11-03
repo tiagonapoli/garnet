@@ -141,35 +141,56 @@ namespace Garnet.server
             {
                 CreateAndRunIntraPageParallelReplayTasks();
 
-                replayBatchContext.Record = record;
-                replayBatchContext.RecordLength = recordLength;
-                replayBatchContext.CurrentAddress = currentAddress;
-                replayBatchContext.NextAddress = nextAddress;
-
-                // Rendezvous 1 (ready): publish the page context above, then meet every replay task at the
-                // barrier so they may scan the page. The leader is a participant, hence the shared barrier.
-                barrier.SignalWorkReadyWait(cancellationToken: cts.Token);
-
-                // Rendezvous 2 (completed): wait for every replay task to finish applying its partition of
-                // the page. This establishes a happens-before with prefixConsistencyBoundaryReached and
-                // guarantees no task is still reading the shared context before it is recycled for the next
-                // page.
-                barrier.SignalWorkCompletedWait(cancellationToken: cts.Token);
-
-                // Every task has now finished the current page. If any of them reached the
-                // prefix-consistency boundary, stop here so we neither scan further pages nor commit
-                // log metadata beyond the intended prefix.
-                if (prefixConsistencyBoundaryReached)
+                // Waiting on replay tasks while holding the log epoch would block its drains, and a replay task bumping the
+                // epoch (e.g. committing metadata) would then spin forever on a full drain list.
+                if (isProtected)
                 {
-                    logger?.LogTrace("Reached prefix-consistency boundary (until sequence number {untilSequenceNumber}), stopping parallel replay", untilSequenceNumber);
-                    cts.Cancel();
-                    return;
+                    record = replayBatchContext.CopyToPrivatePage(record, recordLength);
+                    replayIterator.UnsafeRelease();
                 }
 
-                // After the last batch, cancel to exit BulkConsumeAllAsync.
-                if (nextAddress == untilAddress)
-                    cts.Cancel();
+                try
+                {
+                    SchedulePage(record, recordLength, currentAddress, nextAddress);
+                }
+                finally
+                {
+                    if (isProtected)
+                        replayIterator.UnsafeResume();
+                }
             }
+        }
+
+        private unsafe void SchedulePage(byte* record, int recordLength, long currentAddress, long nextAddress)
+        {
+            replayBatchContext.Record = record;
+            replayBatchContext.RecordLength = recordLength;
+            replayBatchContext.CurrentAddress = currentAddress;
+            replayBatchContext.NextAddress = nextAddress;
+
+            // Rendezvous 1 (ready): publish the page context above, then meet every replay task at the
+            // barrier so they may scan the page. The leader is a participant, hence the shared barrier.
+            barrier.SignalWorkReadyWait(cancellationToken: cts.Token);
+
+            // Rendezvous 2 (completed): wait for every replay task to finish applying its partition of
+            // the page. This establishes a happens-before with prefixConsistencyBoundaryReached and
+            // guarantees no task is still reading the shared context before it is recycled for the next
+            // page.
+            barrier.SignalWorkCompletedWait(cancellationToken: cts.Token);
+
+            // Every task has now finished the current page. If any of them reached the
+            // prefix-consistency boundary, stop here so we neither scan further pages nor commit
+            // log metadata beyond the intended prefix.
+            if (prefixConsistencyBoundaryReached)
+            {
+                logger?.LogTrace("Reached prefix-consistency boundary (until sequence number {untilSequenceNumber}), stopping parallel replay", untilSequenceNumber);
+                cts.Cancel();
+                return;
+            }
+
+            // After the last batch, cancel to exit BulkConsumeAllAsync.
+            if (nextAddress == untilAddress)
+                cts.Cancel();
         }
 
         private void CreateAndRunIntraPageParallelReplayTasks()

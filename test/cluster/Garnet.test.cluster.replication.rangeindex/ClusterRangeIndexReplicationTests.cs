@@ -214,6 +214,67 @@ namespace Garnet.test.cluster
         }
 
         /// <summary>
+        /// The parallel replay leader must not pin the AOF epoch while replay tasks apply an in-memory page: AOF epoch drains
+        /// would stall behind it, and once the drain list fills, a replay task bumping the epoch deadlocks replication.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexReplicaAofCommitsWhileParallelReplayTaskIsParked()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true, replayTaskCount: 4, asyncReplay: true);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 1);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var primaryAof = context.nodes[primaryIndex].Provider.StoreWrapper.appendOnlyFile.Log;
+            var replicaAof = context.nodes[replicaIndex].Provider.StoreWrapper.appendOnlyFile.Log;
+            const ExceptionInjectionType pause = ExceptionInjectionType.RangeIndex_Replay_Pause_Before_Set;
+
+            ExceptionInjectionHelper.EnableException(pause);
+            try
+            {
+                // Park a replay task inside an in-memory page, which the background scan hands to the leader under epoch protection.
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field-parked", "v"], logger: context.logger));
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && ExceptionInjectionHelper.IsEnabled(pause))
+                    await Task.Delay(10);
+                ClassicAssert.IsFalse(ExceptionInjectionHelper.IsEnabled(pause), "replay must park on the tree write");
+
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "SET", ["after-parked", "1"], logger: context.logger));
+                while (DateTime.UtcNow < deadline && replicaAof.TailAddress[0] != primaryAof.TailAddress[0])
+                    await Task.Delay(10);
+                ClassicAssert.AreEqual(primaryAof.TailAddress[0], replicaAof.TailAddress[0], "the replica must receive the write while replay is parked");
+
+                // Committing the received tail completes only through an AOF epoch drain.
+                var commit = Task.Run(() => replicaAof.Commit(spinWait: true));
+                var committed = await Task.WhenAny(commit, Task.Delay(TimeSpan.FromSeconds(30))) == commit;
+                ExceptionInjectionHelper.EnableException(pause);
+                ClassicAssert.IsTrue(committed, "the replica AOF must commit while a replay task is parked");
+                await commit;
+
+                // Keep the injection released until the parked write replays; clearing it earlier would park the task again.
+                using var replicaClient = context.clusterTestUtils.CreateGarnetClientSession(replicaIndex);
+                replicaClient.Connect();
+                ClassicAssert.AreEqual("OK", await replicaClient.ExecuteAsync("READONLY"));
+                string observed = null;
+                deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && (observed = await replicaClient.ExecuteAsync("GET", "after-parked")) != "1")
+                    await Task.Delay(10);
+                ClassicAssert.AreEqual("1", observed, "replay must resume after the parked write");
+                ClassicAssert.AreEqual("v", await replicaClient.ExecuteAsync("RI.GET", "idx1", "field-parked"));
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(pause);
+            }
+        }
+
+        /// <summary>
         /// A replica evicting a tree whose flush snapshots are still queued must keep applying replicated writes to it.
         /// </summary>
         [Test, Order(0)]
