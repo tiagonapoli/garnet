@@ -594,7 +594,9 @@ namespace Garnet.server
             Span<byte> stubSpan = stackalloc byte[RangeIndexManager.IndexSizeBytes];
             var output = StringOutput.FromPinnedSpan(stubSpan);
 
+            readSessionState?.PreSingleKeyConsistentRead(stringBasicContext.GetKeyHash((FixedSpanByteKey)key));
             var status = Read_RangeIndex(key.ReadOnlySpan, ref input, ref output, ref stringBasicContext);
+            readSessionState?.PostSingleKeyConsistentReadCallback();
 
             // OK means the key exists and IS a RangeIndex (WRONGTYPE/NOTFOUND for anything else)
             exists = status == GarnetStatus.OK;
