@@ -163,6 +163,9 @@ const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4 << 20;
 #[cfg(test)]
 const SNAPSHOT_PACE_INTERVAL_BYTES: usize = 4096;
 
+/// Bytes of packed mini-pages buffered between writes when a snapshot is finalized.
+const MINI_PACK_CHUNK_BYTES: usize = 4 << 20;
+
 /// Process-wide cap on snapshot sweep I/O (base pages read plus snapshot bytes written) in bytes per second,
 /// shared by all trees; 0 disables it.
 static SNAPSHOT_IO_BYTES_PER_SEC: std::sync::atomic::AtomicU64 =
@@ -835,6 +838,42 @@ impl CPRSnapShotMgr {
         enumerate_leaf_count
     }
 
+    /// Rewrites the snapshot's mini-pages back to back at the end of the file and points `mini_mapping` at the copies.
+    /// The sweep writes each mini-page next to its base page and copy-on-write scatters the rest, so without packing a
+    /// cold recovery issues one random read per mini-page; the copies are read from the just-written, cached file.
+    fn pack_mini_pages(&self, mini_mapping: &mut [(PageID, usize)], sizes: &HashMap<PageID, usize>) {
+        let mut order: Vec<usize> = (0..mini_mapping.len()).filter(|&i| mini_mapping[i].1 != NULL_PAGE_LOCATION_OFFSET).collect();
+        if order.is_empty() {
+            return;
+        }
+
+        order.sort_unstable_by_key(|&i| mini_mapping[i].1);
+        let total: usize = order.iter().map(|&i| sizes[&mini_mapping[i].0]).sum();
+        let vfs = self.vfs.read().unwrap().clone();
+        let mut write_offset = vfs.alloc_offset(total);
+        let mut chunk = Vec::with_capacity(total.min(MINI_PACK_CHUNK_BYTES));
+        let mut pending = Vec::new();
+        for (n, &i) in order.iter().enumerate() {
+            let size = sizes[&mini_mapping[i].0];
+            let start = chunk.len();
+            chunk.resize(start + size, 0);
+            vfs.read(mini_mapping[i].1, &mut chunk[start..]);
+            pending.push((i, write_offset + start));
+            if chunk.len() >= MINI_PACK_CHUNK_BYTES || n + 1 == order.len() {
+                vfs.write(write_offset, &chunk);
+                self.unsynced_bytes.fetch_add(chunk.len(), Ordering::Relaxed);
+                self.unpaced_bytes.fetch_add(chunk.len(), Ordering::Relaxed);
+                for (i, offset) in pending.drain(..) {
+                    mini_mapping[i].1 = offset;
+                }
+
+                write_offset += chunk.len();
+                chunk.clear();
+                self.pace_snapshot_io();
+            }
+        }
+    }
+
     /// Finalize the snapshot file and reset the snapshotmgr's internal data.
     #[allow(clippy::too_many_arguments)]
     fn finalize(
@@ -999,6 +1038,8 @@ impl CPRSnapShotMgr {
         for (k, v) in mini_mapping_unique.into_iter() {
             final_mini_mapping.push((k, v));
         }
+
+        self.pack_mini_pages(&mut final_mini_mapping, &mini_size_mapping_unique);
 
         let mut final_mini_size_mapping: Vec<(PageID, usize)> = Vec::new();
         for (k, v) in mini_size_mapping_unique.into_iter() {
@@ -1912,23 +1953,36 @@ fn recovery_read_batch_len(slot: usize) -> usize {
     (RECOVERY_READ_BATCH_BYTES / slot).max(1)
 }
 
+/// The byte range `reads` covers when it is dense enough to read whole: at most `RECOVERY_DENSE_SPAN_FACTOR` times the bytes requested.
+fn recovery_dense_span(reads: &[(usize, usize)]) -> Option<(usize, usize)> {
+    let start = reads.iter().map(|(offset, _)| *offset).min()?;
+    let end = reads.iter().map(|(offset, len)| offset + len).max()?;
+    let bytes: usize = reads.iter().map(|(_, len)| *len).sum();
+    (end - start <= bytes.saturating_mul(RECOVERY_DENSE_SPAN_FACTOR)).then_some((start, end))
+}
+
 /// Number of threads used to read `reads`: one when the pages are dense, otherwise enough to keep the device busy.
 fn recovery_read_threads(reads: &[(usize, usize)]) -> usize {
-    let (Some(start), Some(end)) = (reads.iter().map(|(offset, _)| *offset).min(), reads.iter().map(|(offset, len)| offset + len).max()) else {
-        return 1;
-    };
-    let bytes: usize = reads.iter().map(|(_, len)| *len).sum();
-    if end - start <= bytes.saturating_mul(RECOVERY_DENSE_SPAN_FACTOR) {
+    if reads.is_empty() || recovery_dense_span(reads).is_some() {
         return 1;
     }
 
     reads.len().div_ceil(RECOVERY_READS_PER_THREAD).clamp(1, RECOVERY_READ_THREADS)
 }
 
-/// Reads `reads[i] = (offset, len)` into `out[i * slot..]`, issuing scattered reads from several threads.
+/// Reads `reads[i] = (offset, len)` into `out[i * slot..]`: a dense range with one read, scattered pages from several threads.
 /// Copy-on-write snapshots scatter pages through the file, so serial reads leave the device idle between requests.
 fn read_pages_parallel(vfs: &dyn VfsImpl, reads: &[(usize, usize)], slot: usize, out: &mut [u8]) {
     assert!(out.len() >= reads.len() * slot);
+    if let Some((start, end)) = recovery_dense_span(reads) {
+        let mut span = SectorAlignedVector::new_zeroed(align_to_sector_size(end - start));
+        vfs.read(start, &mut span[..end - start]);
+        for (i, (offset, len)) in reads.iter().enumerate() {
+            out[i * slot..i * slot + len].copy_from_slice(&span[offset - start..offset - start + len]);
+        }
+        return;
+    }
+
     let threads = recovery_read_threads(reads);
     #[cfg(all(feature = "shuttle", test))]
     let threads = { _ = threads; 1 };
@@ -2153,6 +2207,59 @@ mod tests {
 
         std::fs::remove_file(tmp_file_path).unwrap();
         std::fs::remove_file(tmp_snapshot_file_path).unwrap();
+    }
+
+    /// A disk snapshot stores its mini-pages back to back, so recovery reads them with one sequential read.
+    #[test]
+    fn disk_snapshot_packs_mini_pages_contiguously() {
+        let dir = std::path::PathBuf::from(format!("target/packed_minis_{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = |i: usize| format!("key-{i:08}").into_bytes();
+        let value = |i: usize| vec![(i % 251) as u8; 64 + i % 200];
+
+        // Base pages first, then sparse updates that leave many leaves with a small mini-page over a base page.
+        let mut config = Config::new(dir.join("data.bftree"), 1024 * 1024);
+        config.storage_backend(crate::StorageBackend::Std);
+        config.use_snapshot(true);
+        let snapshot = dir.join("snapshot.bftree");
+        {
+            let tree = BfTree::with_config(config, None).unwrap();
+            for i in 0..40_000 {
+                assert!(matches!(tree.insert(&key(i), &value(i)), crate::LeafInsertResult::Success));
+            }
+            for i in (0..40_000).step_by(97) {
+                assert!(matches!(tree.insert(&key(i), &value(i + 1)), crate::LeafInsertResult::Success));
+            }
+            tree.cpr_snapshot(&snapshot);
+        }
+
+        let bytes = std::fs::read(&snapshot).unwrap();
+        let meta = unsafe { (bytes.as_ptr() as *const super::BfTreeMeta).read_unaligned() };
+        let pairs = |offset: usize, size: usize| -> Vec<(u64, usize)> {
+            bytes[offset..offset + size].as_chunks::<16>().0.iter().map(|c| (u64::from_le_bytes(c[..8].try_into().unwrap()), u64::from_le_bytes(c[8..].try_into().unwrap()) as usize)).collect()
+        };
+        let sizes: std::collections::HashMap<u64, usize> = pairs(meta.mini_size_offset, meta.mini_size_size).into_iter().collect();
+        let mut minis: Vec<(usize, usize)> = pairs(meta.mini_offset, meta.mini_size).into_iter().map(|(pid, offset)| (offset, sizes[&pid])).collect();
+        minis.sort_unstable();
+        assert!(minis.len() > 100, "only {} mini-pages", minis.len());
+        for pair in minis.windows(2) {
+            assert_eq!(pair[0].0 + pair[0].1, pair[1].0, "mini-pages are not contiguous: {:?}", pair);
+        }
+
+        let tree = BfTree::new_from_cpr_snapshot(&snapshot, false, None, None, None).unwrap();
+        assert_eq!(super::last_recovery_stats().mini_pages, minis.len() as u64);
+        let mut buf = vec![0u8; 512];
+        for i in 0..40_000 {
+            let expected = if i % 97 == 0 { value(i + 1) } else { value(i) };
+            match tree.read(&key(i), &mut buf) {
+                LeafReadResult::Found(n) => assert_eq!(&buf[..n as usize], &expected[..], "key {i}"),
+                _ => panic!("key {i} missing"),
+            }
+        }
+
+        drop(tree);
+        _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A tree opened over a snapshot through the copy-on-write overlay sees the snapshot, persists its own changes in
