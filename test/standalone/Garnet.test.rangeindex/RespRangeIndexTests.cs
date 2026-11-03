@@ -3775,12 +3775,12 @@ namespace Garnet.test
         }
 
         /// <summary>
-        /// A store reset waits for the flush snapshots in flight, whose output it then discards, so they run without the
-        /// snapshot I/O cap rather than holding the reset for the whole capped sweep.
+        /// A store reset discards the flush files of the log it resets, so it aborts the flush snapshots in flight instead of
+        /// waiting out their sweeps, which on a busy disk held replica resyncs for minutes.
         /// </summary>
         [Test]
         [CancelAfter(300_000)]
-        public async Task RIStoreResetLiftsSnapshotIOCapForInFlightSnapshotsAsync(System.Threading.CancellationToken cancellationToken)
+        public async Task RIStoreResetAbortsInFlightFlushSnapshotsAsync(System.Threading.CancellationToken cancellationToken)
         {
             server.Dispose();
             TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
@@ -3818,7 +3818,10 @@ namespace Garnet.test
                 reset.Stop();
 
                 ClassicAssert.AreEqual(0, rim.PendingFlushSnapshotCount);
+                ClassicAssert.AreEqual(1, rim.AbortedFlushSnapshotCount, "the reset must abort the snapshot in its sweep");
                 ClassicAssert.Less(reset.Elapsed, TimeSpan.FromSeconds(40), "the reset must not wait for the capped snapshot sweep");
+                var leftovers = Directory.GetFiles(TestUtils.MethodTestDir, "*" + RangeIndexManager.InProgressSuffix, SearchOption.AllDirectories);
+                ClassicAssert.IsEmpty(leftovers, "an aborted snapshot must delete its partial file");
             }
             finally
             {

@@ -86,6 +86,14 @@ namespace Garnet.server
 
         private long coalescedFlushSnapshots;
 
+        /// <summary>Gets the number of flush snapshots aborted by a store reset.</summary>
+        internal long AbortedFlushSnapshotCount => Interlocked.Read(ref abortedFlushSnapshots);
+
+        private long abortedFlushSnapshots;
+
+        /// <summary>Pinned word watched by in-flight flush snapshots; a store reset increments it to abort them.</summary>
+        private readonly long[] flushSnapshotAbortWord = GC.AllocateArray<long>(1, pinned: true);
+
         /// <summary>Test hook run by a flush worker before it snapshots; null in production.</summary>
         internal Action<string> BeforeFlushSnapshotForTest;
 
@@ -310,6 +318,8 @@ namespace Garnet.server
             QueuedFlushSnapshot written = null;
             try
             {
+                // Read before the stop check, so a store reset after the check still aborts this snapshot.
+                var abortGeneration = Volatile.Read(ref flushSnapshotAbortWord[0]);
                 var truncatedBelow = Volatile.Read(ref flushFilesTruncatedBelow);
                 foreach (var item in batch)
                 {
@@ -324,8 +334,17 @@ namespace Garnet.server
                 if (written is null)
                     return;
 
-                if (!entry.TrySnapshotUnderClaim(written.Path, allowLink: true, atomic: true, out var kind))
+                if (!entry.TrySnapshotUnderClaim(written.Path, allowLink: true, atomic: true, out var kind, flushSnapshotAbortWord, abortGeneration))
                 {
+                    if (kind == TreeSnapshotKind.Aborted)
+                    {
+                        // The store reset discards this log's flush files, so none of the batch needs one.
+                        _ = Interlocked.Increment(ref abortedFlushSnapshots);
+                        foreach (var item in batch)
+                            item.Mode ??= "aborted";
+                        return;
+                    }
+
                     logger?.LogCritical("[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16} files={Files} reason=retired; the flushed stubs have no flush file",
                         entry.HashPrefix, written.Pending.Address, batch.Count);
                     return;
@@ -582,10 +601,15 @@ namespace Garnet.server
         }
 
         /// <summary>Stops writing queued flush snapshots and waits for those in flight; used before trees are discarded.</summary>
-        private void StopFlushSnapshots(string reason)
+        /// <param name="abortInFlight">Abort snapshots in flight instead of letting them finish, for callers that discard their files.</param>
+        private void StopFlushSnapshots(string reason, bool abortInFlight = false)
         {
             flushSnapshotsStopped = true;
+            if (abortInFlight)
+                _ = Interlocked.Increment(ref flushSnapshotAbortWord[0]);
+
             var start = Stopwatch.GetTimestamp();
+            var abortedBefore = AbortedFlushSnapshotCount;
             var flushPending = pendingFlushSnapshots.Count;
             var checkpointPending = 0;
             var releasesPending = pendingTreeReleases.Count;
@@ -606,8 +630,8 @@ namespace Garnet.server
                     AsyncUtils.BlockingWait(kvp.Value.Completion);
             }
 
-            logger?.LogInformation("[RangeIndexStopFlushSnapshots] reason={Reason} flushPending={Flush} checkpointPending={Checkpoint} releasesPending={Releases} ms={Ms:F0}",
-                reason, flushPending, checkpointPending, releasesPending, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
+            logger?.LogInformation("[RangeIndexStopFlushSnapshots] reason={Reason} flushPending={Flush} aborted={Aborted} checkpointPending={Checkpoint} releasesPending={Releases} ms={Ms:F0}",
+                reason, flushPending, AbortedFlushSnapshotCount - abortedBefore, checkpointPending, releasesPending, Stopwatch.GetElapsedTime(start).TotalMilliseconds);
         }
 
         /// <summary>
