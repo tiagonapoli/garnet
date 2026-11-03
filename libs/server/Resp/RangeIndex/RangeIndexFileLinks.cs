@@ -5,6 +5,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Garnet.server
 {
@@ -18,19 +19,38 @@ namespace Garnet.server
                 File.Delete(path);
         }
 
+        /// <summary>Test hook deciding whether a link from the given existing path may be created; null in production.</summary>
+        internal static Func<string, bool> CanLinkForTest;
+
+        /// <summary>Test hook run before <see cref="Copy"/> reads its source; null in production.</summary>
+        internal static Action<string> BeforeCopyForTest;
+
+        private static long linkFailures;
+
+        /// <summary>
+        /// Gets the number of hard links that could not be created. Checkpoint and data directories on different mounts (even of
+        /// one file system) fail every link between them with EXDEV, turning each into a full copy.
+        /// </summary>
+        public static long LinkFailures => Interlocked.Read(ref linkFailures);
+
         /// <summary>Replaces <paramref name="linkPath"/> with a hard link to <paramref name="existingPath"/>.</summary>
         /// <returns><c>false</c> if the link could not be created (missing source, different volume, unsupported file system).</returns>
         public static bool TryReplaceWithHardLink(string existingPath, string linkPath)
         {
             DeleteIfExists(linkPath);
+            bool linked;
             try
             {
-                return OperatingSystem.IsWindows() ? CreateHardLinkW(linkPath, existingPath, IntPtr.Zero) : link(existingPath, linkPath) == 0;
+                linked = CanLinkForTest?.Invoke(existingPath) != false && (OperatingSystem.IsWindows() ? CreateHardLinkW(linkPath, existingPath, IntPtr.Zero) : link(existingPath, linkPath) == 0);
             }
             catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
             {
-                return false;
+                linked = false;
             }
+
+            if (!linked)
+                _ = Interlocked.Increment(ref linkFailures);
+            return linked;
         }
 
         /// <summary>Bytes written between forced syncs of a <see cref="Copy"/> destination.</summary>
@@ -51,6 +71,7 @@ namespace Garnet.server
         /// <exception cref="FileNotFoundException">The source does not exist. No partial destination is left behind on any failure.</exception>
         public static void Copy(string sourcePath, string destinationPath, bool overwrite)
         {
+            BeforeCopyForTest?.Invoke(sourcePath);
             using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, bufferSize: 0, FileOptions.SequentialScan);
             if (overwrite)
                 DeleteIfExists(destinationPath);

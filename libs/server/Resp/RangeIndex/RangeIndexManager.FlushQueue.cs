@@ -91,7 +91,7 @@ namespace Garnet.server
 
         /// <summary>
         /// Whether checkpoint snapshots of live trees are written in the background rather than at
-        /// <see cref="CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
+        /// <see cref="Tsavorite.core.CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
         /// after the version shift, and replaying the AOF from the checkpoint over it converges for the same reason as a
         /// late flush snapshot.
         /// </summary>
@@ -151,6 +151,98 @@ namespace Garnet.server
             _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
             pending.Complete();
             return false;
+        }
+
+        /// <summary>Mode returned by a cold flush whose copy was queued; the worker logs the snapshot.</summary>
+        private const string ColdFlushQueuedMode = "cold-queued";
+
+        /// <summary>Gets the number of cold flushes, and how many of them queued their copy instead of copying on the flush thread.</summary>
+        internal (long Total, long Queued) ColdFlushCounts => (Interlocked.Read(ref phaseStats.ColdFlushes), Interlocked.Read(ref phaseStats.ColdFlushesQueued));
+
+        /// <summary>
+        /// Queues a copy of the immutable checkpoint snapshot <paramref name="source"/> holding pending <paramref name="entry"/>'s
+        /// contents to <paramref name="flushPath"/>. Copying it inline stalls the flush thread (the AOF replay thread during recovery)
+        /// for seconds per tree when the checkpoint and data directories cannot share hard links.
+        /// </summary>
+        /// <returns><c>false</c> if the entry no longer accepts snapshots because its tree is being released.</returns>
+        private bool TryEnqueueColdFlushCopy(TreeEntry entry, string source, string dataPath, string flushPath, long logicalAddress)
+        {
+            var enqueuedAt = Stopwatch.GetTimestamp();
+            var pending = new PendingFlushSnapshot(logicalAddress);
+
+            // Registered first so a waiter never misses a snapshot that is already running.
+            pendingFlushSnapshots[flushPath] = pending;
+            if (entry.TryAppendFlush(() => RunColdFlushCopy(entry, source, dataPath, flushPath, pending, enqueuedAt), FlushScheduler))
+                return true;
+
+            _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
+            pending.Complete();
+            return false;
+        }
+
+        /// <summary>
+        /// Writes a queued cold flush file. The source needs no lock: it is never written, and a restore opens a copy-on-write overlay
+        /// over it. If a newer checkpoint retired the source meanwhile, the entry's current contents are snapshotted instead, which is
+        /// valid for the flush because AOF replay converges over a later cut.
+        /// </summary>
+        private void RunColdFlushCopy(TreeEntry entry, string source, string dataPath, string flushPath, PendingFlushSnapshot pending, long enqueuedAt)
+        {
+            var start = Stopwatch.GetTimestamp();
+            string mode = null;
+            try
+            {
+                BeforeFlushSnapshotForTest?.Invoke(flushPath);
+
+                var target = flushPath + InProgressSuffix;
+                if (flushSnapshotsStopped)
+                {
+                    mode = "skipped-stopped";
+                }
+                else if (pending.Address < Volatile.Read(ref flushFilesTruncatedBelow))
+                {
+                    mode = "skipped-truncated";
+                }
+                else
+                {
+                    try
+                    {
+                        RangeIndexFileLinks.Copy(source, target, overwrite: true);
+                        mode = "cold-copy";
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        using var ownership = LockTreeOwnership(entry.KeyHash, "flush-cold-retry");
+                        if (entry.Tree != null && entry.TrySnapshotUnderClaim(target, allowLink: false, out _))
+                            mode = "cold-live";
+                        else if (entry.Tree == null && CopyPendingContents(entry, dataPath, target, overwrite: true))
+                            mode = "cold-copy-retry";
+                    }
+
+                    if (mode != null)
+                    {
+                        File.Move(target, flushPath, overwrite: true);
+
+                        // A truncation that enumerated the directory before the rename cannot have seen this file.
+                        if (pending.Address < Volatile.Read(ref flushFilesTruncatedBelow))
+                            _ = TryDeleteFlushFile(flushPath, out _);
+                    }
+                    else
+                    {
+                        logger?.LogCritical("[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16} reason=no-source; the flushed stub has no flush file", entry.HashPrefix, pending.Address);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                mode = null;
+                logger?.LogCritical(ex, "[RangeIndexFlushSnapshotFailed] hash={Hash} addr=0x{Addr:x16}; the flushed stub may have no flush file", entry.HashPrefix, pending.Address);
+            }
+            finally
+            {
+                _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
+                pending.Complete();
+                LogFlushSnapshot(entry.HashPrefix, pending.Address, flushPath, mode, start, Stopwatch.GetElapsedTime(enqueuedAt, start).TotalMilliseconds);
+            }
         }
 
         /// <summary>A flush snapshot queued on its tree and not yet taken by a worker.</summary>
@@ -341,8 +433,9 @@ namespace Garnet.server
         /// Queues a checkpoint snapshot of <paramref name="entry"/>'s live tree to <paramref name="checkpointPath"/>, after the
         /// tree's earlier flush snapshots.
         /// </summary>
+        /// <param name="pendingSource">For a pending entry, the immutable snapshot holding its contents, copied instead of snapshotting a live tree.</param>
         /// <returns><c>false</c> if the entry no longer accepts snapshots because its tree is being released.</returns>
-        private bool TryEnqueueCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath)
+        private bool TryEnqueueCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath, string pendingSource = null)
         {
             var enqueuedAt = Stopwatch.GetTimestamp();
             var pending = pendingCheckpointSnapshots.GetOrAdd(checkpointToken, static _ => new PendingCheckpointSnapshots());
@@ -350,14 +443,14 @@ namespace Garnet.server
 
             // Registered first so the persistence wait never misses a snapshot that is already running.
             pending.Snapshots.Add(done.Task);
-            if (entry.TryAppendFlush(() => RunCheckpointSnapshot(entry, checkpointToken, checkpointPath, pending, done, enqueuedAt), FlushScheduler))
+            if (entry.TryAppendFlush(() => RunCheckpointSnapshot(entry, checkpointToken, checkpointPath, pendingSource, pending, done, enqueuedAt), FlushScheduler))
                 return true;
 
             _ = done.TrySetResult();
             return false;
         }
 
-        private void RunCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath, PendingCheckpointSnapshots pending, TaskCompletionSource done, long enqueuedAt)
+        private void RunCheckpointSnapshot(TreeEntry entry, Guid checkpointToken, string checkpointPath, string pendingSource, PendingCheckpointSnapshots pending, TaskCompletionSource done, long enqueuedAt)
         {
             var start = Stopwatch.GetTimestamp();
             string mode = null;
@@ -367,6 +460,8 @@ namespace Garnet.server
 
                 if (flushSnapshotsStopped)
                     mode = "skipped-stopped";
+                else if (pendingSource != null)
+                    mode = CopyPendingForCheckpoint(entry, pendingSource, checkpointPath);
                 else if (entry.TrySnapshotUnderClaim(checkpointPath, allowLink: true, atomic: true, out var kind))
                     mode = SnapshotMode("live", kind);
                 else
@@ -388,6 +483,52 @@ namespace Garnet.server
                     checkpointToken, entry.HashPrefix, mode ?? "failed", mode is null ? -1 : TryGetFileLength(checkpointPath),
                     Stopwatch.GetElapsedTime(start).TotalMilliseconds, Stopwatch.GetElapsedTime(enqueuedAt, start).TotalMilliseconds);
             }
+        }
+
+        /// <summary>
+        /// Copies pending <paramref name="entry"/>'s immutable snapshot <paramref name="source"/> to <paramref name="checkpointPath"/>
+        /// and re-points the entry's staging source at it. If the source was deleted meanwhile, the entry's current contents are
+        /// captured under its ownership lock instead; a later cut is valid because AOF replay from the checkpoint converges over it.
+        /// </summary>
+        /// <returns>The log mode, or <c>null</c> if no contents could be captured.</returns>
+        private string CopyPendingForCheckpoint(TreeEntry entry, string source, string checkpointPath)
+        {
+            var target = checkpointPath + InProgressSuffix;
+            var staging = Volatile.Read(ref entry.StagingSource);
+            string mode = "pending-copy";
+            try
+            {
+                RangeIndexFileLinks.Copy(source, target, overwrite: true);
+            }
+            catch (FileNotFoundException)
+            {
+                using var ownership = LockTreeOwnership(entry.KeyHash, "checkpoint-pending-retry");
+                if (entry.IsRetired)
+                    return "skipped-retired";
+
+                staging = Volatile.Read(ref entry.StagingSource);
+                if (entry.Tree != null)
+                {
+                    if (!entry.TrySnapshotUnderClaim(target, allowLink: false, out _))
+                        return "skipped-retired";
+                    mode = "pending-live";
+                }
+                else if (CopyPendingContents(entry, LogDataPath(entry.HashPrefix), target, overwrite: true))
+                {
+                    mode = "pending-copy-retry";
+                }
+                else
+                {
+                    return null;
+                }
+            }
+
+            File.Move(target, checkpointPath, overwrite: true);
+
+            // Re-point staging at this checkpoint so purging the older one cannot strand the entry.
+            if (staging != null)
+                _ = Interlocked.CompareExchange(ref entry.StagingSource, checkpointPath, staging);
+            return mode;
         }
 
         /// <summary>Stops writing queued flush snapshots and waits for those in flight; used before trees are discarded.</summary>
