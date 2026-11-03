@@ -104,6 +104,12 @@ namespace Garnet.cluster
         /// </summary>
         public AofAddress ReplicationOffset2 => currentReplicationConfig.replicationOffset2;
 
+        /// <summary>
+        /// AOF tail this node recovered from disk at startup (empty if it did not recover locally). AOF a replica received
+        /// beyond it from an earlier incarnation of this node may have been lost and rewritten with different records.
+        /// </summary>
+        public AofAddress RecoveredAofTailAddress { get; private set; }
+
         public string PrimaryReplId => currentReplicationConfig.PrimaryReplId;
         public string PrimaryReplId2 => currentReplicationConfig.PrimaryReplId2;
 
@@ -596,6 +602,7 @@ namespace Garnet.cluster
                 storeWrapper.DefaultDatabase.VectorManager?.WaitForVectorOperationsToComplete();
 
                 replicationOffset.SetValue(ref replayedUntil);
+                RecoveredAofTailAddress = replayedUntil;
             }
 
             // First recover and then load latest checkpoint info in-memory
