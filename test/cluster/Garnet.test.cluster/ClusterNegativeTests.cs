@@ -1075,5 +1075,51 @@ namespace Garnet.test.cluster
             ClassicAssert.AreEqual(0, replicationManager.AutoResyncCount);
         }
 #endif
+
+        [Test, Order(19), CancelAfter(testTimeout)]
+        [Category("REPLICATION")]
+        public async Task ClusterReplicaResyncToUnreachablePrimaryReportsConnectFailureAsync(CancellationToken cancellationToken)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+
+            // A long poll interval keeps gossip from starting its own resync once the primary is gone.
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, timeout: timeout, clusterReplicationReestablishmentTimeout: 600);
+            context.CreateConnection();
+
+            _ = context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], addslot: true, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(primaryIndex, replicaIndex, logger: context.logger);
+            _ = context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, logger: context.logger);
+            context.clusterTestUtils.WaitForReplicaRecovery(replicaIndex, context.logger);
+
+            var primaryId = context.clusterTestUtils.ClusterMyId(primaryIndex, logger: context.logger);
+            var clusterProvider = (ClusterProvider)context.nodes[replicaIndex].Provider.StoreWrapper.clusterProvider;
+            var replicationManager = clusterProvider.replicationManager;
+
+            context.nodes[primaryIndex].Dispose(false);
+            context.nodes[primaryIndex] = null;
+
+            // Same options as the automatic resync after a replication session fails; the first attach's handler is already disposed.
+            ClassicAssert.IsTrue(clusterProvider.PreventRoleChange());
+            bool success;
+            ReadOnlyMemory<byte> errorMessage;
+            try
+            {
+                (success, errorMessage) = await replicationManager.TryReplicateDiskbasedSyncAsync(null, new(primaryId, Background: false, Force: true, TryAddReplica: true, AllowReplicaResetOnFailure: false, UpgradeLock: true)).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                clusterProvider.AllowRoleChange();
+            }
+
+            var error = Encoding.ASCII.GetString(errorMessage.Span);
+            ClassicAssert.IsFalse(success);
+            ClassicAssert.IsNotEmpty(error, "The resync failure reason was lost");
+            ClassicAssert.IsFalse(error.Contains("disposed", StringComparison.OrdinalIgnoreCase), $"Unexpected resync failure reason: {error}");
+            ClassicAssert.IsNull(replicationManager.recvCheckpointHandler);
+        }
     }
 }

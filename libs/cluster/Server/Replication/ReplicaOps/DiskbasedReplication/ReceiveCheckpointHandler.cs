@@ -24,6 +24,7 @@ namespace Garnet.cluster
         ISnapshotDataSink activeSink;
         SnapshotTransferStats activeStats;
         bool localFlushFilesPurged;
+        int disposed;
 
         public ReceiveCheckpointHandler(ClusterProvider clusterProvider, ILogger logger = null)
         {
@@ -47,6 +48,9 @@ namespace Garnet.cluster
 
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+
             cts.Cancel();
             cts.Dispose();
             activeSink?.Dispose();

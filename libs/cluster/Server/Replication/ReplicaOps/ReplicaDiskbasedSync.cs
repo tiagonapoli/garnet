@@ -80,7 +80,7 @@ namespace Garnet.cluster
             catch (Exception ex)
             {
                 logger?.LogError(ex, $"{nameof(TryReplicateDiskbasedSyncAsync)}");
-                return (false, errorMessage);
+                return (false, Encoding.ASCII.GetBytes(ex.Message));
             }
 
             async Task<string> ReplicaSyncAttachTaskAsync(bool downgradeLock, bool forceAsync)
@@ -228,7 +228,8 @@ namespace Garnet.cluster
                     {
                         EndRecovery(RecoveryStatus.NoRecovery, downgradeLock: false);
                     }
-                    recvCheckpointHandler?.Dispose();
+                    // Cleared so a later attach that fails before creating its own handler does not dispose this one again.
+                    Interlocked.Exchange(ref recvCheckpointHandler, null)?.Dispose();
                     gcs?.Dispose();
                     if (!resetHandler.TryReset())
                     {
