@@ -137,6 +137,11 @@ namespace Garnet.common
         /// </summary>
         Checkpoint_Pause_At_Flush_Begin,
         /// <summary>
+        /// Pause a primary's checkpoint inside its fuzzy region: after it has shifted to the new version, before it
+        /// enqueues CheckpointEndCommit into the AOF.
+        /// </summary>
+        Replication_Primary_Pause_Before_Checkpoint_End_Marker,
+        /// <summary>
         /// Cluster gossip: fail a single round of the main gossip loop, to exercise recovery from a transient
         /// error raised while connections are initialized or the configuration is broadcast.
         /// </summary>
