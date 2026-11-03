@@ -872,6 +872,10 @@ namespace Garnet.server
         internal static async Task RunMaintenanceLoopAsync(Func<CancellationToken, ValueTask> runCycle,
             TimeSpan interval, string taskDescription, ILogger logger, CancellationToken token)
         {
+            // A cycle can block for minutes (a compaction waiting on disk), so the first one must not run on the caller,
+            // which may be server startup or a failover holding the task lifecycle lock.
+            await Task.Yield();
+
             try
             {
                 while (!token.IsCancellationRequested)
