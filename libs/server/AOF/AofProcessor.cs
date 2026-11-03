@@ -397,7 +397,11 @@ namespace Garnet.server
                                         seqNum,
                                         partCount,
                                         (int)LeaderBarrierType.CHECKPOINT,
-                                        () => storeWrapper.TakeCheckpointAsync(background: false, logger: logger));
+                                        () =>
+                                        {
+                                            TakeReplicaCheckpoint(header.storeVersion);
+                                            return Task.CompletedTask;
+                                        });
                                 }
                             }
 

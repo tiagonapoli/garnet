@@ -134,7 +134,8 @@ namespace Garnet.cluster
 
             // Rendezvous 1 (ready): the page context above is published before the leader arrives, so
             // once this returns every replay task has met at the barrier and may scan the page.
-            barrier.SignalWorkReadyWait(serverOptions.ReplicaSyncTimeout, cts.Token);
+            // No timeout: a page may legitimately take long to apply, and a faulted replay task cancels cts.
+            barrier.SignalWorkReadyWait(cancellationToken: cts.Token);
 
             // Set replication offset currentAddress
             replicationManager.SetSublogReplicationOffset(physicalSublogIdx, currentAddress);
@@ -142,7 +143,7 @@ namespace Garnet.cluster
             // Rendezvous 2 (completed): block until every replay task has finished applying its partition
             // of the page before advancing. The completion rendezvous guarantees no task is still reading
             // the shared context when the leader recycles it for the next page.
-            barrier.SignalWorkCompletedWait(serverOptions.ReplicaSyncTimeout, cts.Token);
+            barrier.SignalWorkCompletedWait(cancellationToken: cts.Token);
 
             // Before updating replication offset, we must wait for any pending Vector Set ops to complete
             replicationManager.AofProcessor.WaitForVectorOperationsToComplete();
@@ -280,8 +281,8 @@ namespace Garnet.cluster
                 replayBatchContext.RecordLength = 0;
                 replayBatchContext.CurrentAddress = 0;
                 replayBatchContext.NextAddress = 0;
-                barrier.SignalWorkReadyWait(serverOptions.ReplicaSyncTimeout, cts.Token);
-                barrier.SignalWorkCompletedWait(serverOptions.ReplicaSyncTimeout, cts.Token);
+                barrier.SignalWorkReadyWait(cancellationToken: cts.Token);
+                barrier.SignalWorkCompletedWait(cancellationToken: cts.Token);
             }
             finally
             {

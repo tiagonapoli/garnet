@@ -766,7 +766,7 @@ namespace Garnet.server
                 }
 
                 // Throw exception if data loss is not allowed and replay failed due to exception (possibly timeout)
-                if (signalException != null && serverOptions.AllowDataLoss)
+                if (signalException != null && !serverOptions.AllowDataLoss)
                     throw signalException;
 
                 // Need to always fail here otherwise next operations could not create a barrier if the last operation was not

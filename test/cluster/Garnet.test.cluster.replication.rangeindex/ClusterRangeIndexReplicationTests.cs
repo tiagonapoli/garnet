@@ -88,11 +88,11 @@ namespace Garnet.test.cluster
         /// </summary>
         [Test, Order(0)]
         [Category("REPLICATION")]
-        public async Task ClusterRangeIndexReplicaCheckpointDoesNotStallReplay()
+        public async Task ClusterRangeIndexReplicaCheckpointDoesNotStallReplay([Values(1, 4)] int replayTaskCount)
         {
             var primaryIndex = 0;
             var replicaIndex = 1;
-            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true);
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true, replayTaskCount: replayTaskCount);
             context.CreateConnection();
             var (_, _) = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
 
