@@ -2565,6 +2565,70 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// A restore that needs a cold flush file still queued behind busy flush workers must write it itself: in the soak the
+        /// first read of a recovered tree waited 118 s for a 13 s copy queued behind other trees' 90 s live snapshots.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public async Task RIRestoreRunsQueuedColdFlushCopyInlineAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10);
+            server.Start();
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"pre{i:D4}", $"data{i:D4}");
+
+                db.Execute("RI.CREATE", "coldinline", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "coldinline", "field", "value");
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"post{i:D4}", $"data{i:D4}");
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+
+            using var workersBusy = new ManualResetEventSlim();
+            RangeIndexFileLinks.CanLinkForTest = source => !source.Contains("cpr-checkpoints", StringComparison.Ordinal);
+            try
+            {
+                server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10, tryRecover: true, failOnRecoveryError: true);
+                var rim = server.Provider.StoreWrapper.rangeIndexManager;
+                _ = rim.OccupyFlushWorkersForTest(() => workersBusy.Wait(TimeSpan.FromSeconds(60)));
+                server.Start();
+
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+                var db = redis.GetDatabase(0);
+                for (var i = 0; i < 2000 && rim.ColdFlushCounts.Queued == 0; i++)
+                    db.StringSet($"fill{i:D4}", $"data{i:D4}");
+                ClassicAssert.Greater(rim.ColdFlushCounts.Queued, 0, "the recovered stub's copy must be queued");
+
+                // Push the flushed stub below the head so the read restores it from its flush file.
+                for (var i = 0; i < 2000; i++)
+                    db.StringSet($"evict{i:D4}", $"data{i:D4}");
+
+                var read = Task.Run(() => (string)db.Execute("RI.GET", "coldinline", "field"), cancellationToken);
+                var finished = await Task.WhenAny(read, Task.Delay(TimeSpan.FromSeconds(20), cancellationToken));
+
+                // Release the workers before asserting, so a failed run does not dispose the server under the blocked read.
+                workersBusy.Set();
+                ClassicAssert.AreEqual("value", await read);
+                ClassicAssert.AreSame(read, finished, "the restore must not wait for busy flush workers");
+                ClassicAssert.AreEqual(1, rim.FlushSnapshotsRunInlineCount, "the restore must write the queued flush file itself");
+
+                WaitForFlushSnapshots();
+                ClassicAssert.AreEqual("value", (string)db.Execute("RI.GET", "coldinline", "field"));
+            }
+            finally
+            {
+                workersBusy.Set();
+                RangeIndexFileLinks.CanLinkForTest = null;
+            }
+        }
+        /// <summary>
         /// A checkpoint of a pending tree whose immutable source cannot be linked must copy it in the background with the AOF
         /// enabled: copying at FlushBegin holds the tree's checkpoint barrier, stalling its operations for seconds per tree.
         /// </summary>
