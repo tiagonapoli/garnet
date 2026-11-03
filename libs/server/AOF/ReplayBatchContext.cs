@@ -32,9 +32,5 @@ namespace Garnet.server
         /// Represents the next address value for a given TsavoriteLog page.
         /// </summary>
         public long NextAddress;
-        /// <summary>
-        /// Whether replay occurs under epoch protections.
-        /// </summary>
-        public bool IsProtected;
     }
 }
