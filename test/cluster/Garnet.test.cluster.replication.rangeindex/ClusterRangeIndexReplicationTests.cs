@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
@@ -141,6 +142,75 @@ namespace Garnet.test.cluster
 
             context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
             ValidateRangeIndex(replicaIndex, "idx1", 10);
+        }
+
+        /// <summary>
+        /// A replica read session that observed a write must also observe every earlier range index write, even one
+        /// replayed by a parallel replay task that lags behind the task that replayed the observed write.
+        /// </summary>
+        [Test, Order(0)]
+        [Category("REPLICATION")]
+        public async Task ClusterRangeIndexReplicaReadObservesEarlierWritesFromOtherReplayTasks()
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            const int replayTaskCount = 4;
+            // Background replay keeps receiving the stream while a replay task is parked, so the next replay chunk can hold several writes.
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, enableRangeIndexPreview: true, replayTaskCount: replayTaskCount, asyncReplay: true);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(1, 1, logger: context.logger);
+
+            PopulateRangeIndex(primaryIndex, "idx1", 1);
+            context.clusterTestUtils.WaitForReplicaAofSync(primaryIndex, replicaIndex, context.logger);
+
+            // The marker must replay on a different task than the tree so the tree write can lag behind it.
+            static int ReplayTask(string key) => (int)((ulong)Garnet.server.GarnetLog.HASH(Encoding.ASCII.GetBytes(key)) % replayTaskCount);
+            var marker = Enumerable.Range(0, 64).Select(i => $"marker{i}").First(k => ReplayTask(k) != ReplayTask("idx1"));
+
+            using var replicaClient = context.clusterTestUtils.CreateGarnetClientSession(replicaIndex);
+            replicaClient.Connect();
+            ClassicAssert.AreEqual("OK", await replicaClient.ExecuteAsync("READONLY"));
+
+            var primaryEndpoint = (IPEndPoint)context.endpoints[primaryIndex];
+            var primaryAof = context.nodes[primaryIndex].Provider.StoreWrapper.appendOnlyFile.Log;
+            var replicaAof = context.nodes[replicaIndex].Provider.StoreWrapper.appendOnlyFile.Log;
+            const ExceptionInjectionType pause = ExceptionInjectionType.RangeIndex_Replay_Pause_Before_Set;
+
+            // Each RI.SET replay clears the condition and parks until the test sets it again.
+            ExceptionInjectionHelper.EnableException(pause);
+            try
+            {
+                // Park replay on a preceding tree write so the next replay chunk holds both the tree write and the marker.
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field-warmup", "v"], logger: context.logger));
+                var deadline = DateTime.UtcNow.AddSeconds(30);
+                while (DateTime.UtcNow < deadline && ExceptionInjectionHelper.IsEnabled(pause))
+                    await Task.Delay(10);
+                ClassicAssert.IsFalse(ExceptionInjectionHelper.IsEnabled(pause), "replay must park on the warm-up tree write");
+
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "RI.SET", ["idx1", "field0000", "value-new"], logger: context.logger));
+                ClassicAssert.AreEqual("OK", (string)context.clusterTestUtils.Execute(primaryEndpoint, "SET", [marker, "1"], logger: context.logger));
+                while (DateTime.UtcNow < deadline && replicaAof.TailAddress[0] != primaryAof.TailAddress[0])
+                    await Task.Delay(10);
+                ClassicAssert.AreEqual(primaryAof.TailAddress[0], replicaAof.TailAddress[0], "the replica must receive both writes before replay resumes");
+
+                // Resume: the tree write parks again while the marker task applies the marker.
+                ExceptionInjectionHelper.EnableException(pause);
+                string observed = null;
+                while (DateTime.UtcNow < deadline && (observed = await replicaClient.ExecuteAsync("GET", marker)) != "1")
+                    await Task.Delay(10);
+                ClassicAssert.AreEqual("1", observed, "the marker write must replay while the tree write is parked");
+                ClassicAssert.IsFalse(ExceptionInjectionHelper.IsEnabled(pause), "the tree write must still be parked");
+
+                // The tree read must wait for the parked write instead of returning the value it overwrites.
+                var treeRead = replicaClient.ExecuteAsync("RI.GET", "idx1", "field0000");
+                _ = await Task.WhenAny(treeRead, Task.Delay(TimeSpan.FromSeconds(1)));
+                ExceptionInjectionHelper.EnableException(pause);
+                ClassicAssert.AreEqual("value-new", await treeRead);
+            }
+            finally
+            {
+                ExceptionInjectionHelper.DisableException(pause);
+            }
         }
 
         /// <summary>

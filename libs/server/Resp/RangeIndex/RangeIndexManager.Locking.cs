@@ -39,26 +39,31 @@ namespace Garnet.server
     {
         /// <summary>
         /// RAII holder for a shared lock on a RangeIndex key.
-        /// Disposing releases the shared lock.
+        /// Disposing releases the shared lock and completes the replica consistent read, if one was started.
         /// </summary>
         internal readonly ref struct ReadRangeIndexLock : IDisposable
         {
             private readonly ref readonly ReadOptimizedLock lockRef;
             private readonly ReadOptimizedLock.LockToken lockToken;
+            private readonly ReadSessionState readSessionState;
 
-            internal ReadRangeIndexLock(ref readonly ReadOptimizedLock lockRef, ReadOptimizedLock.LockToken lockToken)
+            internal ReadRangeIndexLock(ref readonly ReadOptimizedLock lockRef, ReadOptimizedLock.LockToken lockToken, ReadSessionState readSessionState)
             {
                 this.lockToken = lockToken;
                 this.lockRef = ref lockRef;
+                this.readSessionState = readSessionState;
             }
+
+            internal ReadRangeIndexLock(ReadSessionState readSessionState) => this.readSessionState = readSessionState;
 
             /// <inheritdoc/>
             public void Dispose()
             {
-                if (Unsafe.IsNullRef(in lockRef))
-                    return;
+                if (!Unsafe.IsNullRef(in lockRef))
+                    lockRef.ReleaseLock(lockToken);
 
-                lockRef.ReleaseLock(lockToken);
+                // Runs after the tree operation so the session's sequence number covers every replayed write it observed.
+                readSessionState?.PostSingleKeyConsistentReadCallback();
             }
         }
 
@@ -172,6 +177,11 @@ namespace Garnet.server
 
             var keyHash = session.stringBasicContext.GetKeyHash((FixedSpanByteKey)key);
 
+            // Tree reads bypass the consistent-read store context, so replica sessions wait for this key's replay
+            // explicitly, before taking a lock replay may need.
+            var readSessionState = session.readSessionState;
+            readSessionState?.PreSingleKeyConsistentRead(keyHash);
+
         Retry:
             var output = StringOutput.FromPinnedSpan(indexSpan);
             rangeIndexLocks.AcquireSharedLock(keyHash, out var sharedLockToken);
@@ -191,7 +201,7 @@ namespace Garnet.server
             {
                 status = readRes;
                 rangeIndexLocks.ReleaseLock(sharedLockToken);
-                return default;
+                return new(readSessionState);
             }
 
             var outputSpan = output.SpanByteAndMemory.IsSpanByte
@@ -231,13 +241,13 @@ namespace Garnet.server
                 if (!RestoreTree(session, key, keyHash, ref input, indexSpan))
                 {
                     status = GarnetStatus.NOTFOUND;
-                    return default;
+                    return new(readSessionState);
                 }
                 goto Retry;
             }
 
             status = GarnetStatus.OK;
-            return new(in rangeIndexLocks, sharedLockToken);
+            return new(in rangeIndexLocks, sharedLockToken, readSessionState);
         }
 
         /// <summary>

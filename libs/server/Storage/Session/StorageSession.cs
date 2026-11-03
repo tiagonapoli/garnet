@@ -75,7 +75,7 @@ namespace Garnet.server
         /// <summary>
         /// Read session state use to enforce prefix consistency with sharded-log
         /// </summary>
-        readonly ReadSessionState readSessionState;
+        internal readonly ReadSessionState readSessionState;
 
         /// <summary>
         /// Vector manage instance

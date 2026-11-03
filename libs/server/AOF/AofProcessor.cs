@@ -673,6 +673,7 @@ namespace Garnet.server
             {
                 if (rangeIndexManager == null)
                     ExceptionUtils.ThrowException(new GarnetException("RangeIndexPreview disabled; Replay failed"));
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.RangeIndex_Replay_Pause_Before_Set);
                 rangeIndexManager.HandleRangeIndexSetReplay(activeServerSession.storageSession, preparedParameters.Key, ref stringInput);
                 return;
             }
