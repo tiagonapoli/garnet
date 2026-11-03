@@ -1143,7 +1143,8 @@ namespace Garnet.server
                 mode = SnapshotForFlushCold(key, hashPrefix, dataPath, flushPath, valueSpan, logicalAddress);
             }
 
-            LogFlushSnapshot(hashPrefix, logicalAddress, flushPath, mode, start);
+            if (!ReferenceEquals(mode, ColdFlushQueuedMode))
+                LogFlushSnapshot(hashPrefix, logicalAddress, flushPath, mode, start);
         }
 
         /// <summary>Logs one flush snapshot with its cost and the flush files retained afterwards.</summary>
@@ -1251,14 +1252,35 @@ namespace Garnet.server
             // No live tree exists for this key (the ownership lock blocks RestoreTree from activating
             // one mid-copy). data.bftree or the deferred staging source is stable — no concurrent writer.
             // Recovery can re-flush a record at an address whose flush file survives from before the crash.
-            if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true, allowLink: true, out var linked))
+            _ = Interlocked.Increment(ref phaseStats.ColdFlushes);
+            var copyStart = Stopwatch.GetTimestamp();
+            try
             {
-                LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
-                return null; // do NOT set IsFlushed
-            }
+                // A checkpoint snapshot is immutable, so when it cannot be linked (checkpoint and data directories on different
+                // mounts) it is copied in the background rather than on this thread.
+                if (entry != null && Volatile.Read(ref entry.StagingSource) is { } staging && !RangeIndexFileLinks.TryReplaceWithHardLink(staging, flushPath))
+                {
+                    if (TryEnqueueColdFlushCopy(entry, staging, dataPath, flushPath, logicalAddress))
+                    {
+                        _ = Interlocked.Increment(ref phaseStats.ColdFlushesQueued);
+                        SetFlushedFlag(valueSpan);
+                        return ColdFlushQueuedMode;
+                    }
+                }
 
-            SetFlushedFlag(valueSpan);
-            return linked ? "cold-link" : "cold-copy";
+                if (!CopyPendingContents(entry, dataPath, flushPath, overwrite: true, allowLink: true, out var linked))
+                {
+                    LogOnFlushInvariantViolation(hashPrefix, logicalAddress);
+                    return null; // do NOT set IsFlushed
+                }
+
+                SetFlushedFlag(valueSpan);
+                return linked ? "cold-link" : "cold-copy";
+            }
+            finally
+            {
+                _ = Interlocked.Add(ref phaseStats.ColdFlushSyncTicks, Stopwatch.GetTimestamp() - copyStart);
+            }
         }
 
         /// <summary>
@@ -1288,10 +1310,11 @@ namespace Garnet.server
         /// <para>For each entry with <see cref="TreeEntry.SnapshotPending"/> set:
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
-        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim"/>); entries retired by a concurrent deferred dispose are skipped.
+        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim(string, bool, bool, out TreeSnapshotKind)"/>); entries retired by a concurrent deferred dispose are skipped.
         /// With <see cref="BackgroundCheckpointSnapshots"/> the snapshot is queued instead and the tree's barrier is released at once.</item>
-        /// <item>Pending entries (Tree == null) → copy the deferred staging source, or <c>data.bftree</c>
-        /// once staged (no live tree to snapshot from).</item>
+        /// <item>Pending entries (Tree == null) → link or copy the deferred staging source, or <c>data.bftree</c>
+        /// once staged (no live tree to snapshot from). With <see cref="BackgroundCheckpointSnapshots"/>, an immutable source that
+        /// cannot be linked is copied in the background.</item>
         /// </list></para>
         ///
         /// <para>Uses the per-tree atomic <see cref="TreeEntry.SnapshotInProgress"/> to serialize
@@ -1354,7 +1377,15 @@ namespace Garnet.server
                             // data.bftree once staged. No live tree means no concurrent writer.
                             var dataPath = LogDataPath(entry.HashPrefix);
                             var source = Volatile.Read(ref entry.StagingSource);
-                            if (!CopyPendingContents(entry, dataPath, checkpointPath, overwrite: true, allowLink: true, out var linked))
+                            var immutableSource = source ?? (entry.StagedFrom is { } staged && staged.Matches(dataPath) ? staged.Source : null);
+
+                            // When the source cannot be linked (on another mount), copying it here would hold the barrier for seconds per tree.
+                            var linked = immutableSource != null && RangeIndexFileLinks.TryReplaceWithHardLink(immutableSource, checkpointPath);
+                            if (!linked && BackgroundCheckpointSnapshots && immutableSource != null && TryEnqueueCheckpointSnapshot(entry, checkpointToken, checkpointPath, immutableSource))
+                            {
+                                queued++;
+                            }
+                            else if (!linked && !CopyPendingContents(entry, dataPath, checkpointPath, overwrite: true, allowLink: true, out linked))
                                 logger?.LogWarning("SnapshotAllTreesForCheckpoint: data.bftree missing for pending {Hash}", entry.HashPrefix);
                             else
                             {
