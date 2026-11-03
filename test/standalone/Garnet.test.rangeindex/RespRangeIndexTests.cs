@@ -2495,6 +2495,156 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// When the checkpoint and data directories cannot share hard links (separate mounts fail with EXDEV), the cold flush of a
+        /// recovered pending tree must copy its checkpoint snapshot in the background, not on the flush thread, which during recovery
+        /// is the AOF replay thread (45 s of replay stalls on 1 GB trees in the soak).
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public void RIRecoveryColdFlushCopiesUnlinkableSnapshotInBackgroundTest(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"pre{i:D4}", $"data{i:D4}");
+
+                db.Execute("RI.CREATE", "coldcopy", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "coldcopy", "field", "value");
+                for (var i = 0; i < 150; i++)
+                    db.StringSet($"post{i:D4}", $"data{i:D4}");
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+
+            using var gate = new ManualResetEventSlim();
+            using var copyStarted = new ManualResetEventSlim();
+            RangeIndexFileLinks.CanLinkForTest = source => !source.Contains("cpr-checkpoints", StringComparison.Ordinal);
+            RangeIndexFileLinks.BeforeCopyForTest = source =>
+            {
+                if (!source.Contains("cpr-checkpoints", StringComparison.Ordinal))
+                    return;
+                copyStarted.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(30));
+            };
+
+            try
+            {
+                server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true, mutablePercent: 10, tryRecover: true, failOnRecoveryError: true);
+                server.Start();
+
+                var rim = server.Provider.StoreWrapper.rangeIndexManager;
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig());
+                var db = redis.GetDatabase(0);
+                for (var i = 0; i < 2000 && rim.ColdFlushCounts.Total == 0; i++)
+                    db.StringSet($"fill{i:D4}", $"data{i:D4}");
+
+                ClassicAssert.Greater(rim.ColdFlushCounts.Total, 0, "the recovered stub must be cold-flushed");
+                ClassicAssert.AreEqual(rim.ColdFlushCounts.Total, rim.ColdFlushCounts.Queued, "an unlinkable checkpoint snapshot must be copied off the flush thread");
+                ClassicAssert.IsTrue(copyStarted.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the queued copy must run");
+                ClassicAssert.Greater(rim.PendingFlushSnapshotCount, 0, "the flush file must be tracked as pending while it is copied");
+
+                gate.Set();
+                WaitForFlushSnapshots();
+                ClassicAssert.IsTrue(Directory.EnumerateFiles(rim.RiLogRoot, "*.flush.bftree").Any(), "the queued copy must produce the flush file");
+                ClassicAssert.IsFalse(Directory.EnumerateFiles(rim.RiLogRoot, "*" + RangeIndexManager.InProgressSuffix).Any());
+                ClassicAssert.AreEqual("value", (string)db.Execute("RI.GET", "coldcopy", "field"));
+            }
+            finally
+            {
+                gate.Set();
+                RangeIndexFileLinks.CanLinkForTest = null;
+                RangeIndexFileLinks.BeforeCopyForTest = null;
+            }
+        }
+
+        /// <summary>
+        /// A checkpoint of a pending tree whose immutable source cannot be linked must copy it in the background with the AOF
+        /// enabled: copying at FlushBegin holds the tree's checkpoint barrier, stalling its operations for seconds per tree.
+        /// </summary>
+        [Test]
+        [CancelAfter(120_000)]
+        public async Task RICheckpointCopiesUnlinkablePendingTreeInBackgroundAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true)))
+            {
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "pendingcopy", "DISK", "CACHESIZE", "65536", "MINRECORD", "8");
+                db.Execute("RI.SET", "pendingcopy", "field-1", "value-1");
+                db.Execute("SAVE");
+            }
+
+            server.Dispose();
+
+            using var gate = new ManualResetEventSlim();
+            using var copyStarted = new ManualResetEventSlim();
+            RangeIndexFileLinks.CanLinkForTest = source => !source.Contains("cpr-checkpoints", StringComparison.Ordinal);
+            RangeIndexFileLinks.BeforeCopyForTest = source =>
+            {
+                if (!source.Contains("cpr-checkpoints", StringComparison.Ordinal))
+                    return;
+                copyStarted.Set();
+                _ = gate.Wait(TimeSpan.FromSeconds(60));
+            };
+
+            try
+            {
+                server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true, failOnRecoveryError: true);
+                server.Start();
+
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                var lastSave = (long)db.Execute("LASTSAVE");
+
+                // LASTSAVE has one-second resolution; start the save in a later second so its completion is observable.
+                await Task.Delay(1100, cancellationToken);
+                db.Execute("BGSAVE");
+                ClassicAssert.IsTrue(copyStarted.Wait(TimeSpan.FromSeconds(30), cancellationToken), "the checkpoint must copy the pending tree");
+
+                // Copying at FlushBegin holds the tree's checkpoint barrier, which holds this write until the copy finishes.
+                var set = Task.Run(() => db.Execute("RI.SET", "pendingcopy", "field-2", "value-2"), cancellationToken);
+                _ = await set.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+                ClassicAssert.AreEqual("value-2", (string)db.Execute("RI.GET", "pendingcopy", "field-2"));
+                ClassicAssert.AreEqual(lastSave, (long)db.Execute("LASTSAVE"), "the checkpoint must not persist before its tree copy");
+
+                gate.Set();
+                while ((long)db.Execute("LASTSAVE") == lastSave)
+                    await Task.Delay(50, cancellationToken);
+
+                db.Execute("RI.SET", "pendingcopy", "field-3", "value-3");
+                db.Execute("COMMITAOF");
+            }
+            finally
+            {
+                gate.Set();
+                RangeIndexFileLinks.CanLinkForTest = null;
+                RangeIndexFileLinks.BeforeCopyForTest = null;
+            }
+
+            server.Dispose();
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, enableAOF: true, tryRecover: true, failOnRecoveryError: true);
+            server.Start();
+
+            using (var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig()))
+            {
+                var db = redis.GetDatabase(0);
+                for (var i = 1; i <= 3; i++)
+                    ClassicAssert.AreEqual($"value-{i}", (string)db.Execute("RI.GET", "pendingcopy", $"field-{i}"), $"field-{i}");
+            }
+        }
+
+        /// <summary>
         /// The synced copy used for tree snapshots must produce an exact copy across sync intervals, replace a destination that
         /// is a hard link to an immutable snapshot without modifying that snapshot, and leave no destination when the source is missing.
         /// </summary>

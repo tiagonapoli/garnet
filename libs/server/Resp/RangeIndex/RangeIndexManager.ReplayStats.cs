@@ -26,6 +26,7 @@ namespace Garnet.server
             public long CheckpointWaits, CheckpointWaitTicks;
             public long Promotes, PromoteTicks, PreStages, PreStageLinks, PreStageTicks, PreStageCopyBytes;
             public long Restores, RestoreTicks, OpenTicks, StubUpdateTicks;
+            public long ColdFlushes, ColdFlushesQueued, ColdFlushSyncTicks;
 
             public readonly PhaseStats Minus(in PhaseStats other) => new()
             {
@@ -45,6 +46,9 @@ namespace Garnet.server
                 RestoreTicks = RestoreTicks - other.RestoreTicks,
                 OpenTicks = OpenTicks - other.OpenTicks,
                 StubUpdateTicks = StubUpdateTicks - other.StubUpdateTicks,
+                ColdFlushes = ColdFlushes - other.ColdFlushes,
+                ColdFlushesQueued = ColdFlushesQueued - other.ColdFlushesQueued,
+                ColdFlushSyncTicks = ColdFlushSyncTicks - other.ColdFlushSyncTicks,
             };
         }
 
@@ -76,6 +80,9 @@ namespace Garnet.server
             RestoreTicks = Interlocked.Read(ref phaseStats.RestoreTicks),
             OpenTicks = Interlocked.Read(ref phaseStats.OpenTicks),
             StubUpdateTicks = Interlocked.Read(ref phaseStats.StubUpdateTicks),
+            ColdFlushes = Interlocked.Read(ref phaseStats.ColdFlushes),
+            ColdFlushesQueued = Interlocked.Read(ref phaseStats.ColdFlushesQueued),
+            ColdFlushSyncTicks = Interlocked.Read(ref phaseStats.ColdFlushSyncTicks),
         };
 
         /// <summary>Starts a replay measurement window, reported by <see cref="LogReplayStats"/>.</summary>
@@ -121,10 +128,10 @@ namespace Garnet.server
             var cold = s.CheckpointWaitTicks + s.PromoteTicks + s.RestoreTicks;
             logger?.LogInformation("{Tag} reason={Reason} elapsedMs={Elapsed:F0} ops={Ops} slowOps={Slow} stubReadMs={StubRead:F0} hotReadMs={HotRead:F0} nativeMs={Native:F0} " +
                 "checkpointWaits={CpWaits} checkpointWaitMs={CpWaitMs:F0} promotes={Promotes} promoteMs={PromoteMs:F0} preStages={PreStages} preStageLinks={PreStageLinks} preStageMs={PreStageMs:F0} preStageCopyMB={PreStageCopyMB:F0} " +
-                "restores={Restores} restoreMs={RestoreMs:F0} openMs={OpenMs:F0} stubUpdateMs={StubUpdateMs:F0} overlay=[{Overlay}]",
+                "restores={Restores} restoreMs={RestoreMs:F0} openMs={OpenMs:F0} stubUpdateMs={StubUpdateMs:F0} coldFlushes={ColdFlushes} coldFlushesQueued={ColdFlushesQueued} coldFlushSyncMs={ColdFlushSyncMs:F0} linkFailures={LinkFailures} overlay=[{Overlay}]",
                 tag, reason, Ms(elapsedTicks), s.Ops, s.SlowOps, Ms(s.StubReadTicks), Ms(Math.Max(0, s.StubReadTicks - cold)), Ms(s.NativeTicks),
                 s.CheckpointWaits, Ms(s.CheckpointWaitTicks), s.Promotes, Ms(s.PromoteTicks), s.PreStages, s.PreStageLinks, Ms(s.PreStageTicks), s.PreStageCopyBytes / 1048576.0,
-                s.Restores, Ms(s.RestoreTicks), Ms(s.OpenTicks), Ms(s.StubUpdateTicks), BfTreeService.OverlayStats);
+                s.Restores, Ms(s.RestoreTicks), Ms(s.OpenTicks), Ms(s.StubUpdateTicks), s.ColdFlushes, s.ColdFlushesQueued, Ms(s.ColdFlushSyncTicks), RangeIndexFileLinks.LinkFailures, BfTreeService.OverlayStats);
         }
     }
 }
