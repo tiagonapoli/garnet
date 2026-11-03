@@ -417,15 +417,20 @@ namespace Garnet.server
             {
                 waited++;
 
-                // The workers may be busy with other trees' snapshots for minutes; this file is needed now.
-                var inlineStart = Stopwatch.GetTimestamp();
-                if (pending.TryRunClaimed())
+                // A foreground caller (compaction, promote, replay) blocks on this snapshot, so the background I/O cap
+                // would only stall it; the cap is lifted for every snapshot in flight while it waits.
+                using (BfTreeService.SuspendSnapshotIORate())
                 {
-                    _ = Interlocked.Increment(ref flushSnapshotsRunInline);
-                    logger?.LogInformation("[RangeIndexFlushSnapshotInline] reason={Reason} path={Path} completed={Completed} ms={Ms:F0}",
-                        reason, Path.GetFileName(flushPath), pending.Completion.IsCompleted, Stopwatch.GetElapsedTime(inlineStart).TotalMilliseconds);
+                    // The workers may be busy with other trees' snapshots for minutes; this file is needed now.
+                    var inlineStart = Stopwatch.GetTimestamp();
+                    if (pending.TryRunClaimed())
+                    {
+                        _ = Interlocked.Increment(ref flushSnapshotsRunInline);
+                        logger?.LogInformation("[RangeIndexFlushSnapshotInline] reason={Reason} path={Path} completed={Completed} ms={Ms:F0}",
+                            reason, Path.GetFileName(flushPath), pending.Completion.IsCompleted, Stopwatch.GetElapsedTime(inlineStart).TotalMilliseconds);
+                    }
+                    AsyncUtils.BlockingWait(pending.Completion);
                 }
-                AsyncUtils.BlockingWait(pending.Completion);
             }
 
             // The evicted tree may still have data.bftree open; staging over it must wait for its disposal.
