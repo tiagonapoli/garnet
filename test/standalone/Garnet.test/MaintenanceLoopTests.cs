@@ -24,6 +24,39 @@ namespace Garnet.test
 
         static readonly TimeSpan Interval = TimeSpan.FromMilliseconds(10);
 
+        /// <summary>
+        /// A cycle can block for minutes (a compaction waiting on disk); the loop is started by server startup and
+        /// failover, which must not wait for its first cycle.
+        /// </summary>
+        [Test]
+        public async Task TheFirstCycleDoesNotRunOnTheCaller()
+        {
+            using var cts = new CancellationTokenSource();
+            using var cycleEntered = new ManualResetEventSlim();
+            using var releaseCycle = new ManualResetEventSlim();
+
+            // StartNew does not unwrap: start completes when the call returns, not when the loop ends.
+            var start = Task.Factory.StartNew(() => StoreWrapper.RunMaintenanceLoopAsync((_) =>
+            {
+                cycleEntered.Set();
+                releaseCycle.Wait(CancellationToken.None);
+                return ValueTask.CompletedTask;
+            }, Interval, "test task", null, cts.Token), CancellationToken.None, TaskCreationOptions.None, TaskScheduler.Default);
+
+            try
+            {
+                Assert.That(cycleEntered.Wait(WaitTimeout), Is.True, "the loop did not run its first cycle");
+                Assert.That(start.Wait(WaitTimeout), Is.True, "starting the loop waited for its blocking first cycle");
+            }
+            finally
+            {
+                releaseCycle.Set();
+            }
+
+            await cts.CancelAsync();
+            await await start;
+        }
+
         [Test]
         public async Task AFailedCycleIsLoggedAndTheLoopKeepsRunning()
         {
