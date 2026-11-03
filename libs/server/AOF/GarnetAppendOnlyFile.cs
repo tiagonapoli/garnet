@@ -159,6 +159,7 @@ namespace Garnet.server
         /// <param name="replicaAofBeginAddress"></param>
         /// <param name="replicaAofTailAddress"></param>
         /// <param name="beginAddress"></param>
+        /// <param name="replayBoundAddress">Highest address the replica may replay from its own AOF.</param>
         /// <param name="checkpointAofBeginAddress"></param>
         /// <returns></returns>
         /// <exception cref="Exception"></exception>
@@ -170,11 +171,12 @@ namespace Garnet.server
             in AofAddress replicaAofBeginAddress,
             in AofAddress replicaAofTailAddress,
             in AofAddress beginAddress,
+            in AofAddress replayBoundAddress,
             ref AofAddress checkpointAofBeginAddress)
         {
             var replayAOFMap = 0UL;
             for (var sublogIdx = 0; sublogIdx < serverOptions.AofPhysicalSublogCount; sublogIdx++)
-                ComputeAofSubloSyncReplayAddress(sublogIdx, ref replayAOFMap, recoverFromRemote, sameMainStoreCheckpointHistory, sameHistory2, replicationOffset2, replicaAofBeginAddress, replicaAofTailAddress, beginAddress, ref checkpointAofBeginAddress);
+                ComputeAofSubloSyncReplayAddress(sublogIdx, ref replayAOFMap, recoverFromRemote, sameMainStoreCheckpointHistory, sameHistory2, replicationOffset2, replicaAofBeginAddress, replicaAofTailAddress, beginAddress, replayBoundAddress, ref checkpointAofBeginAddress);
 
             return replayAOFMap;
 
@@ -188,6 +190,7 @@ namespace Garnet.server
                 in AofAddress replicaAofBeginAddress,
                 in AofAddress replicaAofTailAddress,
                 in AofAddress beginAddress,
+                in AofAddress replayBoundAddress,
                 ref AofAddress checkpointAofBeginAddress)
             {
                 if (!recoverFromRemote)
@@ -211,9 +214,9 @@ namespace Garnet.server
 
                         // If we are behind this primary we need to decide until where to replay
                         var replayUntilAddress = replicaAofTailAddress;
-                        // Replica tail is further ahead than committed address of primary
-                        if (Log.CommittedUntilAddress[sublogIdx] < replayUntilAddress[sublogIdx])
-                            replayUntilAddress[sublogIdx] = Log.CommittedUntilAddress[sublogIdx];
+                        // Replica tail is further ahead than what the primary can vouch for
+                        if (replayBoundAddress[sublogIdx] < replayUntilAddress[sublogIdx])
+                            replayUntilAddress[sublogIdx] = replayBoundAddress[sublogIdx];
 
                         // Replay only if records not included in checkpoint
                         if (replayUntilAddress[sublogIdx] > checkpointAofBeginAddress[sublogIdx])

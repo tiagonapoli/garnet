@@ -59,7 +59,8 @@ namespace Garnet.cluster
             CheckpointEntry localEntry,
             out long index_size,
             out LogFileInfo hlog_size,
-            out bool skipLocalMainStoreCheckpoint)
+            out bool skipLocalMainStoreCheckpoint,
+            out bool reuseNewerReplicaCheckpoint)
         {
             hlog_size = default;
             index_size = -1L;
@@ -71,11 +72,15 @@ namespace Garnet.cluster
             // We will not send the latest local checkpoint if any of the following hold
             // 1. Local node does not have any checkpoints
             // 2. Local checkpoint is of same version and history as the remote checkpoint
+            // 3. Remote checkpoint is newer than the local one and was built from AOF this node still holds
             skipLocalMainStoreCheckpoint = localEntry.metadata.storeHlogToken == default || (sameMainStoreCheckpointHistory && localEntry.metadata.storeVersion == replicaCheckpointEntry.metadata.storeVersion);
+            var reuseReason = "version-mismatch";
+            reuseNewerReplicaCheckpoint = !skipLocalMainStoreCheckpoint && sameMainStoreCheckpointHistory && CanReuseNewerReplicaCheckpoint(localEntry, out reuseReason);
+            skipLocalMainStoreCheckpoint |= reuseNewerReplicaCheckpoint;
 
-            var reason = skipLocalMainStoreCheckpoint
+            var reason = skipLocalMainStoreCheckpoint && !reuseNewerReplicaCheckpoint
                 ? (localEntry.metadata.storeHlogToken == default ? "no-local-checkpoint" : "same-history-and-version")
-                : (!sameMainStoreCheckpointHistory ? "history-mismatch" : "version-mismatch");
+                : (!sameMainStoreCheckpointHistory ? "history-mismatch" : reuseReason);
             logger?.LogInformation("[ResyncDecision] sendCheckpoint={send} reason={reason} replicaReplId={replicaReplId} localReplId={localReplId} replicaVersion={replicaVersion} localVersion={localVersion} replicaToken={replicaToken} localToken={localToken} replicaCoveredAof={replicaCoveredAof} localCoveredAof={localCoveredAof}",
                 !skipLocalMainStoreCheckpoint, reason, replicaCheckpointEntry.metadata.storePrimaryReplId, localEntry.metadata.storePrimaryReplId, replicaCheckpointEntry.metadata.storeVersion, localEntry.metadata.storeVersion, replicaCheckpointEntry.metadata.storeHlogToken, localEntry.metadata.storeHlogToken, replicaCheckpointEntry.metadata.storeCheckpointCoveredAofAddress, localEntry.metadata.storeCheckpointCoveredAofAddress);
             // Acquire metadata for main store
@@ -83,6 +88,57 @@ namespace Garnet.cluster
             if (!skipLocalMainStoreCheckpoint && !clusterProvider.replicationManager.TryAcquireSettledMetadataForMainStore(localEntry, out hlog_size, out index_size))
                 return false;
 
+            return true;
+        }
+
+        /// <summary>
+        /// Returns the highest AOF address whose records this node holds unchanged since any replica received them.
+        /// </summary>
+        private AofAddress GetStableAofTailAddress()
+        {
+            var stableTail = storeWrapper.appendOnlyFile.Log.CommittedUntilAddress;
+            var recoveredTail = clusterProvider.replicationManager.RecoveredAofTailAddress;
+            if (recoveredTail.Length == stableTail.Length)
+                stableTail.MinExchange(recoveredTail);
+            return stableTail;
+        }
+
+        /// <summary>
+        /// Whether the replica can recover its own checkpoint although it is newer than the local one, which happens when
+        /// this node crashed during a checkpoint that the replica had already completed and recovered an older one.
+        /// </summary>
+        private bool CanReuseNewerReplicaCheckpoint(CheckpointEntry localEntry, out string reason)
+        {
+            var replicaMetadata = replicaCheckpointEntry.metadata;
+            var replicaCovered = replicaCheckpointEntry.GetMinAofCoveredAddress();
+            reason = "version-mismatch";
+            if (replicaMetadata.storeHlogToken == default || replicaMetadata.storeVersion <= localEntry.metadata.storeVersion)
+                return false;
+
+            // Signed under an earlier history, the replica checkpoint may contain AOF that diverged at a failover
+            reason = "replica-checkpoint-newer-other-history";
+            if (!replicaMetadata.storePrimaryReplId.Equals(clusterProvider.replicationManager.PrimaryReplId))
+                return false;
+
+            reason = "replica-checkpoint-newer-not-covering-local";
+            if (replicaCovered.AnyLesser(localEntry.GetMinAofCoveredAddress()))
+                return false;
+
+            // AOF past the stable tail may have been lost by this node's crash, so a checkpoint covering it can diverge
+            reason = "replica-checkpoint-newer-beyond-stable-aof";
+            if (replicaCovered.AnyGreater(GetStableAofTailAddress()))
+                return false;
+
+            reason = "replica-checkpoint-newer-aof-missing";
+            if (replicaAofTailAddress.AnyLesser(replicaCovered))
+                return false;
+
+            // Records written after the sync must carry a version the recovered replica does not skip as already checkpointed
+            reason = "replica-checkpoint-newer-version-ahead";
+            if (storeWrapper.store.CurrentVersion < replicaMetadata.storeVersion)
+                return false;
+
+            reason = "replica-checkpoint-newer";
             return true;
         }
 
@@ -136,8 +192,9 @@ namespace Garnet.cluster
                 var index_size = -1L;
                 var hlog_size = default(LogFileInfo);
                 var skipLocalMainStoreCheckpoint = false;
+                var reuseNewerReplicaCheckpoint = false;
                 var retryCount = validateMetadataMaxRetryCount;
-                while (!ValidateMetadata(localEntry, out index_size, out hlog_size, out skipLocalMainStoreCheckpoint))
+                while (!ValidateMetadata(localEntry, out index_size, out hlog_size, out skipLocalMainStoreCheckpoint, out reuseNewerReplicaCheckpoint))
                 {
                     logger?.LogError("Failed to validate metadata. Retrying....");
                     await Task.Yield();
@@ -178,7 +235,9 @@ namespace Garnet.cluster
 
                 #region startAofSync
                 var recoverFromRemote = !skipLocalMainStoreCheckpoint;
-                var checkpointAofBeginAddress = localEntry.GetMinAofCoveredAddress();
+                // A reused newer replica checkpoint already holds the AOF between the local checkpoint and its own;
+                // streaming from the local checkpoint would resend that AOF for the replica to skip.
+                var checkpointAofBeginAddress = reuseNewerReplicaCheckpoint ? replicaCheckpointEntry.GetMinAofCoveredAddress() : localEntry.GetMinAofCoveredAddress();
                 var beginAddress = checkpointAofBeginAddress;
                 var sameHistory2 = !string.IsNullOrEmpty(clusterProvider.replicationManager.PrimaryReplId2) && clusterProvider.replicationManager.PrimaryReplId2.Equals(replicaAssignedPrimaryId);
 
@@ -192,6 +251,7 @@ namespace Garnet.cluster
                     replicaAofBeginAddress,
                     replicaAofTailAddress,
                     beginAddress,
+                    reuseNewerReplicaCheckpoint ? GetStableAofTailAddress() : storeWrapper.appendOnlyFile.Log.CommittedUntilAddress,
                     ref checkpointAofBeginAddress);
 
                 // Signal replica to recover from local/remote checkpoint
@@ -304,7 +364,7 @@ namespace Garnet.cluster
                 // If there is possible AOF data loss and we need to take an on-demand checkpoint,
                 // then we should take the checkpoint before we register the sync task, because
                 // TryAddReplicationTask is guaranteed to return true in this scenario.
-                var validMetadata = ValidateMetadata(cEntry, out _, out _, out _);
+                var validMetadata = ValidateMetadata(cEntry, out _, out _, out _, out _);
                 if (clusterProvider.serverOptions.OnDemandCheckpoint &&
                     (startAofAddress.AnyLesser(clusterProvider.replicationManager.AofSyncDriverStore.TruncatedUntil) || !validMetadata))
                 {
