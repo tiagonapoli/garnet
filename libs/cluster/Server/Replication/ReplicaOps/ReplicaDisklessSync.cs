@@ -201,7 +201,7 @@ namespace Garnet.cluster
                         EndRecovery(RecoveryStatus.NoRecovery, downgradeLock: false);
                     }
                     gcs?.Dispose();
-                    recvCheckpointHandler?.Dispose();
+                    Interlocked.Exchange(ref recvCheckpointHandler, null)?.Dispose();
                     if (!resetHandler.TryReset())
                     {
                         resetHandler.Dispose();
