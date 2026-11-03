@@ -24,7 +24,7 @@ namespace Garnet.common
         /// </summary>
         /// <param name="exception">When this method returns, contains the exception that occurred during the operation, or null if no exception
         /// was thrown.</param>
-        /// <param name="timeout">The maximum time to wait for other participants. The default value is infinite.</param>
+        /// <param name="timeout">The maximum time the first participant waits for the others to arrive; a timeout is reported through <paramref name="exception"/>.</param>
         /// <param name="cancellationToken">A cancellation token to observe while waiting.</param>
         /// <returns>true if the caller is the first participant to arrive; otherwise, false.</returns>
         public bool TrySignalOrWait(out Exception exception, TimeSpan timeout = default, CancellationToken cancellationToken = default)
@@ -38,8 +38,8 @@ namespace Garnet.common
                 if (newValue == participantCount - 1)
                 {
                     // Wait only if there are more participants to arrive
-                    if (newValue > 0)
-                        _ = releaseFirst.Wait(timeout, cancellationToken);
+                    if (newValue > 0 && !releaseFirst.Wait(timeout, cancellationToken))
+                        exception = new TimeoutException($"{nameof(LeaderBarrier)} leader timed out after {timeout} waiting for {participantCount} participants to arrive");
                     return true;
                 }
 
@@ -47,10 +47,10 @@ namespace Garnet.common
                 if (newValue == 0)
                     releaseFirst.Set();
 
-                // All non-first participants wait for release
+                // Non-first participants wait for the leader's operation, however long it runs; the leader always releases them.
                 if (newValue >= 0)
                 {
-                    _ = releaseAll.Wait(timeout, cancellationToken);
+                    releaseAll.Wait(cancellationToken);
                     return false;
                 }
 
