@@ -562,6 +562,7 @@ namespace Garnet.server
             if (storeLog.ReadOnlyAddress - storeLog.BeginAddress > mainStoreMaxLogSize)
             {
                 var readOnlyAddress = storeLog.ReadOnlyAddress;
+                var compactWatch = System.Diagnostics.Stopwatch.StartNew();
                 var compactLength = (1L << StoreWrapper.serverOptions.SegmentSizeBits(isObj: false)) * (mainStoreMaxSegments - numSegmentsToCompact);
                 var untilAddress = readOnlyAddress - compactLength;
                 Logger?.LogInformation(
@@ -594,8 +595,8 @@ namespace Garnet.server
                 }
 
                 Logger?.LogInformation(
-                    "End store compact until {untilAddress}, Begin = {beginAddress}, ReadOnly = {readOnlyAddress}, Tail = {tailAddress}",
-                    untilAddress, storeLog.BeginAddress, readOnlyAddress, storeLog.TailAddress);
+                    "End store compact until {untilAddress}, Begin = {beginAddress}, ReadOnly = {readOnlyAddress}, Tail = {tailAddress}, durationMs = {durationMs}",
+                    untilAddress, storeLog.BeginAddress, readOnlyAddress, storeLog.TailAddress, compactWatch.ElapsedMilliseconds);
             }
         }
 
