@@ -3827,6 +3827,60 @@ namespace Garnet.test
         }
 
         /// <summary>
+        /// Compacting an evicted stub copies it to the tail, which waits for its flush snapshot; that snapshot runs without the
+        /// snapshot I/O cap while the compaction waits, rather than holding it for the whole capped sweep.
+        /// </summary>
+        [Test]
+        [CancelAfter(300_000)]
+        public async Task RICompactionLiftsSnapshotIOCapForTheFlushSnapshotItWaitsOnAsync(System.Threading.CancellationToken cancellationToken)
+        {
+            server.Dispose();
+            TestUtils.DeleteDirectory(TestUtils.MethodTestDir, wait: true);
+            server = TestUtils.CreateGarnetServer(TestUtils.MethodTestDir, enableRangeIndexPreview: true, lowMemory: true);
+            server.Start();
+
+            var rim = server.Provider.StoreWrapper.rangeIndexManager;
+            var store = server.Provider.StoreWrapper.store;
+            try
+            {
+                using var redis = ConnectionMultiplexer.Connect(TestUtils.GetConfig(allowAdmin: true));
+                var db = redis.GetDatabase(0);
+                db.Execute("RI.CREATE", "compacted", "DISK", "CACHESIZE", "1048576", "MINRECORD", "8", "MAXRECORD", "1024", "MAXKEYLEN", "64");
+
+                // About 64 MiB of records: the capped sweep needs well over 100 s, the uncapped one a few seconds.
+                var value = new string('v', 900);
+                for (var batch = 0; batch < 72; batch++)
+                {
+                    var writes = new Task[1000];
+                    for (var i = 0; i < writes.Length; i++)
+                        writes[i] = db.ExecuteAsync("RI.SET", "compacted", $"field-{batch:D3}-{i:D4}", value);
+                    await Task.WhenAll(writes).WaitAsync(cancellationToken);
+                }
+
+                BfTreeService.SetSnapshotIORate(512 << 10);
+                var throttledBefore = BfTreeService.SnapshotIOThrottledTime;
+                await Task.Run(() => store.Log.FlushAndEvict(wait: true)).WaitAsync(TimeSpan.FromSeconds(30), cancellationToken);
+                ClassicAssert.AreEqual(1, rim.PendingFlushSnapshotCount, "the flush must queue a snapshot of the tree");
+                while (BfTreeService.SnapshotIOThrottledTime == throttledBefore)
+                    await Task.Delay(20, cancellationToken);
+
+                var untilAddress = store.Log.TailAddress;
+                var compaction = System.Diagnostics.Stopwatch.StartNew();
+                await Task.Run(() => store.Log.Compact<PinnedSpanByte, Empty, Empty, GarnetRecordTriggers>(store.StoreFunctions.recordTriggers, untilAddress, CompactionType.Lookup)).WaitAsync(cancellationToken);
+                compaction.Stop();
+
+                ClassicAssert.AreEqual(0, rim.PendingFlushSnapshotCount);
+                ClassicAssert.Less(compaction.Elapsed, TimeSpan.FromSeconds(40), "the compaction must not wait for the capped snapshot sweep");
+                BfTreeService.SetSnapshotIORate(0);
+                ClassicAssert.AreEqual(value, (string)db.Execute("RI.GET", "compacted", "field-071-0999"));
+            }
+            finally
+            {
+                BfTreeService.SetSnapshotIORate(0);
+            }
+        }
+
+        /// <summary>
         /// With the AOF enabled, a checkpoint's tree snapshot is written in the background: operations on the tree proceed
         /// while it is pending, the checkpoint does not persist until it completes, and recovery converges by replaying the AOF.
         /// </summary>
