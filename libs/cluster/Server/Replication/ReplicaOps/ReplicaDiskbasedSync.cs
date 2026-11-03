@@ -32,6 +32,8 @@ namespace Garnet.cluster
             ReplicateSyncOptions options)
         {
             ReadOnlyMemory<byte> errorMessage = default;
+            var preAttachWatch = System.Diagnostics.Stopwatch.StartNew();
+            long addReplicaMs = 0, epochMs = 0;
             try
             {
                 logger?.LogTrace("CLUSTER REPLICATE {nodeid}", options.NodeId);
@@ -44,6 +46,7 @@ namespace Garnet.cluster
                         return (false, error);
                     }
                 }
+                addReplicaMs = preAttachWatch.ElapsedMilliseconds;
 
                 // Create or update timestamp manager for sharded log if needed
                 storeWrapper.appendOnlyFile.CreateOrUpdateKeySequenceManager();
@@ -53,6 +56,7 @@ namespace Garnet.cluster
                 {
                     await session.UnsafeBumpAndWaitForEpochTransitionAsync().ConfigureAwait(false);
                 }
+                epochMs = preAttachWatch.ElapsedMilliseconds - addReplicaMs;
 
                 // Initiate remote checkpoint retrieval
                 if (options.Background)
@@ -197,8 +201,8 @@ namespace Garnet.cluster
                         cEntry.ToByteArray(),
                         beginAddress.Span,
                         tailAddress.Span).WaitAsync(storeWrapper.runtimeConfig.GetTimeSpan(ServerConfigType.REPL_ATTACH_TIMEOUT), linkedCts.Token).ConfigureAwait(false);
-                    logger?.LogInformation("[ResyncTiming] side=replica connectMs={connectMs} resetMs={resetMs} suspendMs={suspendMs} recoverAofMs={recoverAofMs} primarySyncMs={primarySyncMs} totalMs={totalMs}",
-                        connectMs, resetMs, suspendMs, recoverAofMs, phaseWatch.ElapsedMilliseconds, totalWatch.ElapsedMilliseconds);
+                    logger?.LogInformation("[ResyncTiming] side=replica addReplicaMs={addReplicaMs} epochMs={epochMs} connectMs={connectMs} resetMs={resetMs} suspendMs={suspendMs} recoverAofMs={recoverAofMs} primarySyncMs={primarySyncMs} totalMs={totalMs} totalWithPreAttachMs={totalWithPreAttachMs}",
+                        addReplicaMs, epochMs, connectMs, resetMs, suspendMs, recoverAofMs, phaseWatch.ElapsedMilliseconds, totalWatch.ElapsedMilliseconds, preAttachWatch.ElapsedMilliseconds);
                 }
                 catch (Exception ex)
                 {
