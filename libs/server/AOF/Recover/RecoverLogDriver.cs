@@ -24,6 +24,7 @@ namespace Garnet.server
     /// <param name="startAddress">Start address in the append-only file for recovery.</param>
     /// <param name="untilAddress">End address in the append-only file for recovery.</param>
     /// <param name="untilSequenceNumber">Replay all records with sequence number to ensure prefix consistent recovery.</param>
+    /// <param name="recoveryAbort">Shared by every driver of this recovery; cancelled when any replay task faults so all waits end.</param>
     /// <param name="logger">Optional logger for diagnostic output.</param>
     internal sealed partial class RecoverLogDriver(
         AofProcessor aofProcessor,
@@ -35,6 +36,7 @@ namespace Garnet.server
         long startAddress,
         long untilAddress,
         long untilSequenceNumber,
+        CancellationTokenSource recoveryAbort,
         ILogger logger = null) : IBulkLogEntryConsumer, IDisposable
     {
         readonly int physicalSublogIdx = physicalSublogIdx;
@@ -44,7 +46,8 @@ namespace Garnet.server
         readonly GarnetAppendOnlyFile appendOnlyFile = appendOnlyFile;
         readonly TsavoriteLogScanSingleIterator replayIterator = appendOnlyFile.Log.ScanSingle(physicalSublogIdx, startAddress, untilAddress, scanUncommitted: true, recover: false, logger: logger);
         readonly TsavoriteLog physicalSublog = appendOnlyFile.Log.GetSubLog(physicalSublogIdx);
-        readonly CancellationTokenSource cts = new();
+        readonly CancellationTokenSource recoveryAbort = recoveryAbort;
+        readonly CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(recoveryAbort.Token);
         readonly ILogger logger = logger;
         readonly long startAddress = startAddress;
         readonly long untilAddress = untilAddress;
@@ -69,6 +72,12 @@ namespace Garnet.server
         /// avoiding wasted scans and, importantly, avoiding committing log metadata beyond the intended prefix.
         /// </summary>
         volatile bool prefixConsistencyBoundaryReached = false;
+
+        /// <summary>
+        /// First fault raised by a parallel replay task. Recovery must fail rather than report success with a partially
+        /// replayed log, because the tasks stop at the fault and the rest of the log is never applied.
+        /// </summary>
+        Exception replayFault;
 
         /// <summary>
         /// Gets the total number of records that have been replayed.
@@ -232,7 +241,42 @@ namespace Garnet.server
                 }
                 catch (OperationCanceledException) when (cts.IsCancellationRequested)
                 { }
+                finally
+                {
+                    // Replay tasks reference this driver's state and token source, so they must finish before it is disposed.
+                    if (replayTasks != null)
+                    {
+                        await cts.CancelAsync().ConfigureAwait(false);
+                        try
+                        {
+                            await Task.WhenAll(replayTasks).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            RecordReplayFault(ex);
+                        }
+                    }
+                }
+
+                var fault = Volatile.Read(ref replayFault);
+                if (fault != null)
+                    throw new GarnetException($"AOF recovery of sublog {physicalSublogIdx} failed: a parallel replay task faulted before replaying up to {untilAddress}", fault);
             });
+        }
+
+        /// <summary>
+        /// Records the first replay task fault and aborts every driver of this recovery, including tasks waiting on cross-task barriers.
+        /// </summary>
+        internal void RecordReplayFault(Exception ex)
+        {
+            if (Interlocked.CompareExchange(ref replayFault, ex, null) == null)
+                logger?.LogError(ex, "AofRecoveryReplayFault sublog={physicalSublogIdx} untilAddress={untilAddress}", physicalSublogIdx, untilAddress);
+            try
+            {
+                recoveryAbort.Cancel();
+            }
+            catch (ObjectDisposedException)
+            { }
         }
     }
 }

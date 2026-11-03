@@ -514,12 +514,14 @@ namespace Garnet.test.cluster
             X509CertificateCollection certificates = null,
             ServerCredential clusterCreds = new ServerCredential(),
             int threadPoolMinIOCompletionThreads = 0,
-            bool enableRangeIndexPreview = false)
+            bool enableRangeIndexPreview = false,
+            int replicaSyncTimeout = 60)
         {
             var opts = TestUtils.GetGarnetServerOptions(
                 TestFolder,
                 TestFolder,
                 endpoint,
+                replicaSyncTimeout: replicaSyncTimeout,
                 logger: loggerFactory?.CreateLogger("GarnetServer"),
                 enableCluster: enableCluster,
                 disablePubSub: true,

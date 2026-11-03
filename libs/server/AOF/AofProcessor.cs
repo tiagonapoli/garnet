@@ -224,6 +224,11 @@ namespace Garnet.server
             => activeVectorManager?.WaitForVectorOperationsToComplete();
 
         /// <summary>
+        /// Sets the token that aborts cross-task synchronized-operation waits; cancel it when any replay task faults.
+        /// </summary>
+        public void SetReplayCancellationToken(CancellationToken token) => aofReplayCoordinator.SetReplayCancellationToken(token);
+
+        /// <summary>
         /// Apply a streamed diskless-sync snapshot record without recording it in the AOF.
         /// </summary>
         public GarnetStatus ApplySnapshotRecord(in DiskLogRecord record)
