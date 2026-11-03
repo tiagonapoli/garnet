@@ -3,8 +3,10 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.ExceptionServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Garnet.common;
 using Microsoft.Extensions.Logging;
@@ -77,6 +79,7 @@ namespace Garnet.server
             readonly AofReplayContext[] aofReplayContext = InitializeReplayContext(serverOptions.AofVirtualSublogCount, aofProcessor);
             SingleWriterMultiReaderLock disposed = new();
             readonly ILogger logger = logger;
+            CancellationToken replayCancellationToken;
 
             /// <summary>
             /// Replay context for replay subtask
@@ -726,7 +729,17 @@ namespace Garnet.server
 
                 // Synchronize execution across sublogs
                 var leaderBarrier = GetBarrier(barrierId, sequenceNumber, participantCount);
-                var isLeader = leaderBarrier.TrySignalOrWait(out var signalException, serverOptions.ReplicaSyncTimeout);
+                var waitStart = Stopwatch.GetTimestamp();
+                var isLeader = leaderBarrier.TrySignalOrWait(out var signalException, replayCancellationToken, SlowWaitReportInterval(), OnSlowWait);
+                if (isLeader)
+                {
+                    var waitMs = Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds;
+                    if (signalException != null)
+                        logger?.LogError(signalException, "SynchronizedOperationAborted barrierId={barrierId} seq={sequenceNumber} participants={participantCount} waitMs={waitMs:F0}", barrierId, sequenceNumber, participantCount, waitMs);
+                    else if (waitMs >= SlowWaitReportInterval().TotalMilliseconds)
+                        logger?.LogWarning("SynchronizedOperationSlowBarrier barrierId={barrierId} seq={sequenceNumber} participants={participantCount} waitMs={waitMs:F0}", barrierId, sequenceNumber, participantCount, waitMs);
+                }
+
                 Exception removeBarrierException = null;
 
                 // We execute the synchronized operation iff
@@ -797,7 +810,18 @@ namespace Garnet.server
                     var barrierID = new BarrierKey() { SessionId = sessionId, txnId = seqNum };
                     return leaderBarriers.TryRemove(barrierID, out _);
                 }
+
+                void OnSlowWait(TimeSpan elapsed, int arrived)
+                    => logger?.LogWarning("SynchronizedOperationWaiting barrierId={barrierId} seq={sequenceNumber} arrived={arrived}/{participantCount} elapsedMs={elapsedMs:F0}", barrierId, sequenceNumber, arrived, participantCount, elapsed.TotalMilliseconds);
             }
+
+            TimeSpan SlowWaitReportInterval()
+                => serverOptions.ReplicaSyncTimeout > TimeSpan.Zero && serverOptions.ReplicaSyncTimeout != Timeout.InfiniteTimeSpan ? serverOptions.ReplicaSyncTimeout : TimeSpan.FromSeconds(5);
+
+            /// <summary>
+            /// Sets the token that aborts synchronized-operation waits; the replay owner cancels it when any replay task faults.
+            /// </summary>
+            internal void SetReplayCancellationToken(CancellationToken token) => replayCancellationToken = token;
         }
     }
 }

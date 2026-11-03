@@ -1,8 +1,9 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
 using System.Threading.Tasks;
+using Garnet.common;
 using Microsoft.Extensions.Logging;
 using Tsavorite.core;
 
@@ -26,8 +27,7 @@ namespace Garnet.server
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "{method} failed at ready barrier", nameof(RecoverReplayTaskAsync));
-                    await cts.CancelAsync().ConfigureAwait(false);
+                    RecordReplayFault(new GarnetException($"Replay task {replayTaskIdx} failed at ready barrier", ex));
                     break;
                 }
 
@@ -54,8 +54,7 @@ namespace Garnet.server
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "{method} failed at replaying", nameof(RecoverReplayTaskAsync));
-                    await cts.CancelAsync().ConfigureAwait(false);
+                    RecordReplayFault(new GarnetException($"Replay task {replayTaskIdx} failed at replaying", ex));
                     break;
                 }
 
@@ -72,8 +71,7 @@ namespace Garnet.server
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "{method} failed at completion barrier", nameof(RecoverReplayTaskAsync));
-                    await cts.CancelAsync().ConfigureAwait(false);
+                    RecordReplayFault(new GarnetException($"Replay task {replayTaskIdx} failed at completion barrier", ex));
                     break;
                 }
             }
