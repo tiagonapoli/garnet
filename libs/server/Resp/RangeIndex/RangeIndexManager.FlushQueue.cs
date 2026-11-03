@@ -89,6 +89,16 @@ namespace Garnet.server
         /// <summary>Test hook run by a flush worker before it snapshots; null in production.</summary>
         internal Action<string> BeforeFlushSnapshotForTest;
 
+        /// <summary>Occupies every flush worker with <paramref name="work"/>, as other trees' long snapshots do.</summary>
+        internal Task[] OccupyFlushWorkersForTest(Action work)
+        {
+            var tasks = new Task[FlushSnapshotConcurrency];
+            for (var i = 0; i < tasks.Length; i++)
+                tasks[i] = Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.None, FlushScheduler);
+
+            return tasks;
+        }
+
         /// <summary>
         /// Whether checkpoint snapshots of live trees are written in the background rather than at
         /// <see cref="Tsavorite.core.CheckpointTrigger.FlushBegin"/> with the tree's operations held. Requires the AOF: the snapshot cut lands
@@ -114,7 +124,30 @@ namespace Garnet.server
             public Task Completion => done.Task;
 
             public void Complete() => _ = done.TrySetResult();
+
+            private Action inlineWork;
+            private int claimed;
+
+            /// <summary>Sets work that only the first of the worker and a waiter runs, so a waiter need not queue behind other trees.</summary>
+            public void SetClaimableWork(Action work) => inlineWork = work;
+
+            /// <summary>Runs the claimable work on the calling thread unless a worker has already claimed it.</summary>
+            /// <returns><c>true</c> if this call ran the work.</returns>
+            public bool TryRunClaimed()
+            {
+                var work = Volatile.Read(ref inlineWork);
+                if (work == null || Interlocked.CompareExchange(ref claimed, 1, 0) != 0)
+                    return false;
+
+                work();
+                return true;
+            }
         }
+
+        private long flushSnapshotsRunInline;
+
+        /// <summary>Gets the number of flush snapshots a waiting restore wrote itself instead of waiting for a worker.</summary>
+        internal long FlushSnapshotsRunInlineCount => Interlocked.Read(ref flushSnapshotsRunInline);
 
         private FlushSnapshotScheduler FlushScheduler => LazyInitializer.EnsureInitialized(ref flushSnapshotScheduler, () => new FlushSnapshotScheduler(FlushSnapshotConcurrency));
 
@@ -170,9 +203,12 @@ namespace Garnet.server
             var enqueuedAt = Stopwatch.GetTimestamp();
             var pending = new PendingFlushSnapshot(logicalAddress);
 
+            // A copy reads only the immutable source, so a waiting restore may run it rather than queue behind other trees.
+            pending.SetClaimableWork(() => RunColdFlushCopy(entry, source, dataPath, flushPath, pending, enqueuedAt));
+
             // Registered first so a waiter never misses a snapshot that is already running.
             pendingFlushSnapshots[flushPath] = pending;
-            if (entry.TryAppendFlush(() => RunColdFlushCopy(entry, source, dataPath, flushPath, pending, enqueuedAt), FlushScheduler))
+            if (entry.TryAppendFlush(() => _ = pending.TryRunClaimed(), FlushScheduler))
                 return true;
 
             _ = pendingFlushSnapshots.TryRemove(new KeyValuePair<string, PendingFlushSnapshot>(flushPath, pending));
@@ -380,6 +416,15 @@ namespace Garnet.server
             if (pendingFlushSnapshots.TryGetValue(flushPath, out var pending) && !pending.Completion.IsCompleted)
             {
                 waited++;
+
+                // The workers may be busy with other trees' snapshots for minutes; this file is needed now.
+                var inlineStart = Stopwatch.GetTimestamp();
+                if (pending.TryRunClaimed())
+                {
+                    _ = Interlocked.Increment(ref flushSnapshotsRunInline);
+                    logger?.LogInformation("[RangeIndexFlushSnapshotInline] reason={Reason} path={Path} completed={Completed} ms={Ms:F0}",
+                        reason, Path.GetFileName(flushPath), pending.Completion.IsCompleted, Stopwatch.GetElapsedTime(inlineStart).TotalMilliseconds);
+                }
                 AsyncUtils.BlockingWait(pending.Completion);
             }
 
