@@ -228,7 +228,10 @@ namespace Garnet.cluster
                 }
             }
 
+            // Suspending waits for in-flight primary tasks (e.g. a running compaction), which delays the attach.
+            var suspendWatch = System.Diagnostics.Stopwatch.StartNew();
             await clusterProvider.storeWrapper.SuspendPrimaryOnlyTasksAsync().ConfigureAwait(false);
+            logger?.LogInformation("[ResyncTiming] side=replica-add suspendPrimaryTasksMs={suspendPrimaryTasksMs}", suspendWatch.ElapsedMilliseconds);
             clusterProvider.storeWrapper.StartReplicaTasks();
 
             FlushConfig();
