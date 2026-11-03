@@ -537,6 +537,44 @@ namespace BfTreeInterop.test
         }
 
         /// <summary>Inserts into a larger-than-cache disk tree concurrent with live snapshots must all remain readable.</summary>
+        /// <summary>An abortable snapshot completes while its abort word holds the caller's generation and stops, leaving no usable file, once it differs.</summary>
+        [Test]
+        public unsafe void AbortableSnapshotStopsWhenAbortWordChanges()
+        {
+            var snapshotPath = Path.Combine(Path.GetTempPath(), $"bftree_abort_{Guid.NewGuid():N}.bftree");
+            var word = GC.AllocateArray<long>(1, pinned: true);
+            tree.Dispose();
+            tree = new BfTreeService(filePath: treePath, enableSnapshots: true, cbSizeByte: 1024 * 1024, cbMinRecordSize: 8, cbMaxRecordSize: 1024, cbMaxKeyLen: 64);
+            try
+            {
+                for (var i = 0; i < 20_000; i++)
+                    Assert.That(tree.Insert(Encoding.ASCII.GetBytes($"k{i:D8}"), new byte[200]), Is.EqualTo(BfTreeInsertResult.Success));
+
+                fixed (long* p = word)
+                {
+                    Assert.That(BfTreeService.CprSnapshotByPtr(tree.NativePtr, snapshotPath, p, generation: 0), Is.True);
+                    var full = new FileInfo(snapshotPath).Length;
+                    File.Delete(snapshotPath);
+
+                    word[0] = 1;
+                    Assert.That(BfTreeService.CprSnapshotByPtr(tree.NativePtr, snapshotPath, p, generation: 0), Is.False);
+                    Assert.That(new FileInfo(snapshotPath).Length, Is.LessThan(full / 4));
+                    File.Delete(snapshotPath);
+
+                    Assert.That(BfTreeService.CprSnapshotByPtr(tree.NativePtr, snapshotPath, p, generation: 1), Is.True);
+                }
+
+                using var recovered = BfTreeService.RecoverFromCprSnapshot(snapshotPath, false, StorageBackendType.Disk);
+                for (var i = 0; i < 20_000; i++)
+                    Assert.That(recovered.Read(Encoding.ASCII.GetBytes($"k{i:D8}"), out _), Is.EqualTo(BfTreeReadResult.Found), $"key {i}");
+            }
+            finally
+            {
+                if (File.Exists(snapshotPath))
+                    File.Delete(snapshotPath);
+            }
+        }
+
         [Test]
         public void InsertsConcurrentWithLiveSnapshotsAreKept([Values(1, 4)] int writers, [Values(false, true)] bool recovered, [Values(0, 16 << 20)] int snapshotIORate)
         {

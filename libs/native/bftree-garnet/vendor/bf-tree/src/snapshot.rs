@@ -623,6 +623,7 @@ impl CPRSnapShotMgr {
         mini_mapping: &mut Vec<(PageID, usize)>,
         mini_size_mapping: &mut Vec<(PageID, usize)>,
         base_mapping: &mut Vec<(PageID, usize)>,
+        abort: &dyn Fn() -> bool,
     ) -> usize {
         // There is no page table for inner nodes including the root, and each inner node's information is only
         // saved in the tree structure itself. As a result, we need to traverse the tree to find all inner nodes.
@@ -759,6 +760,11 @@ impl CPRSnapShotMgr {
         for (_, pid) in page_table_iter {
             assert!(pid.is_id());
             self.pace_snapshot_io();
+
+            // An aborted snapshot is discarded, so its remaining page copies are skipped.
+            if abort() {
+                break;
+            }
 
             // A reader lock is enough
             let mut leaf = tree.mapping_table().get(&pid);
@@ -1132,6 +1138,13 @@ impl CPRSnapShotMgr {
 
     /// Take a CPR snapshot of a Bf-Tree
     pub fn snapshot(&self, tree: &BfTree, snapshot_file_path: impl AsRef<Path>) {
+        self.snapshot_abortable(tree, snapshot_file_path, &|| false);
+    }
+
+    /// Takes a CPR snapshot of a Bf-Tree, stopping its sweep once `abort` returns true. An aborted snapshot still
+    /// completes the phase cycle, so the tree stays consistent, but its file is incomplete and must be discarded.
+    /// Returns false if the snapshot was aborted.
+    pub fn snapshot_abortable(&self, tree: &BfTree, snapshot_file_path: impl AsRef<Path>, abort: &dyn Fn() -> bool) -> bool {
         // Allowing only one active snapshot at a time.
         if self
             .snapshot_in_progress
@@ -1139,8 +1152,10 @@ impl CPRSnapShotMgr {
             .is_err()
         {
             println!("Another snapshot is in progress, skipping this snapshot request.");
-            return;
+            return true;
         }
+
+        let mut aborted = false;
 
         // Create a vfs for the snapshot
         let mut vfs_guard = self.vfs.write().unwrap();
@@ -1190,15 +1205,19 @@ impl CPRSnapShotMgr {
                         // All snapshots of pages of snapshot_version are done, and no more snapshot operations
                         // neither. As such, we can safely finalize the snapshot by writing out the
                         // metadata and page mappings.
-                        self.finalize(
-                            snapshot_version,
-                            &mut sweep_inner_mapping,
-                            &mut sweep_mini_mapping,
-                            &mut sweep_mini_size_mapping,
-                            &mut sweep_base_mapping,
-                            leaf_node_count_upper_bound,
-                            tree.config.clone(),
-                        );
+                        if aborted {
+                            self.reset();
+                        } else {
+                            self.finalize(
+                                snapshot_version,
+                                &mut sweep_inner_mapping,
+                                &mut sweep_mini_mapping,
+                                &mut sweep_mini_size_mapping,
+                                &mut sweep_base_mapping,
+                                leaf_node_count_upper_bound,
+                                tree.config.clone(),
+                            );
+                        }
 
                         // Close the snapshot vfs
                         let mut vfs_guard = self.vfs.write().unwrap();
@@ -1237,7 +1256,9 @@ impl CPRSnapShotMgr {
                             &mut sweep_mini_mapping,
                             &mut sweep_mini_size_mapping,
                             &mut sweep_base_mapping,
+                            abort,
                         );
+                        aborted = abort();
 
                         current_global_state = self.advance_global_state();
                         current_global_phase_id = self.get_global_phase_id();
@@ -1262,6 +1283,7 @@ impl CPRSnapShotMgr {
             .snapshot_in_progress
             .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok());
+        !aborted
     }
 
     /// Recover a Bf-tree from an existing snapshot file at recovery_snapshot_file_path.
@@ -1762,6 +1784,17 @@ impl BfTree {
         snpshot_mgr.snapshot(self, snapshot_file_path);
     }
 
+    /// Takes a new CPR snapshot that stops early once `abort` returns true; returns false, leaving an incomplete file
+    /// the caller must discard, if it was aborted.
+    pub fn cpr_snapshot_abortable(&self, snapshot_file_path: impl AsRef<Path>, abort: &dyn Fn() -> bool) -> bool {
+        if !self.config.use_snapshot {
+            panic!("Snapshots are not enabled in the configuration");
+        }
+
+        let snpshot_mgr = self.snapshot_mgr.clone().unwrap();
+        snpshot_mgr.snapshot_abortable(self, snapshot_file_path, abort)
+    }
+
     /// Recover a BfTree from a CPR snapshot
     pub fn new_from_cpr_snapshot(
         recovery_snapshot_file_path: impl AsRef<Path>, //  The snapshot file to recover from
@@ -2259,6 +2292,52 @@ mod tests {
         }
 
         drop(tree);
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An aborted snapshot stops its sweep after the page it was aborted at and leaves the tree able to take a full snapshot.
+    #[test]
+    fn aborted_snapshot_stops_sweep_and_next_snapshot_is_complete() {
+        let dir = std::path::PathBuf::from(format!("target/aborted_snapshot_{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = |i: usize| format!("key-{i:08}").into_bytes();
+        let mut config = Config::new(dir.join("data.bftree"), 1024 * 1024);
+        config.storage_backend(crate::StorageBackend::Std);
+        config.use_snapshot(true);
+        let tree = BfTree::with_config(config, None).unwrap();
+        for i in 0..40_000 {
+            assert!(matches!(tree.insert(&key(i), &[(i % 251) as u8; 96]), crate::LeafInsertResult::Success));
+        }
+
+        let full = dir.join("full.bftree");
+        tree.cpr_snapshot(&full);
+        let full_len = std::fs::metadata(&full).unwrap().len();
+
+        // Each call is one sweep step; aborting at the third skips the remaining pages.
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let aborted = dir.join("aborted.bftree");
+        assert!(!tree.cpr_snapshot_abortable(&aborted, &|| calls.fetch_add(1, Ordering::Relaxed) >= 2));
+        assert!(std::fs::metadata(&aborted).unwrap().len() < full_len / 4, "the aborted sweep kept copying pages");
+
+        for i in (0..40_000).step_by(13) {
+            assert!(matches!(tree.insert(&key(i), &[1u8; 96]), crate::LeafInsertResult::Success));
+        }
+        let next = dir.join("next.bftree");
+        assert!(tree.cpr_snapshot_abortable(&next, &|| false));
+        drop(tree);
+
+        let recovered = BfTree::new_from_cpr_snapshot(&next, false, None, None, None).unwrap();
+        let mut buf = vec![0u8; 256];
+        for i in 0..40_000 {
+            let expected = if i % 13 == 0 { 1u8 } else { (i % 251) as u8 };
+            match recovered.read(&key(i), &mut buf) {
+                LeafReadResult::Found(n) => assert_eq!(&buf[..n as usize], &[expected; 96][..], "key {i}"),
+                _ => panic!("key {i} missing"),
+            }
+        }
+
+        drop(recovered);
         _ = std::fs::remove_dir_all(&dir);
     }
 

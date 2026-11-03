@@ -185,7 +185,7 @@ namespace Garnet.server.BfTreeInterop
         /// <param name="storageBackend">Disk (default, file-backed) or Memory (bounded in-memory).</param>
         /// <param name="filePath">Data file path for disk-backed trees. Ignored for memory-only.</param>
         /// <param name="enableSnapshots">Enable CPR snapshot support. Required if
-        /// <see cref="CprSnapshotByPtr"/> will be called later for this tree.</param>
+        /// <see cref="CprSnapshotByPtr(nint, string)"/> will be called later for this tree.</param>
         /// <param name="cbSizeByte">Circular buffer size in bytes (hot-data cache for Disk; total capacity for Memory).</param>
         /// <param name="cbMinRecordSize">Minimum record size.</param>
         /// <param name="cbMaxRecordSize">Maximum record size.</param>
@@ -583,6 +583,32 @@ namespace Garnet.server.BfTreeInterop
             }
             if (result != 0)
                 throw new InvalidOperationException("Failed to take CPR snapshot of BfTree.");
+        }
+
+        /// <summary>
+        /// Like <see cref="CprSnapshotByPtr(nint, string)"/>, but the snapshot stops early once the word at <paramref name="abortWord"/>
+        /// differs from <paramref name="generation"/>, leaving an incomplete file at <paramref name="snapshotPath"/>.
+        /// </summary>
+        /// <param name="abortWord">Pinned word that stays valid for the call.</param>
+        /// <param name="generation">Value of <paramref name="abortWord"/> read before the caller decided to snapshot.</param>
+        /// <returns><c>false</c> if the snapshot was aborted.</returns>
+        public static bool CprSnapshotByPtr(nint handle, string snapshotPath, long* abortWord, long generation)
+        {
+            if (handle == nint.Zero)
+                throw new ArgumentException("Native handle is null.", nameof(handle));
+            if (string.IsNullOrEmpty(snapshotPath))
+                throw new ArgumentException("Snapshot path is required.", nameof(snapshotPath));
+            ArgumentNullException.ThrowIfNull(abortWord);
+
+            var snapBytes = Encoding.UTF8.GetBytes(snapshotPath);
+            int result;
+            fixed (byte* sp = snapBytes)
+            {
+                result = NativeBfTreeMethods.bftree_cpr_snapshot_abortable(handle, sp, snapBytes.Length, abortWord, generation);
+            }
+            if (result < 0)
+                throw new InvalidOperationException("Failed to take CPR snapshot of BfTree.");
+            return result == 0;
         }
 
         private static readonly object snapshotIORateLock = new();

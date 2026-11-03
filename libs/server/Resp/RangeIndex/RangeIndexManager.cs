@@ -236,7 +236,10 @@ namespace Garnet.server
             /// Like <see cref="TrySnapshotUnderClaim(string, bool, out TreeSnapshotKind)"/>; when <paramref name="atomic"/> is set the
             /// snapshot is written under a temporary name and renamed, so <paramref name="destinationPath"/> never holds a partial file.
             /// </summary>
-            public bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, bool atomic, out TreeSnapshotKind kind)
+            /// <param name="abortWord">Optional pinned word; if it differs from <paramref name="abortGeneration"/> while a new snapshot is written,
+            /// the snapshot is aborted and the call returns <c>false</c> with <see cref="TreeSnapshotKind.Aborted"/> and no file.</param>
+            /// <param name="abortGeneration">Value of <paramref name="abortWord"/> read before the caller decided to snapshot.</param>
+            public unsafe bool TrySnapshotUnderClaim(string destinationPath, bool allowLink, bool atomic, out TreeSnapshotKind kind, long[] abortWord = null, long abortGeneration = 0)
             {
                 kind = TreeSnapshotKind.Written;
                 while (!TryClaimSnapshot())
@@ -263,7 +266,23 @@ namespace Garnet.server
                     {
                         // The destination may be a hard link to another snapshot, which writing in place would corrupt.
                         RangeIndexFileLinks.DeleteIfExists(target);
-                        BfTreeService.CprSnapshotByPtr(Tree.NativePtr, target);
+                        if (abortWord == null)
+                        {
+                            BfTreeService.CprSnapshotByPtr(Tree.NativePtr, target);
+                        }
+                        else
+                        {
+                            bool completed;
+                            fixed (long* word = abortWord)
+                                completed = BfTreeService.CprSnapshotByPtr(Tree.NativePtr, target, word, abortGeneration);
+
+                            if (!completed)
+                            {
+                                RangeIndexFileLinks.DeleteIfExists(target);
+                                kind = TreeSnapshotKind.Aborted;
+                                return false;
+                            }
+                        }
                     }
 
                     // Renaming replaces only the directory entry, so a destination hard-linked to another snapshot is unaffected.
@@ -388,6 +407,8 @@ namespace Garnet.server
             Linked,
             /// <summary>Copied from the unchanged tree's previous snapshot, which is on another file system.</summary>
             Copied,
+            /// <summary>Aborted before completion; no file was produced.</summary>
+            Aborted,
         }
 
         /// <summary>Log mode for a tree snapshot: <paramref name="written"/>, "linked", or "copied" (with a "cold-" prefix kept).</summary>
@@ -730,7 +751,7 @@ namespace Garnet.server
         internal void DiscardTreesAfterStoreReset()
         {
             // The discarded log's flush files are deleted next; snapshots still queued for it are pointless.
-            StopFlushSnapshots("store-reset");
+            StopFlushSnapshots("store-reset", abortInFlight: true);
             DiscardAllParkedTrees();
             try
             {
@@ -1310,7 +1331,7 @@ namespace Garnet.server
         /// <para>For each entry with <see cref="TreeEntry.SnapshotPending"/> set:
         /// <list type="bullet">
         /// <item>Activated entries (Tree != null) → take a CPR snapshot via the tree handle
-        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim(string, bool, bool, out TreeSnapshotKind)"/>); entries retired by a concurrent deferred dispose are skipped.
+        /// straight to the checkpoint destination (<see cref="TreeEntry.TrySnapshotUnderClaim(string, bool, bool, out TreeSnapshotKind, long[], long)"/>); entries retired by a concurrent deferred dispose are skipped.
         /// With <see cref="BackgroundCheckpointSnapshots"/> the snapshot is queued instead and the tree's barrier is released at once.</item>
         /// <item>Pending entries (Tree == null) → link or copy the deferred staging source, or <c>data.bftree</c>
         /// once staged (no live tree to snapshot from). With <see cref="BackgroundCheckpointSnapshots"/>, an immutable source that
