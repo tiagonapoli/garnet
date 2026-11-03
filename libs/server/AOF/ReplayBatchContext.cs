@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+using System;
+
 namespace Garnet.server
 {
     /// <summary>
@@ -12,6 +14,8 @@ namespace Garnet.server
     /// <param name="replayTasks"></param>
     public unsafe class ReplayBatchContext(int replayTasks)
     {
+        byte[] privatePage;
+
         /// <summary>
         /// Number of parallel replay tasks scanning each page.
         /// </summary>
@@ -32,5 +36,20 @@ namespace Garnet.server
         /// Represents the next address value for a given TsavoriteLog page.
         /// </summary>
         public long NextAddress;
+
+        /// <summary>
+        /// Copies an epoch-protected log page into a private buffer, valid until the next call, so the leader can release
+        /// the log epoch while replay tasks scan it.
+        /// </summary>
+        public byte* CopyToPrivatePage(byte* record, int recordLength)
+        {
+            if (privatePage == null || privatePage.Length < recordLength)
+                privatePage = GC.AllocateUninitializedArray<byte>(recordLength, pinned: true);
+            fixed (byte* page = privatePage)
+            {
+                Buffer.MemoryCopy(record, page, privatePage.Length, recordLength);
+                return page;
+            }
+        }
     }
 }

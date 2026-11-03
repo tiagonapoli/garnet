@@ -624,6 +624,12 @@ namespace Tsavorite.core
         public void UnsafeRelease() => epoch.Suspend();
 
         /// <summary>
+        /// WARNING: advanced users only.
+        /// Reacquire the epoch protection given up by <see cref="UnsafeRelease"/> inside a protected bulk consume callback.
+        /// </summary>
+        public void UnsafeResume() => epoch.Resume();
+
+        /// <summary>
         /// Dispose the iterator
         /// </summary>
         public override void Dispose()
