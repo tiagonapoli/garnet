@@ -574,7 +574,7 @@ namespace Garnet.server
             // but everything else needs to WAIT for those to complete
             // otherwise we might loose consistency
             // Skips (1) entries with versions that were part of prior checkpoint; and (2) future entries in fuzzy region
-            if (!BeginReplayOp(replayContext, header.opType, ShouldSkipRecord(virtualSublogIdx, replayContext.inFuzzyRegion, entryPtr, length, asReplica), out var bufferPtr, out var bufferLength))
+            if (!BeginReplayOp(replayContext, header.opType, ShouldSkipRecord(virtualSublogIdx, replayContext.inFuzzyRegion, entryPtr, length, asReplica, logAddressSequenceNumber), out var bufferPtr, out var bufferLength))
                 return false;
 
             preprocessKey.PrepareKey(virtualSublogIdx, entryPtr, logAddressSequenceNumber, out var preparedParameters);
@@ -890,9 +890,10 @@ namespace Garnet.server
         /// <param name="entryPtr"></param>
         /// <param name="length"></param>
         /// <param name="asReplica"></param>
+        /// <param name="logAddressSequenceNumber">Log address sequence number of the record, kept with it if buffered.</param>
         /// <returns>True if the caller must not dispatch this record now.</returns>
         /// <exception cref="GarnetException"></exception>
-        bool ShouldSkipRecord(int sublogIdx, bool inFuzzyRegion, byte* entryPtr, int length, bool asReplica)
+        bool ShouldSkipRecord(int sublogIdx, bool inFuzzyRegion, byte* entryPtr, int length, bool asReplica, long logAddressSequenceNumber)
         {
             var header = *(AofHeader*)entryPtr;
             return (asReplica && inFuzzyRegion) // Buffer logic only for AOF version > 1
@@ -903,7 +904,7 @@ namespace Garnet.server
             {
                 if (IsNewVersionRecord(header))
                 {
-                    aofReplayCoordinator.AddFuzzyRegionOperation(sublogIdx, new ReadOnlySpan<byte>(entryPtr, length));
+                    aofReplayCoordinator.AddFuzzyRegionOperation(sublogIdx, new ReadOnlySpan<byte>(entryPtr, length), logAddressSequenceNumber);
                     return true;
                 }
                 return false;

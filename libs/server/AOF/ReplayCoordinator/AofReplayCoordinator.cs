@@ -125,12 +125,13 @@ namespace Garnet.server
             /// </summary>
             /// <param name="sublogIdx"></param>
             /// <param name="entry"></param>
-            internal void AddFuzzyRegionOperation(int sublogIdx, ReadOnlySpan<byte> entry) => aofReplayContext[sublogIdx].fuzzyRegionOps.Add(new ReplayOperation(entry.ToArray()));
+            /// <param name="logAddressSequenceNumber">Log address sequence number of the record, replayed with it.</param>
+            internal void AddFuzzyRegionOperation(int sublogIdx, ReadOnlySpan<byte> entry, long logAddressSequenceNumber) => aofReplayContext[sublogIdx].fuzzyRegionOps.Add(new ReplayOperation(entry.ToArray(), logAddressSequenceNumber));
 
             /// <summary>
             /// Buffer a completed chunked-record accumulator as a fuzzy-region operation.
             /// </summary>
-            internal void AddFuzzyRegionOperation(int sublogIdx, ChunkedAccumulator acc) => aofReplayContext[sublogIdx].fuzzyRegionOps.Add(new ReplayOperation(acc));
+            internal void AddFuzzyRegionOperation(int sublogIdx, ChunkedAccumulator acc, long logAddressSequenceNumber) => aofReplayContext[sublogIdx].fuzzyRegionOps.Add(new ReplayOperation(acc, logAddressSequenceNumber));
 
             /// <summary>
             /// This method will perform one of the following
@@ -319,7 +320,8 @@ namespace Garnet.server
                             replayContext.StringBasicContext,
                             replayContext.ObjectBasicContext,
                             replayContext.UnifiedBasicContext,
-                            asReplica);
+                            asReplica,
+                            entry.SequenceNumber);
                     }
                     else
                     {
@@ -347,7 +349,8 @@ namespace Garnet.server
                                 replayContext.UnifiedBasicContext,
                                 entryPtr,
                                 entry.Record.Length,
-                                asReplica);
+                                asReplica,
+                                entry.SequenceNumber);
                         }
                     }
                 }

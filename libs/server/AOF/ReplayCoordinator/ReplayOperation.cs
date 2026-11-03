@@ -16,9 +16,10 @@ namespace Garnet.server
         /// <summary>Completed chunked-record accumulator; null when this is a non-chunked operation.</summary>
         public readonly ChunkedAccumulator Chunk;
 
-        /// <summary>Log address sequence number of the record, for operations that still need it when they are
-        /// replayed later. Currently only the fuzzy-region TxnCommit marker, whose value drives the multi-log commit
-        /// barrier in <see cref="AofProcessor.AofReplayCoordinator.ProcessTransactionGroup"/>.</summary>
+        /// <summary>Log address sequence number of the record, for operations replayed after they are read: buffered
+        /// fuzzy-region records, whose single-physical-log multi-replay read-consistency update needs it, and the
+        /// fuzzy-region TxnCommit marker, whose value drives the multi-log commit barrier in
+        /// <see cref="AofProcessor.AofReplayCoordinator.ProcessTransactionGroup"/>.</summary>
         public readonly long SequenceNumber;
 
         /// <summary>Create a non-chunked (raw record) operation.</summary>
@@ -30,11 +31,11 @@ namespace Garnet.server
         }
 
         /// <summary>Create a chunked operation from a completed accumulator.</summary>
-        public ReplayOperation(ChunkedAccumulator chunk)
+        public ReplayOperation(ChunkedAccumulator chunk, long sequenceNumber = 0)
         {
             Record = null;
             Chunk = chunk;
-            SequenceNumber = 0;
+            SequenceNumber = sequenceNumber;
         }
 
         /// <summary>Whether this operation is a completed chunked record.</summary>

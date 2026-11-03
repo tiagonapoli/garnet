@@ -355,6 +355,9 @@ namespace Garnet.cluster
             if (clusterProvider.clusterManager.CurrentConfig.LocalNodeRole == NodeRole.REPLICA)
                 return;
 
+            if (!isStreaming && isMainStore)
+                ExceptionInjectionHelper.ResetAndWait(ExceptionInjectionType.Replication_Primary_Pause_Before_Checkpoint_End_Marker);
+
             if (isStreaming)
             {
                 if (isMainStore)
