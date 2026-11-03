@@ -182,5 +182,9 @@ namespace Garnet.common
         /// Primary AOF sync task: park before sending the stream initialization message until the condition is re-enabled.
         /// </summary>
         Replication_Wait_Primary_Before_Aof_Stream_Init,
+        /// <summary>
+        /// RangeIndex AOF replay: on reaching an RI.SET, clear the condition and park until it is set again.
+        /// </summary>
+        RangeIndex_Replay_Pause_Before_Set,
     }
 }
