@@ -6,6 +6,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Garnet.common;
@@ -121,6 +122,9 @@ namespace Garnet.server
         // Used by Publish/PatternPublish to detect the reentrant self-delivery that occurs when a session
         // publishes to a channel it is itself subscribed to.
         int publishingThreadId;
+
+        // Failure of a reentrant self-delivery, rethrown by the publishing command once the broadcast completes
+        ExceptionDispatchInfo reentrantPublishFailure;
 
         /// <summary>
         /// Current database session items
@@ -561,7 +565,7 @@ namespace Garnet.server
                 if (storeWrapper.EnforceConsistentRead())
                 {
                     txnSkip = false;
-                    Debug.Assert(consistentReadDBSession != null);
+                    GarnetAsserts.Assert(consistentReadDBSession != null);
                     if (!consistentReadActive)
                     {
                         // We actively switch session because we aim to avoid performing any additional checks or switches on the normal processing path
@@ -614,9 +618,11 @@ namespace Garnet.server
                         SendAndReset();
                 }
 
-                // Send message and dispose the network sender to end the session
-                if (dcurr > networkSender.GetResponseObjectHead())
-                    Send(networkSender.GetResponseObjectHead());
+                // Send message and dispose the network sender to end the session. A failed send leaves no response
+                // buffer, and nothing further can be sent.
+                var responseHead = networkSender.GetResponseObjectHead();
+                if (responseHead != null && dcurr > responseHead)
+                    Send(responseHead);
 
                 if (ex.Panic)
                 {
@@ -693,6 +699,14 @@ namespace Garnet.server
 
         internal void SetTransactionMode(bool enable)
             => txnManager.state = enable ? TxnState.Running : TxnState.None;
+
+        /// <summary>
+        /// Whether a blocking command on this session may wait for an item. It may not while a transaction is running
+        /// (EXEC, or a script in transaction mode): the transaction holds its keys' locks until commit, so no other
+        /// client can add an item. Nor may it in a session that runs scripts, since a script must not wait on other
+        /// clients. A blocking command that may not wait takes an available item or replies as on timeout.
+        /// </summary>
+        internal bool CanBlock => txnManager.state != TxnState.Running && noScriptBitmap == null;
 
         private void ProcessMessages<TBasicApi, TTxnApi>(ref TBasicApi basicApi, ref TTxnApi transactionalApi)
             where TBasicApi : IGarnetApi
@@ -1525,6 +1539,7 @@ namespace Garnet.server
             // Debug.WriteLine($"SEND: [{Encoding.UTF8.GetString(new Span<byte>(d, (int)(dcurr - d))).Replace("\n", "|").Replace("\r", "")}]");
             // #endif
 
+            GarnetAsserts.Assert(d != null, "Send requires a response buffer");
             if ((int)(dcurr - d) > 0)
             {
                 // Debug.WriteLine("SEND: [" + Encoding.UTF8.GetString(new Span<byte>(d, (int)(dcurr - d))).Replace("\n", "|").Replace("\r", "!") + "]");
@@ -1696,7 +1711,7 @@ namespace Garnet.server
         private GarnetDatabaseSession CreateDatabaseSession(int dbId)
         {
             var dbRes = storeWrapper.TryGetOrAddDatabase(dbId, out var database, out _);
-            Debug.Assert(dbRes, "Should always find database if we're switching to it");
+            GarnetAsserts.Assert(dbRes, "Should always find database if we're switching to it");
 
             var dbStorageSession = new StorageSession(
                 storeWrapper,
@@ -1733,7 +1748,7 @@ namespace Garnet.server
             // Session id is set at the caller.
             var dbId = 0;
             var dbRes = storeWrapper.TryGetOrAddDatabase(dbId, out var database, out _);
-            Debug.Assert(dbRes, "Should always find database if we're switching to it");
+            GarnetAsserts.Assert(dbRes, "Should always find database if we're switching to it");
 
             readSessionState = new ReadSessionState(storeWrapper.appendOnlyFile, storeWrapper.serverOptions);
 

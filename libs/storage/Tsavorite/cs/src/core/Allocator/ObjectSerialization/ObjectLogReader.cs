@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -75,7 +74,8 @@ namespace Tsavorite.core
         /// Get the object log entries for Overflow Keys and Values and Object Values for the input <paramref name="logRecord"/>. We do not create the log record here;
         /// that was already done by the caller from a single-record disk IO or from Recovery.
         /// <list type="bullet">
-        /// <item>If there is an Overflow key, read it and if we have a <paramref name="requestedKey"/> compare it and return false if it does not match.
+        /// <item>If there is an Overflow key, read it and if we have a <paramref name="requestedKey"/> compare it and return false if it does not match,
+        ///     after releasing the key and clearing the record's Overflow and Object fields so the record can be disposed.
         ///     Otherwise, store the Key Overflow in the transient <see cref="ObjectIdMap"/> in <paramref name="logRecord"/>.
         ///     If we don't have <paramref name="requestedKey"/>, this is either ReadAtAddress (which is an implicit match) or Scan or Restore.</item>
         /// <item>If we have an Overflow or Object value, read and store it in the transient <see cref="ObjectIdMap"/> in <paramref name="logRecord"/>.</item>
@@ -89,8 +89,8 @@ namespace Tsavorite.core
         public bool ReadRecordObjects<TKey>(ref LogRecord logRecord, TKey requestedKey, int segmentSizeBits)
             where TKey : IKey, allows ref struct
         {
-            Debug.Assert(logRecord.DataHeader.RecordHasObjects, "Inline records should have been checked by the caller");
-            Debug.Assert(logRecord.HasReuseObjectIdForSize, "ReadRecordObjects requires the ReuseObjectIdForSize flag to be set on the ObjectLogPosition");
+            GarnetAsserts.Assert(logRecord.DataHeader.RecordHasObjects, "Inline records should have been checked by the caller");
+            GarnetAsserts.Assert(logRecord.HasReuseObjectIdForSize, "ReadRecordObjects requires the ReuseObjectIdForSize flag to be set on the ObjectLogPosition");
             if (readBuffers is null)
                 throw new TsavoriteException("ReadBuffers are required to ReadRecordObjects");
 
@@ -113,10 +113,15 @@ namespace Tsavorite.core
                     // (which held the high 32 bits of the on-disk key length per R11). The raw RDH KeyLength is restored
                     // to ObjectIdSize by OnObjectReadComplete below.
                     logRecord.KeyOverflow = new OverflowByteArray(keyLength, startOffset: 0, endOffset: 0, zeroInit: false);
+                    keyWasSet = true;
                     _ = Read(logRecord.KeyOverflow.Span);
                     if (!requestedKey.IsEmpty && !storeFunctions.KeysEqual(requestedKey, logRecord))
+                    {
+                        // Release the key, and clear the value field, which still holds the on-disk length rather than an ObjectId,
+                        // so disposing the record does not free an ObjectId it does not own.
+                        logRecord.OnDeserializationError(keyWasSet);
                         return false;
-                    keyWasSet = true;
+                    }
                 }
 
                 if (logRecord.DataHeader.ValueIsOverflow)

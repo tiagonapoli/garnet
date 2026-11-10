@@ -2,9 +2,10 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
+using System.IO;
 using System.Net.Security;
 using System.Runtime.CompilerServices;
+using System.Runtime.ExceptionServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
@@ -161,13 +162,26 @@ namespace Garnet.networking
         // Number of times Dispose has been called
         int disposeCount;
 
+        // Set once a TLS write fails; a failed write can leave a partial record on the connection, so nothing
+        // further can be written to it
+        bool writeFailed;
+
+        // Longest a server-side TLS handshake may take; zero waits indefinitely
+        readonly TimeSpan tlsHandshakeTimeout;
+
+        // Longest delay a cancellation timer supports, about 49.7 days
+        static readonly TimeSpan MaxTlsHandshakeTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
         /// <summary>
         /// Constructor
         /// </summary>
-        public unsafe NetworkHandler(TServerHook serverHook, TNetworkSender networkSender, NetworkBufferSettings networkBufferSettings, LimitedFixedBufferPool networkPool, bool useTLS, IMessageConsumer messageConsumer = null, ILogger logger = null)
+        /// <param name="tlsHandshakeTimeout">Longest a server-side TLS handshake may take before the connection is closed. Zero or negative waits indefinitely; a timeout beyond the longest a timer supports, about 49.7 days, is limited to it.</param>
+        public unsafe NetworkHandler(TServerHook serverHook, TNetworkSender networkSender, NetworkBufferSettings networkBufferSettings, LimitedFixedBufferPool networkPool, bool useTLS, IMessageConsumer messageConsumer = null, ILogger logger = null, TimeSpan tlsHandshakeTimeout = default)
             : base(networkPool.MinAllocationSize)
         {
             this.logger = logger;
+            this.tlsHandshakeTimeout = tlsHandshakeTimeout <= TimeSpan.Zero ? TimeSpan.Zero
+                : tlsHandshakeTimeout < MaxTlsHandshakeTimeout ? tlsHandshakeTimeout : MaxTlsHandshakeTimeout;
             this.serverHook = serverHook;
             this.networkSender = networkSender;
             this.session = messageConsumer;
@@ -245,10 +259,14 @@ namespace Garnet.networking
         /// <returns></returns>
         async Task AuthenticateAsServerAsync(SslServerAuthenticationOptions tlsOptions, string remoteEndpointName, CancellationToken token = default)
         {
-            Debug.Assert(readerStatus == TlsReaderStatus.Active);
+            GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
+
+            // The deadline is absolute; handshake bytes that arrive before it do not extend it
+            using var handshakeDeadline = tlsHandshakeTimeout > TimeSpan.Zero ? CancellationTokenSource.CreateLinkedTokenSource(token) : null;
+            handshakeDeadline?.CancelAfter(tlsHandshakeTimeout);
             try
             {
-                await sslStream.AuthenticateAsServerAsync(tlsOptions, token).ConfigureAwait(false);
+                await sslStream.AuthenticateAsServerAsync(tlsOptions, handshakeDeadline?.Token ?? token).ConfigureAwait(false);
 
                 if (token.IsCancellationRequested) throw new TaskCanceledException("AuthenticateAsServerAsync was cancelled");
 
@@ -263,10 +281,16 @@ namespace Garnet.networking
             }
             catch (Exception ex)
             {
-                logger?.LogWarning(ex, "An error has occurred");
+                var timedOut = handshakeDeadline?.IsCancellationRequested == true && !token.IsCancellationRequested;
+                if (timedOut)
+                    logger?.LogInformation("TLS handshake with {remoteEndpoint} did not complete within {timeout}", remoteEndpointName, tlsHandshakeTimeout);
+                else
+                    logger?.LogWarning(ex, "An error has occurred");
                 readerStatus = TlsReaderStatus.Rest;
                 if (expectingData.CurrentCount == 0) expectingData.Release();
                 Dispose();
+                if (timedOut)
+                    throw new TimeoutException($"TLS handshake did not complete within {tlsHandshakeTimeout}", ex);
                 throw;
             }
         }
@@ -309,7 +333,7 @@ namespace Garnet.networking
         /// </summary>
         async Task AuthenticateAsClientAsync(SslClientAuthenticationOptions sslClientOptions, string remoteEndpointName, CancellationToken token)
         {
-            Debug.Assert(readerStatus == TlsReaderStatus.Active);
+            GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
             try
             {
                 await sslStream.AuthenticateAsClientAsync(sslClientOptions, token).ConfigureAwait(false);
@@ -392,7 +416,7 @@ namespace Garnet.networking
                     break;
             }
 
-            Debug.Assert(readerStatus != TlsReaderStatus.Active);
+            GarnetAsserts.Assert(readerStatus != TlsReaderStatus.Active);
             UpdateNetworkBuffers(demand);
         }
 
@@ -620,7 +644,7 @@ namespace Garnet.networking
                 bool retry = false;
                 int count = await readTask.ConfigureAwait(false);
 
-                Debug.Assert(readerStatus == TlsReaderStatus.Active);
+                GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
 
                 if (count == 0)
                 {
@@ -678,7 +702,7 @@ namespace Garnet.networking
 
         async Task SslReaderLoopAsync(bool initialRetry, CancellationToken token = default)
         {
-            Debug.Assert(readerStatus == TlsReaderStatus.Active);
+            GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
 
             try
             {
@@ -694,9 +718,9 @@ namespace Garnet.networking
                     if (transportBytesRead > 0)
                         await ExceptionInjectionHelper.ResetAndWaitAsync(ExceptionInjectionType.Tls_Pause_With_Partial_Frame).ConfigureAwait(false);
 #endif
-                    Debug.Assert(readerStatus == TlsReaderStatus.Active);
+                    GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
                     int count = await sslStream.ReadAsync(new Memory<byte>(transportReceiveBuffer, transportBytesRead, transportReceiveBuffer.Length - transportBytesRead), token).ConfigureAwait(false);
-                    Debug.Assert(readerStatus == TlsReaderStatus.Active);
+                    GarnetAsserts.Assert(readerStatus == TlsReaderStatus.Active);
 
                     if (count == 0)
                     {
@@ -798,8 +822,8 @@ namespace Garnet.networking
         [MethodImpl(MethodImplOptions.NoInlining)]
         unsafe void ShrinkNetworkReceiveBuffer(int newSize)
         {
-            Debug.Assert(networkReadHead == 0, "Shouldn't call if remaining data not already moved to head of receive buffer");
-            Debug.Assert(networkBytesRead <= newSize, "Shrink target must hold the bytes already buffered");
+            GarnetAsserts.Assert(networkReadHead == 0, "Shouldn't call if remaining data not already moved to head of receive buffer");
+            GarnetAsserts.Assert(networkBytesRead <= newSize, "Shrink target must hold the bytes already buffered");
 
             var tmp = networkPool.Get(newSize, PoolEntryBufferType.ShrinkNetworkReceiveBuffer);
             if (networkBytesRead > 0)
@@ -862,8 +886,8 @@ namespace Garnet.networking
         [MethodImpl(MethodImplOptions.NoInlining)]
         unsafe void ShrinkTransportReceiveBuffer(int newSize)
         {
-            Debug.Assert(transportReadHead == 0, "Shouldn't call if remaining data not already moved to head of transport buffer");
-            Debug.Assert(transportBytesRead <= newSize, "Shrink target must hold the bytes already buffered");
+            GarnetAsserts.Assert(transportReadHead == 0, "Shouldn't call if remaining data not already moved to head of transport buffer");
+            GarnetAsserts.Assert(transportBytesRead <= newSize, "Shrink target must hold the bytes already buffered");
 
             var tmp = networkPool.Get(newSize, PoolEntryBufferType.ShrinkTransportReceiveBuffer);
             if (transportBytesRead > 0)
@@ -926,8 +950,24 @@ namespace Garnet.networking
             logger?.LogTrace("SEND: [{send}]", System.Text.Encoding.UTF8.GetString(
                 new Span<byte>(transportSendBuffer).Slice(offset, size)).Replace("\n", "|").Replace("\r", ""));
 #endif
-            sslStream.Write(transportSendBuffer, offset, size);
-            sslStream.Flush();
+            if (writeFailed)
+                return false;
+
+            try
+            {
+                sslStream.Write(transportSendBuffer, offset, size);
+                sslStream.Flush();
+            }
+            catch (Exception ex)
+            {
+                writeFailed = true;
+
+                // SslStream wraps what the underlying sender throws; surface the sender's own failure, such as a send
+                // timeout, as the session would see it without TLS
+                if (ex is IOException { InnerException: GarnetException inner })
+                    ExceptionDispatchInfo.Throw(inner);
+                throw;
+            }
             return true;
         }
 

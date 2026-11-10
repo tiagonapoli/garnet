@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Tsavorite.core
@@ -98,7 +97,7 @@ namespace Tsavorite.core
                                 srcLogRecord = stackCtx.recSrc.CreateLogRecord();
                             goto CreateNewRecord;
                         default:
-                            Debug.Assert(latchDestination == LatchDestination.NormalProcessing, "Unknown latchDestination value; expected NormalProcessing");
+                            GarnetAsserts.Assert(latchDestination == LatchDestination.NormalProcessing, "Unknown latchDestination value; expected NormalProcessing");
                             break;
                     }
                 }
@@ -115,6 +114,10 @@ namespace Tsavorite.core
 
                     // Mutable Region: Update the record in-place
 
+                    // Evaluate expiration before InPlaceDeleter, which may clear the optionals. An expired record is still deleted
+                    // (to reclaim it) but is reported as Expired so the caller does not count it as an existing key.
+                    var expired = IsExpiredRecord(ref srcLogRecord);
+
                     // DeleteInfo's lengths are filled in and GetRecordLengths and SetDeletedValueLength are called inside InPlaceDeleter.
                     if (sessionFunctions.InPlaceDeleter(ref srcLogRecord, ref deleteInfo))
                     {
@@ -130,7 +133,7 @@ namespace Tsavorite.core
                         if (CanElide<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, srcLogRecord.Info))
                             HandleRecordElision<TInput, TOutput, TContext, TSessionFunctionsWrapper>(sessionFunctions, ref stackCtx, ref srcLogRecord);
 
-                        status = OperationStatusUtils.AdvancedOpCode(OperationStatus.SUCCESS, StatusCode.InPlaceUpdatedRecord);
+                        status = OperationStatusUtils.AdvancedOpCode(OperationStatus.SUCCESS, expired ? StatusCode.InPlaceUpdatedRecord | StatusCode.Expired : StatusCode.InPlaceUpdatedRecord);
                         goto Done;
                     }
 
@@ -153,14 +156,14 @@ namespace Tsavorite.core
                 }
 
                 // Either on-disk or no record exists - drop through to create new record.
-                Debug.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei), "A Transactional-session Delete() of an on-disk or non-existent key requires a LockTable lock");
+                GarnetAsserts.Assert(!sessionFunctions.IsTransactionalLocking || LockTable.IsLockedExclusive(ref stackCtx.hei), "A Transactional-session Delete() of an on-disk or non-existent key requires a LockTable lock");
 
             CreateNewRecord:
                 // Immutable region or new record
                 status = CreateNewRecordDelete(key, ref srcLogRecord, ref operationState, sessionFunctions, ref stackCtx, ref deleteInfo);
 
                 // We should never return "SUCCESS" for a new record operation: it returns NOTFOUND on success.
-                Debug.Assert(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS);
+                GarnetAsserts.Assert(OperationStatusUtils.IsAppend(status) || OperationStatusUtils.BasicOpCode(status) != OperationStatus.SUCCESS);
                 goto Done;
             }
             finally
@@ -179,6 +182,10 @@ namespace Tsavorite.core
         Done:
             return status;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsExpiredRecord(ref LogRecord logRecord)
+            => logRecord.DataHeader.HasExpiration && logRecord.Expiration < System.DateTimeOffset.UtcNow.Ticks;
 
         private LatchDestination CheckCPRConsistencyDelete(Phase phase, ref OperationStackContext<TStoreFunctions, TAllocator> stackCtx, ref OperationStatus status)
         {
@@ -202,8 +209,11 @@ namespace Tsavorite.core
             where TKey : IKey, allows ref struct
             where TSessionFunctionsWrapper : ISessionFunctionsWrapper<TInput, TOutput, TContext, TStoreFunctions, TAllocator>
         {
+            // Capture expiration of the in-memory source (mutable-region, readonly-region or readcache) before it is disposed
+            var srcExpired = stackCtx.recSrc.HasInMemorySrc && IsExpiredRecord(ref srcLogRecord);
+
             var sizeInfo = hlog.GetDeleteRecordSize(key);
-            Debug.Assert(!sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration, $"Delete new-record sizeInfo should not have HasETag {sizeInfo.FieldInfo.HasETag} or HasExpiration {sizeInfo.FieldInfo.HasExpiration}");
+            GarnetAsserts.Assert(!sizeInfo.FieldInfo.HasETag && !sizeInfo.FieldInfo.HasExpiration, $"Delete new-record sizeInfo should not have HasETag {sizeInfo.FieldInfo.HasETag} or HasExpiration {sizeInfo.FieldInfo.HasExpiration}");
 
             AllocateOptions allocOptions = new()
             {
@@ -279,7 +289,7 @@ namespace Tsavorite.core
 
                 stackCtx.ClearNewRecord();
                 operationState.logicalAddress = newLogicalAddress;
-                return OperationStatusUtils.AdvancedOpCode(OperationStatus.NOTFOUND, StatusCode.CreatedRecord);
+                return OperationStatusUtils.AdvancedOpCode(OperationStatus.NOTFOUND, srcExpired ? StatusCode.CreatedRecord | StatusCode.Expired : StatusCode.CreatedRecord);
             }
 
             // CAS failed

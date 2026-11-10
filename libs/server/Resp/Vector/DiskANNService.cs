@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 using System;
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Tsavorite.core;
@@ -26,6 +25,21 @@ namespace Garnet.server
         internal const byte Metadata = 4;
         internal const byte InternalIdMap = 5;
         internal const byte ExternalIdMap = 6;
+
+        /// <summary>
+        /// Redis allows a gigantic EF, but we map this to DiskANN's l_build where such huge values are counter-production.
+        /// 
+        /// We still accept the large EF values for Redis compatibility, but we cap them at an "excessively high" 8K to avoid
+        /// degenerate behavior around allocations and insert performance.
+        /// </summary>
+        private const uint MaxEffectiveBuildExplorationFactor = 8_192;
+
+        /// <summary>
+        /// Similar to <see cref="MaxEffectiveBuildExplorationFactor"/>, Redis allows a quite large M that we map to DiskANN's num_links where such large values are counter-productive.
+        /// 
+        /// We still accept the large M values for compatibility, but we cap to 512 to avoid degenerate behavior.
+        /// </summary>
+        private const uint MaxEffectiveNumLinks = 512;
 
 #if DEBUG
         /// <summary>
@@ -67,9 +81,12 @@ namespace Garnet.server
 #endif
             unsafe
             {
+                buildExplorationFactor = Math.Min(buildExplorationFactor, MaxEffectiveBuildExplorationFactor);
+                numLinks = Math.Min(numLinks, MaxEffectiveNumLinks);
+
                 var ret = NativeDiskANNMethods.create_index(context, dimensions, reduceDims, quantType, distanceMetric, buildExplorationFactor, numLinks, startPointId, (nint)readCallback, (nint)writeCallback, (nint)deleteCallback, (nint)readModifyWriteCallback, (nint)filterCallback, (nint)logCallback, out quantizationRequested);
 
-                Debug.Assert(ret != 0, "create_index failed, returning a null pointer - this shouldn't be possible");
+                GarnetAsserts.Assert(ret != 0, "create_index failed, returning a null pointer - this shouldn't be possible");
 
                 return ret;
             }
@@ -172,7 +189,7 @@ namespace Garnet.server
             }
             else
             {
-                Debug.Assert(res == NativeDiskANNMethods.DiskANNInsertResult.SuccessStartTraining, "Unexpected DiskANNInsertResult");
+                GarnetAsserts.Assert(res == NativeDiskANNMethods.DiskANNInsertResult.SuccessStartTraining, "Unexpected DiskANNInsertResult");
 
                 needsQuantization = true;
                 return InsertResult.SuccessInsert;
@@ -225,7 +242,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -241,7 +258,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -313,7 +330,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -329,7 +346,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -393,7 +410,7 @@ namespace Garnet.server
                 if (!outputIds.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputIds.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputIdsHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_ids = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
@@ -409,7 +426,7 @@ namespace Garnet.server
                 if (!outputDistances.IsSpanByte)
                 {
                     var getRes = MemoryMarshal.TryGetArray<byte>(outputDistances.Memory.Memory, out var arrSeg);
-                    Debug.Assert(getRes, "Should always be able to get array to pin");
+                    GarnetAsserts.Assert(getRes, "Should always be able to get array to pin");
 
                     outputDistancesHandle = GCHandle.Alloc(arrSeg.Array, GCHandleType.Pinned);
                     output_distances = Unsafe.AsPointer(ref MemoryMarshal.GetArrayDataReference(arrSeg.Array));
