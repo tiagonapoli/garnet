@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using System.Threading.Tasks;
-
+using Garnet.client;
 using StackExchange.Redis;
 
 
@@ -1015,5 +1015,78 @@ namespace Garnet.test.cluster
             }
         }
 #endif
+
+        [Test, Order(21), CancelAfter(testTimeout)]
+        public async Task ClusterDefaultFailoverPreservesAcknowledgedWritesAsync(CancellationToken cancellationToken)
+        {
+            var primaryIndex = 0;
+            var replicaIndex = 1;
+            context.CreateInstances(2, disableObjects: true, enableAOF: true, timeout: timeout);
+            context.CreateConnection();
+
+            _ = context.clusterTestUtils.AddDelSlotsRange(primaryIndex, [(0, 16383)], addslot: true, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(primaryIndex, primaryIndex + 1, logger: context.logger);
+            context.clusterTestUtils.SetConfigEpoch(replicaIndex, replicaIndex + 1, logger: context.logger);
+            context.clusterTestUtils.Meet(primaryIndex, replicaIndex, logger: context.logger);
+            context.clusterTestUtils.WaitUntilNodeIsKnown(primaryIndex, replicaIndex, logger: context.logger);
+            ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterReplicate(replicaNodeIndex: replicaIndex, primaryNodeIndex: primaryIndex, logger: context.logger));
+            context.clusterTestUtils.WaitForReplicaRecovery(replicaIndex, context.logger);
+            await context.clusterTestUtils.WaitForConnectedReplicaCountAsync(primaryIndex, 1, context.logger).ConfigureAwait(false);
+
+            // Keep the primary busy so the AOF stream to the replica has a backlog when the primary pauses writes.
+            using var writerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            using var writer = new GarnetClient(context.clusterTestUtils.GetEndPoint(primaryIndex));
+            await writer.ConnectAsync(cancellationToken);
+            var value = new string('v', 512 * 1024);
+            var issued = 0L;
+            var acknowledged = 0L;
+            var writerTask = Task.Run(async () =>
+            {
+                var batch = new Task<string>[64];
+                while (!writerCts.IsCancellationRequested)
+                {
+                    for (var i = 0; i < batch.Length; i++)
+                        batch[i] = writer.ExecuteForStringResultAsync("SET", [$"key{Interlocked.Increment(ref issued)}", value]);
+                    foreach (var write in batch)
+                    {
+                        try
+                        {
+                            if (await write == "OK")
+                                _ = Interlocked.Increment(ref acknowledged);
+                        }
+                        catch { }
+                    }
+                }
+            });
+
+            string state;
+            try
+            {
+                while (Interlocked.Read(ref acknowledged) < 256)
+                    await Task.Delay(10, cancellationToken);
+
+                ClassicAssert.AreEqual("OK", context.clusterTestUtils.ClusterFailover(replicaIndex, logger: context.logger));
+                while (true)
+                {
+                    state = context.clusterTestUtils.GetReplicationInfo(replicaIndex, [ReplicationInfoItem.LAST_FAILOVER_STATE], logger: context.logger)[0].Item2;
+                    if (state is "failover-completed" or "failover-aborted")
+                        break;
+                    await Task.Delay(100, cancellationToken);
+                }
+            }
+            finally
+            {
+                writerCts.Cancel();
+                await writerTask;
+            }
+
+            // DEFAULT failover waits (up to 600 seconds) for the replica to apply everything the primary acknowledged before pausing writes.
+            ClassicAssert.AreEqual("failover-completed", state);
+            ClassicAssert.AreEqual("master", context.clusterTestUtils.RoleCommand(replicaIndex, context.logger).Value);
+            using var newPrimary = new GarnetClient(context.clusterTestUtils.GetEndPoint(replicaIndex));
+            await newPrimary.ConnectAsync(cancellationToken);
+            var keysOnNewPrimary = long.Parse(await newPrimary.ExecuteForStringResultAsync("DBSIZE"));
+            ClassicAssert.AreEqual(Interlocked.Read(ref acknowledged), keysOnNewPrimary, "writes acknowledged by the old primary are missing on the new primary");
+        }
     }
 }
