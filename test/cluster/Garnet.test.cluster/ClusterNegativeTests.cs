@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging;
 using NUnit.Framework;
 using NUnit.Framework.Legacy;
 using System.Threading.Tasks;
+using Garnet.client;
 
 using StackExchange.Redis;
 
@@ -1015,5 +1016,101 @@ namespace Garnet.test.cluster
             }
         }
 #endif
+
+        [Test, Order(20), CancelAfter(testTimeout)]
+        public async Task ClusterGossipNotBlockedByUnresponsivePeerAsync(CancellationToken cancellationToken)
+        {
+            const int clusterTimeoutSeconds = 60;
+            const int propagationWindowSeconds = 15;
+            var nodeCount = 3;
+            context.CreateInstances(nodeCount, timeout: clusterTimeoutSeconds);
+            context.CreateConnection();
+            _ = context.clusterTestUtils.SimpleSetupCluster(nodeCount, 0, logger: context.logger);
+            for (var i = 0; i < nodeCount; i++)
+                context.clusterTestUtils.WaitUntilNodeIsKnownByAllNodes(i, context.logger);
+
+            var nodeIdA = context.clusterTestUtils.GetNodeIdFromNode(0, context.logger);
+            var endpointA = context.clusterTestUtils.GetEndPoint(0);
+            var endpointB = context.clusterTestUtils.GetEndPoint(1);
+            var endpointC = context.clusterTestUtils.GetEndPoint(2);
+
+            // Replace node C with a peer that accepts TCP connections but never replies, like a frozen process.
+            context.ShutdownNode(2);
+            var silentPeer = new TcpListener(endpointC);
+            silentPeer.Start();
+            using var silentPeerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var gossipHandshakes = 0;
+            var acceptedSockets = new List<Socket>();
+            var acceptTask = Task.Run(async () =>
+            {
+                while (!silentPeerCts.IsCancellationRequested)
+                {
+                    var socket = await silentPeer.AcceptSocketAsync(silentPeerCts.Token);
+                    lock (acceptedSockets) acceptedSockets.Add(socket);
+                    _ = Task.Run(async () =>
+                    {
+                        var received = new StringBuilder();
+                        var buffer = new byte[4096];
+                        var counted = false;
+                        while (!counted)
+                        {
+                            var read = await socket.ReceiveAsync(buffer, SocketFlags.None, silentPeerCts.Token);
+                            if (read == 0) break;
+                            _ = received.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                            // The gossip GarnetClient identifies itself with CLIENT SETINFO LIB-NAME GarnetClient.
+                            if (received.ToString().Contains("GarnetClient"))
+                            {
+                                counted = true;
+                                _ = Interlocked.Increment(ref gossipHandshakes);
+                            }
+                        }
+                    });
+                }
+            });
+
+            try
+            {
+                // Restarted nodes recover their config and open fresh gossip connections to every known worker.
+                context.RestartNode(0);
+                context.RestartNode(1);
+
+                while (Volatile.Read(ref gossipHandshakes) < 2)
+                    await Task.Delay(100, cancellationToken);
+
+                using var clientA = new GarnetClient(endpointA);
+                using var clientB = new GarnetClient(endpointB);
+                await clientA.ConnectAsync(cancellationToken);
+                await clientB.ConnectAsync(cancellationToken);
+
+                ClassicAssert.AreEqual("OK", await clientA.ExecuteForStringResultAsync("CLUSTER", ["BUMPEPOCH"]));
+                var epochA = GetEpoch(await clientA.ExecuteForStringResultAsync("CLUSTER", ["NODES"]), nodeIdA);
+
+                // Gossip runs every second in tests; a healthy peer must observe the bump long before the cluster timeout.
+                var deadline = DateTime.UtcNow.AddSeconds(propagationWindowSeconds);
+                long observed;
+                while ((observed = GetEpoch(await clientB.ExecuteForStringResultAsync("CLUSTER", ["NODES"]), nodeIdA)) < epochA)
+                {
+                    ClassicAssert.Less(DateTime.UtcNow, deadline, $"node B still sees epoch {observed} for node A instead of {epochA}; gossip is blocked by the unresponsive peer");
+                    await Task.Delay(100, cancellationToken);
+                }
+            }
+            finally
+            {
+                silentPeerCts.Cancel();
+                silentPeer.Stop();
+                lock (acceptedSockets)
+                {
+                    foreach (var socket in acceptedSockets)
+                        socket.Dispose();
+                }
+                try { await acceptTask; } catch { }
+            }
+
+            static long GetEpoch(string nodes, string nodeId)
+            {
+                var line = nodes.Split('\n').First(l => l.StartsWith(nodeId, StringComparison.Ordinal));
+                return long.Parse(line.Split(' ')[6]);
+            }
+        }
     }
 }
