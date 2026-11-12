@@ -94,6 +94,22 @@ One further caution when sharing a machine: **check test output for `error CS` b
 previously built assembly and can report a pass for code that never compiled.
 
 
+### Fast local iteration
+
+An opt-in `FastDev` profile builds a single target framework (`net10.0`) and skips analyzers, code-style enforcement, XML doc generation, and warnings-as-errors. Use it while iterating on a change:
+
+```bash
+# Whole solution
+dotnet build Garnet.slnx -c Release-Fast     # equivalent to -p:FastDev=true
+
+# Tightest loop: only the affected project
+dotnet build libs/server/Garnet.server.csproj -c Release-Fast --no-restore --no-dependencies
+```
+
+In Visual Studio, select the `Debug-Fast` or `Release-Fast` solution configuration from the toolbar dropdown.
+
+Do **not** use FastDev for final validation of a change that will be pushed or submitted as a PR — run a normal `Debug`/`Release` build so analyzers and both target frameworks are exercised, which is what CI runs. FastDev is force-disabled when `TF_BUILD` or `GITHUB_ACTIONS` is set, so CI always does the full build regardless.
+
 ## Architecture
 
 ### Unified Single-Store Design
