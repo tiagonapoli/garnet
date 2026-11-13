@@ -41,6 +41,16 @@ namespace Garnet.cluster
                     }
                     acquiredLock = true;
 
+                    ReleaseCurrentEpoch();
+                    try
+                    {
+                        AsyncUtils.BlockingWait(clusterProvider.replicationManager.RecoverDeferredLocalDataAsync());
+                    }
+                    finally
+                    {
+                        AcquireCurrentEpoch();
+                    }
+
                     clusterProvider.clusterManager.TryResetReplica();
                     clusterProvider.replicationManager.TryUpdateForFailover();
 

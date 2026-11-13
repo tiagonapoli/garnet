@@ -106,6 +106,11 @@ namespace Garnet.cluster
         /// </summary>
         public RecoveryStatus currentRecoveryStatus;
 
+        /// <summary>
+        /// True while the local checkpoint and AOF skipped by a replica at startup have been neither recovered nor replaced by a primary sync
+        /// </summary>
+        bool localRecoveryDeferred;
+
         public GarnetClusterCheckpointManager CheckpointManager => (GarnetClusterCheckpointManager)storeWrapper.store.CheckpointManager;
 
         public AofAddress GetRecoveredSafeAofAddress()
@@ -526,12 +531,29 @@ namespace Garnet.cluster
                     {
                         await RecoverCheckpointAndAOFAsync().ConfigureAwait(false);
                     }
+                    else
+                    {
+                        localRecoveryDeferred = true;
+                    }
 
                     break;
                 default:
                     logger?.LogError("Not valid role for node {nodeRole}", nodeRole);
                     throw new Exception($"Not valid role for node {nodeRole}");
             }
+        }
+
+        /// <summary>
+        /// Recovers the local checkpoint and AOF skipped at startup if no primary sync has replaced them; the caller must hold the recovery write lock.
+        /// </summary>
+        public async ValueTask RecoverDeferredLocalDataAsync()
+        {
+            if (!localRecoveryDeferred)
+                return;
+
+            logger?.LogWarning("Recovering local checkpoint and AOF that were deferred at startup because this replica never synced with its primary");
+            await RecoverCheckpointAndAOFAsync().ConfigureAwait(false);
+            localRecoveryDeferred = false;
         }
 
         /// <summary>
