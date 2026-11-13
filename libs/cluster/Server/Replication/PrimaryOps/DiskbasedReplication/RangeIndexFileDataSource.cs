@@ -19,9 +19,9 @@ namespace Garnet.cluster
     internal sealed class RangeIndexFileDataSource : ISnapshotDataSource
     {
         /// <summary>
-        /// Default chunk size for streaming .bftree files (64 KB).
+        /// Default chunk size for streaming .bftree files (128 KB).
         /// </summary>
-        internal const int DefaultChunkSize = 1 << 16;
+        internal const int DefaultChunkSize = 1 << 17;
 
         /// <summary>
         /// Length in bytes of the ASCII-encoded key hash in the metadata payload.
